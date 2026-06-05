@@ -1,0 +1,133 @@
+<!-- === 登入/註冊彈窗 === -->
+<transition name="fade">
+    <div v-if="showAuthModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700 shadow-2xl overflow-hidden flex flex-col p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-white">
+                    <span v-if="authMode === 'login'">登入帳號</span>
+                    <span v-else>註冊新帳號</span>
+                </h2>
+                <button @click="showAuthModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-gray-400 text-sm font-bold mb-1">
+                        [[ authMode === 'login' ? '使用者名稱 / Email' : '使用者名稱' ]]
+                    </label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500"><i class="fa-solid fa-user"></i></span>
+                        <input v-model="authForm.username" type="text" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 pl-10 text-white focus:border-blue-500 outline-none" :placeholder="authMode === 'login' ? 'Username or Email' : 'Username'" @keyup.enter="authMode === 'login' ? login() : register()">
+                    </div>
+                </div>
+                
+                <div v-if="authMode === 'register'">
+                    <label class="block text-gray-400 text-sm font-bold mb-1">Email (需驗證)</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500"><i class="fa-solid fa-envelope"></i></span>
+                        <input v-model="authForm.email" type="email" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 pl-10 text-white focus:border-blue-500 outline-none" placeholder="example@email.com">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-gray-400 text-sm font-bold mb-1">密碼</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500"><i class="fa-solid fa-lock"></i></span>
+                        <input v-model="authForm.password" type="password" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 pl-10 text-white focus:border-blue-500 outline-none" placeholder="Password" @keyup.enter="authMode === 'login' ? login() : register()">
+                    </div>
+                </div>
+            </div>
+
+            <button v-if="authMode === 'login'" @click="login" :disabled="isLoading" class="mt-6 w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white py-3 rounded-lg font-bold transition flex justify-center items-center shadow-lg">
+                <span v-if="isLoading"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> 登入中...</span>
+                <span v-else>登入</span>
+            </button>
+            <button v-else @click="register" :disabled="isLoading" class="mt-6 w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white py-3 rounded-lg font-bold transition flex justify-center items-center shadow-lg">
+                <span v-if="isLoading"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> 註冊中...</span>
+                <span v-else>註冊</span>
+            </button>
+
+            <div class="mt-4 text-center text-sm text-gray-400">
+                <span v-if="authMode === 'login'">還沒有帳號？ <a @click="authMode = 'register'" class="text-blue-400 hover:text-blue-300 cursor-pointer underline">立即註冊</a></span>
+                <span v-else>已有帳號？ <a @click="authMode = 'login'" class="text-blue-400 hover:text-blue-300 cursor-pointer underline">返回登入</a></span>
+            </div>
+
+            <div v-if="authMode === 'login'" class="mt-3 text-center">
+                <a @click="openForgotModal" class="text-gray-500 hover:text-gray-300 text-sm cursor-pointer underline">忘記密碼？</a>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 忘記密碼彈窗 === -->
+<transition name="fade">
+    <div v-if="showForgotModal" class="fixed inset-0 z-[95] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700 shadow-2xl overflow-hidden flex flex-col p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-white">
+                    <i class="fa-solid fa-key mr-2 text-yellow-400"></i>
+                    <span v-if="forgotStep === 'email'">忘記密碼</span>
+                    <span v-else>重設密碼</span>
+                </h2>
+                <button @click="closeForgotModal" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+            </div>
+
+            <!-- Step 1: 輸入 Email -->
+            <div v-if="forgotStep === 'email'" class="space-y-4">
+                <p class="text-gray-400 text-sm">請輸入您註冊時使用的 Email，我們將發送重設密碼連結給您。</p>
+                <div>
+                    <label class="block text-gray-400 text-sm font-bold mb-1">Email</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500"><i class="fa-solid fa-envelope"></i></span>
+                        <input v-model="forgotEmail" type="email" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 pl-10 text-white focus:border-yellow-500 outline-none" placeholder="example@email.com" @keyup.enter="submitForgotEmail">
+                    </div>
+                </div>
+
+                <div v-if="forgotMessage" class="p-3 rounded text-sm" :class="forgotVerifyLink ? 'bg-yellow-900/30 border border-yellow-700 text-yellow-300' : 'bg-blue-900/30 border border-blue-700 text-blue-300'">
+                    [[ forgotMessage ]]
+                </div>
+
+                <div v-if="forgotVerifyLink" class="p-3 bg-gray-900 rounded border border-gray-700 text-xs text-gray-400 break-all">
+                    [[ forgotVerifyLink ]]
+                </div>
+
+                <button @click="submitForgotEmail" :disabled="forgotLoading" class="w-full bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white py-3 rounded-lg font-bold transition flex justify-center items-center shadow-lg">
+                    <span v-if="forgotLoading"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> 發送中...</span>
+                    <span v-else>發送重設連結</span>
+                </button>
+
+                <div class="text-center">
+                    <a @click="closeForgotModal(); openAuthModal('login')" class="text-gray-500 hover:text-gray-300 text-sm cursor-pointer underline">返回登入</a>
+                </div>
+            </div>
+
+            <!-- Step 2: 設定新密碼 -->
+            <div v-if="forgotStep === 'reset'" class="space-y-4">
+                <p class="text-gray-400 text-sm">請輸入您的新密碼。</p>
+                <div>
+                    <label class="block text-gray-400 text-sm font-bold mb-1">新密碼（至少 6 個字元）</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500"><i class="fa-solid fa-lock"></i></span>
+                        <input v-model="forgotPassword" type="password" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 pl-10 text-white focus:border-yellow-500 outline-none" placeholder="新密碼" @keyup.enter="submitResetPassword">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-sm font-bold mb-1">確認新密碼</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500"><i class="fa-solid fa-lock"></i></span>
+                        <input v-model="forgotPassword2" type="password" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 pl-10 text-white focus:border-yellow-500 outline-none" placeholder="再次輸入新密碼" @keyup.enter="submitResetPassword">
+                    </div>
+                </div>
+
+                <div v-if="forgotMessage" class="p-3 rounded text-sm" :class="forgotMessage.includes('成功') ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-red-900/30 border border-red-700 text-red-300'">
+                    [[ forgotMessage ]]
+                </div>
+
+                <button @click="submitResetPassword" :disabled="forgotLoading" class="w-full bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white py-3 rounded-lg font-bold transition flex justify-center items-center shadow-lg">
+                    <span v-if="forgotLoading"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> 重設中...</span>
+                    <span v-else>重設密碼</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>

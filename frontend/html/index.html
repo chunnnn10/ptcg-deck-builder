@@ -1,0 +1,186 @@
+<!-- /Pokemon/public/html/index.html -->
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chun Deck Builder - 模擬測試版</title>
+    <link rel="icon" href="/favicon.ico">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style> 
+        [v-cloak] { display: none !important; } 
+        .drop-zone-delete {
+            background-color: rgba(239, 68, 68, 0.1) !important;
+            border-right: 2px dashed #ef4444 !important;
+        }
+        .delete-hint { pointer-events: none; }
+        .bg-grid { background-image: radial-gradient(#374151 1px, transparent 1px); background-size: 20px 20px; }
+        .console-logs {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background-color: #0f172a;
+            color: #4ade80;
+            text-shadow: 0 0 2px rgba(74, 222, 128, 0.5);
+        }
+        /* 工作區樣式 */
+        .workspace-item {
+            transition: all 0.15s ease;
+        }
+        .workspace-item:hover {
+            background-color: rgba(55, 65, 81, 0.5);
+        }
+        .workspace-item.active {
+            background-color: rgba(37, 99, 235, 0.3);
+            border-left: 2px solid #3b82f6;
+        }
+        .workspace-item.drag-over {
+            background-color: rgba(37, 99, 235, 0.2);
+            outline: 1px dashed #3b82f6;
+        }
+        .bg-gray-850 {
+            background-color: #1a1f2e;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans overflow-hidden h-[100dvh] flex flex-col" 
+      @click.self="contextMenu.visible = false; closeWsContextMenu && closeWsContextMenu()">
+
+    <div id="app" class="h-full flex flex-col" v-cloak>
+        
+        <!-- 頂部導覽 -->
+        {% include 'partials/header.html' %}
+        
+        <!-- 主體區域 (工作區 + 主面板) -->
+        <div class="flex flex-1 overflow-hidden relative">
+            <!-- 工作區側邊欄 -->
+            {% include 'partials/workspace.html' %}
+            
+            <!-- 主內容區 -->
+            {% include 'partials/main_panel.html' %}
+        </div>
+
+        <!-- 手機版底部導航 -->
+        <div class="md:hidden fixed bottom-0 left-0 right-0 bg-gray-800 border-t border-gray-700 flex z-40 pb-safe">
+            <button class="flex-1 py-3 text-center flex flex-col items-center justify-center gap-1 transition-colors"
+                    :class="mobileTab === 'search' ? 'text-blue-400 bg-gray-750' : 'text-gray-400'"
+                    @click="mobileTab = 'search'">
+                <i class="fa-solid fa-search text-lg"></i>
+                <span class="text-xs">卡片搜尋</span>
+            </button>
+            <button class="flex-1 py-3 text-center flex flex-col items-center justify-center gap-1 transition-colors relative"
+                    :class="mobileTab === 'deck' ? 'text-blue-400 bg-gray-750' : 'text-gray-400'"
+                    @click="mobileTab = 'deck'">
+                <i class="fa-solid fa-layer-group text-lg"></i>
+                <span class="text-xs">目前牌組</span>
+                <span v-if="totalCards > 0" 
+                      class="absolute top-2 right-[25%] bg-red-500 text-white text-[10px] font-bold px-1.5 rounded-full min-w-[16px]">
+                    [[ totalCards ]]
+                </span>
+            </button>
+        </div>
+        
+        <!-- 覆蓋層彈窗 -->
+        {% include 'partials/overlay.html' %}
+        
+        <!-- 拆分後的 Modals -->
+        {% include 'partials/modals/auth.html' %}
+        {% include 'partials/modals/simulation.html' %}
+        {% include 'partials/modals/admin.html' %}
+        {% include 'partials/modals/cards.html' %}
+        {% include 'partials/modals/io.html' %}
+        {% include 'partials/ai_assistant.html' %}
+
+    </div>
+
+    <!-- 樹狀節點組件模板 -->
+    <template id="workspace-tree-node-template">
+        <div class="workspace-node">
+            <!-- 節點本身 -->
+            <div class="workspace-item flex items-center px-2 py-1.5 rounded cursor-pointer text-sm"
+                 :class="{
+                     'active': currentItem && currentItem.id === item.id,
+                     'drag-over': isDragOver
+                 }"
+                 :style="{ paddingLeft: (depth * 12 + 8) + 'px' }"
+                 @click="handleClick"
+                 @contextmenu.prevent="$emit('context-menu', $event, item)"
+                 @dblclick="handleDoubleClick"
+                 draggable="true"
+                 @dragstart="$emit('drag-start', $event, item)"
+                 @dragover.prevent="onDragOver"
+                 @dragleave="onDragLeave"
+                 @drop.prevent="onDrop">
+                
+                <!-- 展開/收合圖標 (資料夾) -->
+                <span v-if="item.type === 'folder'" class="w-4 mr-1 text-gray-500">
+                    <i class="fa-solid text-xs" 
+                       :class="isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'"></i>
+                </span>
+                <span v-else class="w-4 mr-1"></span>
+                
+                <!-- 類型圖標 -->
+                <i v-if="item.type === 'folder'" 
+                   class="fa-solid fa-folder mr-2 text-yellow-500"
+                   :class="{ 'fa-folder-open': isExpanded }"></i>
+                <i v-else 
+                   class="fa-solid fa-file-lines mr-2 text-green-400"></i>
+                
+                <!-- 名稱 -->
+                <span class="flex-1 truncate" :title="item.name">[[ item.name ]]</span>
+                
+                <!-- 未儲存標記 -->
+                <span v-if="currentItem && currentItem.id === item.id && hasUnsavedChanges" 
+                      class="text-yellow-400 ml-1" title="有未儲存的變更">
+                    <i class="fa-solid fa-circle text-[6px]"></i>
+                </span>
+                
+                <!-- 卡片數量 (牌組) -->
+                <span v-if="item.type === 'deck' && item.card_count !== undefined" 
+                      class="text-xs text-gray-500 ml-1">
+                    [[ item.card_count ]]
+                </span>
+            </div>
+            
+            <!-- 子節點 -->
+            <div v-if="item.type === 'folder' && isExpanded && item.children && item.children.length > 0"
+                 class="children">
+                <workspace-tree-node
+                    v-for="child in item.children"
+                    :key="child.id"
+                    :item="child"
+                    :depth="depth + 1"
+                    :current-item="currentItem"
+                    :expanded-folders="expandedFolders"
+                    :has-unsaved-changes="hasUnsavedChanges"
+                    @toggle-folder="$emit('toggle-folder', $event)"
+                    @open-deck="$emit('open-deck', $event)"
+                    @context-menu="$emit('context-menu', $event, arguments[1])"
+                    @drag-start="$emit('drag-start', $event, arguments[1])"
+                    @drag-over="$emit('drag-over', $event, arguments[1])"
+                    @drop="$emit('drop', $event, arguments[1])">
+                </workspace-tree-node>
+            </div>
+            
+            <!-- 空資料夾提示 -->
+            <div v-if="item.type === 'folder' && isExpanded && (!item.children || item.children.length === 0)"
+                 class="text-xs text-gray-600 italic py-1"
+                 :style="{ paddingLeft: ((depth + 1) * 12 + 24) + 'px' }">
+                (空)
+            </div>
+        </div>
+    </template>
+
+    <!-- 引入 JS -->
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/admin_function.js"></script>
+    <script src="/static/js/deck_manager.js"></script>
+    <script src="/static/js/card_manager.js"></script>
+    <script src="/static/js/simulation.js"></script>
+    <script src="/static/js/io_manager.js"></script>
+    <script src="/static/js/workspace.js"></script>
+    <script src="/static/js/ai_assistant.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

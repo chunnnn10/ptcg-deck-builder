@@ -1,0 +1,124 @@
+<div class="flex flex-1 overflow-hidden relative flex-col md:flex-row">
+    <!-- 搜尋結果區塊 (mobileTab === 'search') -->
+    <div class="w-full md:w-3/5 h-full p-4 overflow-y-auto border-r border-gray-700 bg-gray-900 custom-scroll transition-colors duration-200 relative pb-20 md:pb-4"
+         v-show="mobileTab === 'search' || isDesktop"
+         :class="{'drop-zone-delete': isLeftDragOver}"
+         @dragover.prevent="handleLeftDragOver"
+         @dragleave="handleLeftDragLeave"
+         @drop.prevent="handleLeftDrop">
+         
+        <div v-if="isLeftDragOver" class="absolute inset-0 flex items-center justify-center bg-red-900 bg-opacity-50 z-20 pointer-events-none border-4 border-red-500 border-dashed m-2 rounded-xl">
+            <div class="text-white text-2xl font-bold"><i class="fa-solid fa-trash-can mr-2"></i>放開以移除卡片</div>
+        </div>
+
+        <div v-if="loading" class="text-center mt-10 text-gray-400"><i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><p class="mt-2">搜尋中...</p></div>
+        <div v-else-if="searchResults.length === 0 && !loading" class="text-center mt-20 text-gray-500"><i class="fa-solid fa-search fa-3x mb-4 opacity-50"></i><p>輸入名稱開始搜尋...</p></div>
+        
+        <div v-else class="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 md:gap-4">
+            <div v-for="card in searchResults" :key="card.card_id" 
+                 @click="openModal(card)" 
+                 class="relative group cursor-pointer card-hover transition-all duration-200"
+                 @contextmenu.prevent="openContextMenu($event, card)"
+                 draggable="true"
+                 @dragstart="handleDragStart($event, card, 'search')"> 
+                <img :src="card.image_url" class="rounded-lg w-full object-cover aspect-[2.5/3.5] bg-gray-800" loading="lazy" @error="handleImageError">
+                <div v-if="getCardCountById(card.card_id) > 0" class="absolute top-1 right-1 bg-blue-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center shadow-lg border border-white">[[ getCardCountById(card.card_id) ]]</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 牌組列表區塊 (mobileTab === 'deck') -->
+    <div class="w-full md:w-2/5 flex flex-col bg-gray-800 transition-colors duration-200 h-full pb-20 md:pb-0" 
+         v-show="mobileTab === 'deck' || isDesktop"
+         :class="{'drop-zone-active': isDragOver}"
+         @dragover.prevent="handleDragOver" 
+         @dragleave="handleDragLeave"
+         @drop.prevent="handleDrop">
+         
+        <div class="p-3 bg-gray-750 border-b border-gray-700 font-semibold text-gray-300 flex justify-between items-center sticky top-0 z-1">
+            <div class="flex items-center gap-2">
+                <span>當前牌組 <span v-if="isDragOver" class="text-blue-400 ml-2 text-sm"><i class="fa-solid fa-plus"></i> 放開以加入</span></span>
+                <!-- 撤銷/重做按鈕 -->
+                <div class="flex bg-gray-900 rounded border border-gray-600 ml-2">
+                    <button @click="undo" :disabled="historyIndex <= 0" class="px-2 py-0.5 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-xs" title="撤銷 (Ctrl+Z)">
+                        <i class="fa-solid fa-rotate-left"></i>
+                    </button>
+                    <div class="w-[1px] bg-gray-600"></div>
+                    <button @click="redo" :disabled="historyIndex >= history.length - 1" class="px-2 py-0.5 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-xs" title="重做 (Ctrl+Y)">
+                        <i class="fa-solid fa-rotate-right"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="text-xs text-gray-500 hidden lg:block">
+                <i class="fa-solid fa-computer-mouse mr-1"></i>拖曳排序 | 
+                <i class="fa-solid fa-arrow-pointer mr-1"></i>右鍵選單
+            </div>
+            <!-- 手機版: 更多操作按鈕 (例如清空/分享) -->
+            <div class="md:hidden">
+                 <button @click="showMenu = !showMenu" class="text-gray-400 hover:text-white px-2">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                 </button>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-6 custom-scroll">
+            <div v-for="(group, type) in groupedDeck" :key="type" v-if="Object.keys(groupedDeck).length > 0">
+                <h3 class="text-xs uppercase tracking-wider text-gray-500 font-bold mb-2 border-b border-gray-700 pb-1">
+                    [[ type ]] ([[ getGroupCount(group) ]])
+                </h3>
+                <div class="grid grid-cols-4 md:grid-cols-4 gap-2">
+                    <div v-for="card in group" :key="card.uniqueId" 
+                         class="relative cursor-pointer group transition-transform duration-150 active:scale-95"
+                         :class="{'card-selected': selectedCards.has(card.uniqueId)}"
+                         @click="handleCardClick(card)"
+                         @mousedown="handleMouseDown(card.uniqueId)"
+                         @mouseup="handleMouseUp"
+                         @touchstart="handleMouseDown(card.uniqueId)"
+                         @touchend="handleMouseUp"
+                         @contextmenu.prevent="openDeckContextMenu($event, card, deck.findIndex(c => c.uniqueId === card.uniqueId))"
+                         draggable="true"
+                         @dragstart="handleDragStart($event, card, 'deck')">
+                        <img :src="card.image_url" class="rounded w-full bg-gray-900 pointer-events-none select-none">
+                        <div v-if="selectedCards.has(card.uniqueId)" class="absolute top-1 right-1 bg-yellow-500 text-black rounded-full w-5 h-5 flex items-center justify-center shadow"><i class="fa-solid fa-check text-xs"></i></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div v-if="deck.length === 0" class="text-center mt-20 text-gray-500">
+                <i class="fa-solid fa-box-open fa-3x mb-4 opacity-30"></i>
+                <p class="text-sm">牌組還是空的</p>
+                <p class="text-xs mt-2 hidden md:block">從左側拖曳卡片進來，<br>或點擊卡片加入</p>
+                <p class="text-xs mt-2 md:hidden">切換到「搜尋」頁籤，<br>點擊卡片加入</p>
+            </div>
+        </div>
+    </div>
+
+    <div v-if="deckContextMenu && deckContextMenu.visible"
+         class="fixed z-[100] bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+         :style="{ left: deckContextMenu.x + 'px', top: deckContextMenu.y + 'px' }"
+         @click.stop>
+        
+        <div class="px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700 font-bold truncate mb-1">
+            [[ deckContextMenu.card ? deckContextMenu.card.name : '' ]]
+        </div>
+
+        <div @click="handleDeckContextAction('addOne')"
+             class="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center group">
+            <i class="fa-solid fa-plus w-5 text-green-400 group-hover:scale-110 transition"></i>
+            <span>新增 1 張</span>
+        </div>
+        <div @click="handleDeckContextAction('addMultiple')"
+             class="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center group">
+            <i class="fa-solid fa-layer-group w-5 text-blue-400 group-hover:scale-110 transition"></i>
+            <span>新增多張...</span>
+        </div>
+        
+        <div class="border-t border-gray-700 my-1"></div>
+        
+        <div @click="handleDeckContextAction('delete')"
+             class="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center text-red-400 group hover:bg-red-900/20">
+            <i class="fa-solid fa-trash w-5 group-hover:scale-110 transition"></i>
+            <span>刪除卡牌</span>
+        </div>
+    </div>
+</div>

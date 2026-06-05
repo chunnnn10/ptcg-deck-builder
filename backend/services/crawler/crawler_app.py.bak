@@ -1,0 +1,432 @@
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask, request, jsonify, send_from_directory
+import sqlite3
+import re
+import time
+import threading
+import json
+import os
+import urllib.parse
+import sys
+
+# 確保 backend 目錄在 sys.path 中
+_src_dir = os.path.dirname(os.path.abspath(__file__))
+_backend_dir = os.path.abspath(os.path.join(_src_dir, '..', '..'))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
+# === 路徑設定 ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, '../../../..'))
+DATA_DIR = os.path.join(ROOT_DIR, 'data')
+app = Flask(__name__, template_folder=BASE_DIR, static_folder=BASE_DIR)
+
+# ================= 設定區 =================
+DB_PATH = os.path.join(DATA_DIR, 'pokemon_card_database.db')
+PROGRESS_FILE = os.path.join(BASE_DIR, 'crawler_progress.json')
+OFFICIAL_URL_TEMPLATE = "https://asia.pokemon-card.com/hk/card-search/detail/{}/"
+PTCGSP_SEARCH_URL = "https://ptcgsp.com/cards"
+
+# 全域狀態
+crawler_status = {
+    "is_running": False,
+    "current_index": 0,
+    "total_count": 0,
+    "current_card_name": "",
+    "logs": [],
+    "stop_signal": False
+}
+
+all_cards_cache = []
+
+def log(message, type="info"):
+    timestamp = time.strftime("%H:%M:%S")
+    crawler_status["logs"].append({"time": timestamp, "msg": message, "type": type})
+    if len(crawler_status["logs"]) > 100:
+        crawler_status["logs"].pop(0)
+    print(f"[{timestamp}] {message}")
+
+# ================= 資料庫與進度 =================
+def save_progress_to_file(index):
+    try:
+        with open(PROGRESS_FILE, 'w') as f:
+            json.dump({"last_index": index}, f)
+        return True
+    except:
+        return False
+
+def load_progress_from_file():
+    if not os.path.exists(PROGRESS_FILE): return 0
+    try:
+        with open(PROGRESS_FILE, 'r') as f:
+            return max(0, json.load(f).get("last_index", 0) - 2)
+    except:
+        return 0
+
+def fetch_all_cards_from_db():
+    if not os.path.exists(os.path.dirname(DB_PATH)): return []
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT card_id, name FROM cards")
+        return [{"card_id": r[0], "name": r[1]} for r in cursor.fetchall()]
+    except Exception as e:
+        log(f"DB Error: {e}", "error")
+        return []
+    finally:
+        conn.close()
+
+def update_card_in_db(name, data):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        sql = """
+            UPDATE cards 
+            SET japanese_name = ?, evolution_stage = ?, evolves_from = ?, set_code = ?, set_number = ?
+            WHERE name = ?
+        """
+        cursor.execute(sql, (
+            data.get('japanese_name'),
+            data.get('stage'),
+            data.get('evolves_from'),
+            data.get('set_code'),
+            data.get('set_number'),
+            name
+        ))
+        conn.commit()
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+# ================= 極速爬蟲邏輯 (Regex Bypass) =================
+def fetch_japanese_name_fast(chinese_name, delay_sec):
+    """
+    使用 Regex 直接掃描 HTML 源碼，繞過 DOM 渲染問題
+    """
+    try:
+        # 1. 搜尋頁面
+        # 注意：我們直接構造 URL 查詢參數
+        params = {'keyword': chinese_name, 'page': 1, 'keywordType': '["n","e"]'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://ptcgsp.com/'
+        }
+        
+        # 請求搜尋頁
+        resp = requests.get(PTCGSP_SEARCH_URL, params=params, headers=headers, timeout=10)
+        if resp.status_code != 200: return None
+        
+        # [關鍵修改] 暴力搜尋卡片連結
+        # 尋找 href="/cards/12345" 這種格式，不依賴 DOM 結構
+        # 既然是搜尋結果，通常第一個出現的數字連結就是最相關的
+        # 我們排除分頁連結 (通常會有 page=)，只找 /cards/數字
+        link_pattern = r'href=["\'](/cards/\d+)["\']'
+        match = re.search(link_pattern, resp.text)
+        
+        if not match:
+            # 備用方案：有時候連結可能是完整的 https://ptcgsp.com/cards/...
+            link_pattern_full = r'href=["\'](https://ptcgsp\.com/cards/\d+)["\']'
+            match = re.search(link_pattern_full, resp.text)
+            
+        if not match:
+            return None
+            
+        detail_path = match.group(1)
+        detail_url = f"https://ptcgsp.com{detail_path}" if detail_path.startswith('/') else detail_path
+
+        # 稍微延遲 (因為是極速模式，使用者可能設很短，我們尊重使用者的 delay_sec)
+        # 但為了避免瞬間被擋，至少給個 0.2s 的緩衝
+        time.sleep(max(0.2, delay_sec * 0.5))
+
+        # 2. 詳情頁面
+        detail_resp = requests.get(detail_url, headers=headers, timeout=10)
+        if detail_resp.status_code != 200: return None
+        
+        # [關鍵修改] 嘗試直接從 Nuxt 資料結構中提取
+        # 尋找: name_f:"中文",name_j:"日文"
+        # 先確認中文名是否匹配，避免抓錯卡
+        # 注意：re.escape 確保中文名稱中的特殊字符被處理
+        # 格式可能變種，所以我們搜尋 name_j 附近的值
+        
+        content = detail_resp.text
+        
+        # 策略 A: 從 JSON 資料抓取 (最快且隱藏屬性也能抓)
+        # 尋找 name_j:"xxxxx"
+        # 這裡假設該頁面的主體就是這張卡，所以直接抓出現的 name_j 應該是準確的
+        # 但為了保險，我們先找 H1 確認中文名
+        
+        h1_pattern = r'<h1[^>]*>\s*' + re.escape(chinese_name) + r'\s*</h1>'
+        if not re.search(h1_pattern, content):
+            # 如果 H1 沒找到完全匹配的中文名，可能是抓錯頁面
+            # 但有時候是因為空格或換行，我們放寬一點，直接抓日文看看
+            pass 
+
+        # 嘗試抓取緊跟在中文 H1 後面的 H2 (這通常是日文名)
+        # <h1 ...>中文</h1>...<h2 ...>日文</h2>
+        h2_pattern = r'<h1[^>]*>\s*' + re.escape(chinese_name) + r'\s*</h1>.*?<h2[^>]*>(.*?)</h2>'
+        h2_match = re.search(h2_pattern, content, re.DOTALL) # DOTALL 讓 . 可以匹配換行
+        
+        if h2_match:
+            return h2_match.group(1).strip()
+            
+        # 策略 B: 如果 HTML 結構變了，嘗試找 Nuxt 腳本裡的 name_j
+        # 這裡比較危險，因為腳本裡可能有很多張卡的資料 (如推薦列表)
+        # 但通常第一筆詳細資料會是主角
+        # 我們嘗試尋找 `name_f:"中文名",...,name_j:"日文名"` 這種緊鄰結構
+        json_pattern = r'name_f:"' + re.escape(chinese_name) + r'".*?name_j:"(.*?)"'
+        json_match = re.search(json_pattern, content)
+        if json_match:
+            return json_match.group(1)
+
+        return None
+
+    except Exception as e:
+        log(f"翻譯錯誤: {e}", "error")
+        return None
+
+def scrape_official_site(card_id):
+    url = OFFICIAL_URL_TEMPLATE.format(card_id)
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200: return None
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        header = soup.select_one('h1.pageHeader')
+        if not header: return None
+        header_copy = BeautifulSoup(str(header), 'html.parser')
+        for s in header_copy.find_all('span'): s.decompose()
+        card_name = header_copy.get_text(strip=True)
+        
+        stage_tag = soup.select_one('span.evolveMarker')
+        stage = stage_tag.get_text(strip=True) if stage_tag else "無"
+        
+        evolves_from = None
+        active = soup.select_one('.evolution .step.active')
+        if active:
+            parent = active.find_parent('ul')
+            if parent and ('second' in parent.get('class', []) or 'third' in parent.get('class', [])):
+                grandparent = parent.find_parent('li')
+                if grandparent:
+                    link = grandparent.find('a')
+                    if link: evolves_from = link.get_text(strip=True)
+
+        set_code, set_number = "", ""
+        exp_col = soup.select_one('.expansionColumn')
+        if exp_col:
+            img = exp_col.select_one('.expansionSymbol img')
+            if img and img.get('src'): set_code = img['src'].split('/')[-1].split('_')[0]
+            num = exp_col.select_one('.collectorNumber')
+            if num: set_number = num.get_text(strip=True)
+
+        return {
+            "name": card_name, "stage": stage, "evolves_from": evolves_from,
+            "set_code": set_code, "set_number": set_number
+        }
+    except: return None
+
+# ================= 工作執行緒 =================
+def worker(start_index, delay_ms, need_translation):
+    global all_cards_cache
+    crawler_status["is_running"] = True
+    crawler_status["stop_signal"] = False
+    
+    delay_sec = float(delay_ms) / 1000.0
+    if not all_cards_cache: all_cards_cache = fetch_all_cards_from_db()
+    crawler_status["total_count"] = len(all_cards_cache)
+    
+    log(f"任務開始: Index {start_index}，延遲 {delay_ms}ms")
+
+    try:
+        for i in range(start_index, len(all_cards_cache)):
+            if crawler_status["stop_signal"]:
+                save_progress_to_file(i)
+                log(f"已暫停，進度儲存於: {i}", "warning")
+                break
+            
+            card = all_cards_cache[i]
+            crawler_status["current_index"] = i
+            crawler_status["current_card_name"] = card['name']
+            
+            # 1. 爬官網
+            official_data = scrape_official_site(card['card_id'])
+            
+            if official_data:
+                # 2. 爬翻譯 (使用 Regex Fast 模式)
+                if need_translation:
+                    jp_name = fetch_japanese_name_fast(official_data['name'], delay_sec)
+                    if jp_name:
+                        official_data['japanese_name'] = jp_name
+                        log(f"[{i}] {card['name']} -> {jp_name}", "success")
+                    else:
+                        log(f"[{i}] {card['name']} (無日文)", "warning")
+                else:
+                    log(f"[{i}] {card['name']} (更新基本資料)")
+                
+                update_card_in_db(official_data['name'], official_data)
+            else:
+                log(f"[{i}] {card['name']} (官網無資料)", "error")
+
+            time.sleep(delay_sec)
+
+    except Exception as e:
+        log(f"Fatal Error: {e}", "error")
+    finally:
+        crawler_status["is_running"] = False
+        crawler_status["stop_signal"] = False
+
+# ================= API Routes =================
+@app.route('/')
+def index(): return send_from_directory(BASE_DIR, 'crawler_dashboard.html')
+
+@app.route('/api/start', methods=['POST'])
+def start_crawl():
+    if crawler_status["is_running"]: return jsonify({"status": "error", "msg": "運行中"}), 400
+    data = request.json
+    start_index = load_progress_from_file() if data.get('use_saved') else 0
+    
+    t = threading.Thread(target=worker, args=(start_index, int(data.get('delay', 500)), data.get('translation', True)))
+    t.daemon = True
+    t.start()
+    return jsonify({"status": "success"})
+
+@app.route('/api/stop', methods=['POST'])
+def stop_crawl():
+    crawler_status["stop_signal"] = True
+    return jsonify({"status": "success"})
+
+@app.route('/api/save', methods=['POST'])
+def manual_save():
+    if save_progress_to_file(crawler_status["current_index"]):
+        return jsonify({"status": "success", "msg": "已儲存"})
+    return jsonify({"status": "error"}), 500
+
+@app.route('/api/status')
+def get_status(): return jsonify(crawler_status)
+
+
+# ================= Limitless JP 爬蟲 API =================
+jp_crawler_status = {
+    "is_running": False,
+    "progress": 0,
+    "message": "就緒",
+    "logs": [],
+    "current_set": "",
+    "total_sets": 0,
+    "completed_sets": 0,
+}
+
+def _jp_log(msg: str):
+    timestamp = time.strftime("%H:%M:%S")
+    jp_crawler_status["logs"].insert(0, {"time": timestamp, "msg": msg})
+    if len(jp_crawler_status["logs"]) > 100:
+        jp_crawler_status["logs"].pop()
+    jp_crawler_status["message"] = msg
+    print(f"[Limitless JP] {msg}")
+
+
+@app.route('/api/limitless-jp/test', methods=['POST'])
+def limitless_jp_test():
+    """測試單卡解析"""
+    from services.crawler.limitless_jp_crawler import test_single
+    data = request.json or {}
+    set_code = data.get('set_code', 'SV8').strip().upper()
+    number = data.get('number', '1')
+    card = test_single(set_code, number, print_result=False)
+    if card:
+        return jsonify({"status": "success", "card": {
+            "name": card["name"],
+            "card_type": card["card_type"],
+            "sub_type": card["sub_type"],
+            "hp": card["hp"],
+            "element_type": card["element_type"],
+            "weakness_type": card["weakness_type"],
+            "weakness_value": card["weakness_value"],
+            "resistance_type": card["resistance_type"],
+            "resistance_value": card["resistance_value"],
+            "retreat_cost": card["retreat_cost"],
+            "rarity": card.get("rarity", ""),
+            "regulation_mark": card.get("regulation_mark", ""),
+            "set_name": card.get("set_name", ""),
+            "set_code": card.get("set_code", ""),
+            "set_number": card.get("set_number", ""),
+            "artist": card.get("artist", ""),
+            "skills": card.get("skills", []),
+            "description": card.get("description", ""),
+            "en_prints": card.get("en_prints", []),
+        }})
+    return jsonify({"status": "error", "msg": "解析失敗或頁面不存在"})
+
+
+@app.route('/api/limitless-jp/sets', methods=['GET'])
+def limitless_jp_sets():
+    """取得所有日版系列列表"""
+    from services.crawler.limitless_jp_crawler import fetch_jp_sets
+    sets = fetch_jp_sets()
+    return jsonify({"status": "success", "count": len(sets), "sets": sets})
+
+
+@app.route('/api/limitless-jp/start', methods=['POST'])
+def limitless_jp_start():
+    """啟動批量爬取"""
+    if jp_crawler_status["is_running"]:
+        return jsonify({"status": "error", "msg": "已有爬取任務在執行中"}), 400
+
+    from services.crawler.limitless_jp_crawler import crawl_set, crawl_all, fetch_jp_sets
+
+    data = request.json or {}
+    target = data.get('target', 'all')  # 'all' 或 set_code
+    workers = int(data.get('workers', 5))
+    delay = float(data.get('delay', 0.3))
+
+    def _run():
+        jp_crawler_status["is_running"] = True
+        jp_crawler_status["progress"] = 0
+        jp_crawler_status["logs"] = []
+        try:
+            if target == 'all':
+                sets = fetch_jp_sets()
+                jp_crawler_status["total_sets"] = len(sets)
+                jp_crawler_status["completed_sets"] = 0
+                for i, s in enumerate(sets):
+                    jp_crawler_status["current_set"] = s['code']
+                    jp_crawler_status["message"] = f"[{i + 1}/{len(sets)}] {s['code']} {s['name']}"
+                    _jp_log(f"開始爬取: {s['code']} {s['name']} ({s['card_count']} 張)")
+                    crawl_set(s['code'], s['card_count'],
+                              num_workers=workers, delay=delay, save=True)
+                    jp_crawler_status["completed_sets"] = i + 1
+                    jp_crawler_status["progress"] = int((i + 1) / len(sets) * 100)
+                _jp_log("🎉 全系列爬取完成！")
+            else:
+                jp_crawler_status["total_sets"] = 1
+                jp_crawler_status["completed_sets"] = 0
+                jp_crawler_status["current_set"] = target
+                card_count = int(data.get('card_count', 999))
+                _jp_log(f"開始爬取: {target} ({card_count} 張)")
+                crawl_set(target, card_count, num_workers=workers,
+                          delay=delay, save=True)
+                jp_crawler_status["completed_sets"] = 1
+                jp_crawler_status["progress"] = 100
+                _jp_log("✅ 爬取完成！")
+        except Exception as e:
+            _jp_log(f"❌ 錯誤: {e}")
+        finally:
+            jp_crawler_status["is_running"] = False
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify({"status": "success", "msg": "任務已啟動", "target": target})
+
+
+@app.route('/api/limitless-jp/status', methods=['GET'])
+def limitless_jp_status():
+    return jsonify(jp_crawler_status)
+
+
+if __name__ == '__main__':
+    print(f"工作目錄: {BASE_DIR}")
+    print("請開啟瀏覽器訪問 http://127.0.0.1:5000")
+    app.run(debug=True, port=5000)

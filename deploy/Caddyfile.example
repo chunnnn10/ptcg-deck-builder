@@ -1,0 +1,11 @@
+example.com {
+    encode gzip zstd
+
+    reverse_proxy ptcg_web:5000
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}

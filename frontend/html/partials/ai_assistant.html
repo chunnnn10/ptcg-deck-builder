@@ -1,0 +1,103 @@
+<button @click.stop="toggleAIPanel"
+        class="fixed bottom-5 right-5 z-[55] w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xl border border-indigo-400/40 flex items-center justify-center transition"
+        title="AI Assistant">
+    <i class="fa-solid fa-wand-magic-sparkles text-xl"></i>
+</button>
+
+<transition name="fade">
+    <aside v-if="aiPanelOpen"
+           class="fixed right-4 bottom-24 top-20 z-[70] w-[min(440px,calc(100vw-2rem))] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl flex flex-col overflow-hidden">
+        <div class="h-14 px-4 border-b border-gray-700 bg-gray-800 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+                <div class="font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-robot text-indigo-300"></i>
+                    <span>AI Assistant</span>
+                </div>
+                <div class="text-xs text-gray-400 truncate">中文/日文查卡與技能搜尋</div>
+            </div>
+            <div class="flex items-center gap-1">
+                <button @click="clearAIChat" class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white" title="清除對話">
+                    <i class="fa-solid fa-rotate-left text-sm"></i>
+                </button>
+                <button @click="closeAIPanel" class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white" title="關閉">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+
+        <div id="ai-assistant-messages" class="flex-1 overflow-y-auto custom-scroll p-4 space-y-4 bg-gray-950/70">
+            <div v-for="(message, idx) in aiMessages" :key="idx" class="space-y-2">
+                <div class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
+                    <div class="max-w-[88%] rounded-lg px-3 py-2 text-sm leading-relaxed"
+                         :class="message.role === 'user' ? 'bg-indigo-600 text-white whitespace-pre-wrap' : (message.error ? 'bg-red-950/70 text-red-200 border border-red-800 whitespace-pre-wrap' : 'bg-gray-800 text-gray-100 border border-gray-700')">
+                        <span v-if="message.role === 'user' || message.error">[[ message.content ]]</span>
+                        <div v-else class="ai-md space-y-2" v-html="renderMarkdown(message.content)"></div>
+                    </div>
+                </div>
+
+                <div v-if="message.steps && message.steps.length && message.role !== 'user'"
+                     class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
+                    <div v-for="(step, sidx) in message.steps.slice(0, 8)" :key="sidx" class="flex items-center gap-2">
+                        <i class="fa-solid"
+                           :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : 'fa-list-check text-gray-500')"></i>
+                        <span class="truncate">[[ step.message ]]</span>
+                    </div>
+                </div>
+
+                <div v-if="message.cards && message.cards.length"
+                     class="grid grid-cols-1 gap-2 pl-2"
+                     :class="message.role === 'user' ? 'hidden' : ''">
+                    <button v-for="card in message.cards.slice(0, 6)"
+                            :key="(card.language || '') + '-' + (card.card_id || card.id)"
+                            @click="openAICard(card)"
+                            class="text-left bg-gray-900 border border-gray-700 hover:border-indigo-400 rounded-lg p-2 flex gap-3 transition">
+                        <div class="w-12 h-[67px] bg-gray-800 rounded overflow-hidden shrink-0 flex items-center justify-center">
+                            <img v-if="card.image_url" :src="card.image_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'">
+                            <i v-else class="fa-regular fa-image text-gray-600"></i>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="font-bold text-white text-sm truncate">[[ card.name ]]</div>
+                                <div class="flex items-center gap-1 shrink-0">
+                                    <span v-if="card.regulation_mark" class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-emerald-800/70 text-emerald-100">[[ card.regulation_mark ]]</span>
+                                    <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">[[ card.language ]]</span>
+                                </div>
+                            </div>
+                            <div class="text-xs text-gray-400 truncate">[[ card.card_type ]] [[ card.sub_type || '' ]]</div>
+                            <div class="text-xs text-gray-500 font-mono truncate">[[ card.set_code || '-' ]] [[ card.set_number || '-' ]]</div>
+                        </div>
+                    </button>
+                </div>
+            </div>
+
+            <div v-if="aiLoading" class="space-y-2">
+                <div class="flex justify-start">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-indigo-200">
+                        <i class="fa-solid fa-circle-notch fa-spin mr-2"></i>AI 正在查找卡牌資料...
+                    </div>
+                </div>
+                <div v-if="aiToolSteps.length" class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
+                    <div v-for="(step, sidx) in aiToolSteps.slice(0, 6)" :key="sidx" class="flex items-center gap-2">
+                        <i class="fa-solid fa-circle-notch fa-spin text-indigo-300"></i>
+                        <span class="truncate">[[ step.message ]]</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="border-t border-gray-700 bg-gray-800 p-3">
+            <div class="flex gap-2">
+                <textarea v-model="aiInput"
+                          @keydown.enter.exact.prevent="sendAIMessage"
+                          rows="2"
+                          class="flex-1 resize-none bg-gray-900 border border-gray-700 focus:border-indigo-400 outline-none rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500"
+                          placeholder="例如：有哪些寶可夢攻擊傷害是根據手牌數量計算？"></textarea>
+                <button @click="sendAIMessage"
+                        :disabled="aiLoading || !aiInput.trim()"
+                        class="w-11 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white flex items-center justify-center">
+                    <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </aside>
+</transition>

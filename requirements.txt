@@ -1,0 +1,8 @@
+Flask
+requests
+bs4
+flask_login
+python-dotenv
+psycopg2-binary
+lxml
+gunicorn

@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ptcg_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ptcg
+      POSTGRES_PASSWORD: ptcg_secret
+      POSTGRES_DB: ptcg_db
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ptcg -d ptcg_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ptcg-web:
+    build: .
+    container_name: ptcg_web
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://ptcg:ptcg_secret@db:5432/ptcg_db
+      - PYTHONUNBUFFERED=1

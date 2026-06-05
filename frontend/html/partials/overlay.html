@@ -1,0 +1,551 @@
+<!-- === 模擬測試彈窗 === -->
+<transition name="fade">
+    <div v-if="showSimModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-7xl h-full max-h-[95vh] flex flex-col border border-gray-700 shadow-2xl overflow-hidden">
+            <!-- Header -->
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <div class="flex items-center space-x-4">
+                    <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-flask mr-2 text-indigo-400"></i>起手模擬測試</h2>
+                    <!-- 頁籤切換 -->
+                    <div class="flex bg-gray-700 rounded-lg p-1">
+                        <button @click="simTab = 'hand'" :class="{'bg-indigo-600 text-white': simTab === 'hand', 'text-gray-400': simTab !== 'hand'}" class="px-4 py-1.5 rounded font-bold text-sm transition"><i class="fa-solid fa-hand mr-2"></i>起手模擬</button>
+                        <button @click="simTab = 'prize'" :class="{'bg-indigo-600 text-white': simTab === 'prize', 'text-gray-400': simTab !== 'prize'}" class="px-4 py-1.5 rounded font-bold text-sm transition"><i class="fa-solid fa-trophy mr-2"></i>獎賞分析</button>
+                    </div>
+                </div>
+                <button @click="showSimModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-2x"></i></button>
+            </div>
+
+            <div class="flex flex-1 overflow-hidden">
+                <!-- 左側：設定面板 -->
+                <div class="w-80 bg-gray-850 border-r border-gray-700 p-5 flex flex-col overflow-y-auto">
+                    <div class="mb-6">
+                        <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">模擬次數</h3>
+                        <select v-model.number="simSettings.iterations" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-indigo-500">
+                            <option value="1">1 次 (單次測試)</option>
+                            <option value="100">100 次</option>
+                            <option value="1000">1,000 次</option>
+                            <option value="10000">10,000 次</option>
+                            <option value="100000">100,000 次</option>
+                        </select>
+                    </div>
+                    <div class="mb-6">
+                        <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">洗牌設定</h3>
+                        <div class="bg-gray-800 p-3 rounded border border-gray-700 mb-3">
+                            <div class="text-sm text-gray-400 mb-2">初始狀態</div>
+                            <div class="flex space-x-2">
+                                <button @click="simSettings.initialState = 'random'" :class="{'bg-blue-600 text-white': simSettings.initialState === 'random', 'bg-gray-700 text-gray-400': simSettings.initialState !== 'random'}" class="flex-1 py-1 rounded text-xs font-bold">完全隨機</button>
+                                <button @click="simSettings.initialState = 'sorted'" :class="{'bg-blue-600 text-white': simSettings.initialState === 'sorted', 'bg-gray-700 text-gray-400': simSettings.initialState !== 'sorted'}" class="flex-1 py-1 rounded text-xs font-bold">分類排序</button>
+                            </div>
+                        </div>
+                        <div class="space-y-2 mb-4">
+                            <label class="flex items-center space-x-2 cursor-pointer bg-gray-800 p-2 rounded border border-gray-700 hover:bg-gray-700 transition">
+                                <input type="checkbox" v-model="simSettings.methods.hindu" class="w-4 h-4 rounded text-indigo-500 bg-gray-700 border-gray-500">
+                                <span class="text-sm">印度洗牌 (Hindu)</span>
+                            </label>
+                            <label class="flex items-center space-x-2 cursor-pointer bg-gray-800 p-2 rounded border border-gray-700 hover:bg-gray-700 transition">
+                                <input type="checkbox" v-model="simSettings.methods.mash" class="w-4 h-4 rounded text-indigo-500 bg-gray-700 border-gray-500">
+                                <span class="text-sm">交錯洗牌 (Mash)</span>
+                            </label>
+                        </div>
+                        <div class="mb-2">
+                            <div class="flex justify-between text-sm text-gray-400 mb-1">
+                                <span>動作次數</span>
+                                <span class="text-white font-bold">[[ simSettings.shuffleCount ]] 次</span>
+                            </div>
+                            <input type="range" v-model.number="simSettings.shuffleCount" min="1" max="20" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+                    </div>
+                    <button @click="runSimulation" :disabled="isSimulating" class="mt-auto w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 text-white py-3 rounded-lg font-bold shadow-lg transition flex justify-center items-center">
+                        <span v-if="!isSimulating"><i class="fa-solid fa-play mr-2"></i> 開始模擬</span>
+                        <span v-else><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> 計算中 [[ simProgress ]]%</span>
+                    </button>
+                </div>
+                <!-- 右側：結果展示 -->
+                <div class="flex-1 bg-gray-900 p-6 overflow-y-auto custom-scroll relative">
+                    <div class="absolute top-4 right-6 bg-gray-800 border border-gray-600 px-3 py-1 rounded text-xs text-gray-300 shadow">
+                        <i class="fa-solid fa-sliders mr-1"></i>
+                        [[ simSettings.initialState === 'random' ? '隨機初始' : '排序初始' ]] | 
+                        <span v-if="simSettings.methods.hindu">印度</span><span v-if="simSettings.methods.hindu && simSettings.methods.mash">+</span><span v-if="simSettings.methods.mash">交錯</span> x[[ simSettings.shuffleCount ]]
+                    </div>
+                    <!-- 頁籤 A: 起手模擬 -->
+                    <div v-if="simTab === 'hand'">
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-white mb-4 border-l-4 border-indigo-500 pl-3">起手手牌 (Hand) 
+                                <span v-if="simResults.isMulligan" class="ml-2 text-red-500 bg-red-900/30 px-2 py-0.5 rounded text-sm border border-red-500 animate-pulse">⚠️ Mulligan (無基礎)</span>
+                                <span v-else class="ml-2 text-green-500 text-sm"><i class="fa-solid fa-check"></i> OK</span>
+                            </h3>
+                            <div class="flex justify-center space-x-[-40px] hover:space-x-2 transition-all duration-300 py-4 min-h-[200px]">
+                                <div v-for="(card, idx) in simResults.lastHand" :key="idx" class="relative transition-transform hover:-translate-y-4 z-0 hover:z-10 w-32 md:w-40 flex-shrink-0 cursor-pointer shadow-xl rounded-lg">
+                                    <img :src="card.image_url" class="rounded-lg w-full border border-gray-700 bg-gray-800">
+                                    <div v-if="isBasicPokemon(card)" class="absolute -bottom-2 -right-2 bg-green-600 text-white text-xs font-bold px-2 py-1 rounded-full shadow border border-white">Basic</div>
+                                </div>
+                                <div v-if="!simResults.lastHand.length" class="text-gray-500 flex items-center justify-center w-full h-40 border-2 border-dashed border-gray-700 rounded-lg">尚未執行模擬</div>
+                            </div>
+                        </div>
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-white mb-4 border-l-4 border-yellow-500 pl-3">獎賞卡 (Prize Cards) <span class="text-sm text-gray-400 font-normal ml-2">(滑鼠懸停查看)</span></h3>
+                            <div class="flex justify-center gap-4">
+                                <div v-for="(card, idx) in simResults.lastPrizes" :key="idx" class="relative group w-24 h-32 md:w-28 md:h-40 perspective cursor-help">
+                                    <div class="absolute inset-0 backface-hidden transition-transform duration-500 transform group-hover:rotate-y-180 bg-gray-800 rounded-lg border border-gray-700 shadow-md flex items-center justify-center bg-prize-pattern">
+                                        <i class="fa-solid fa-trophy text-yellow-600 text-2xl opacity-50"></i>
+                                    </div>
+                                    <div class="absolute inset-0 backface-hidden rotate-y-180 transition-transform duration-500 transform group-hover:rotate-y-0 rounded-lg overflow-hidden border border-yellow-500/50 shadow-lg shadow-yellow-500/20">
+                                        <img :src="card.image_url" class="w-full h-full object-cover bg-gray-800">
+                                    </div>
+                                </div>
+                                <div v-if="!simResults.lastPrizes.length" class="text-gray-500 w-full text-center py-10">等待模擬數據...</div>
+                            </div>
+                        </div>
+                        <div v-if="simResults.stats.totalRuns > 0" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 flex flex-col items-center justify-center text-center">
+                                <div class="text-gray-400 text-sm mb-2">重洗率 (Mulligan Rate)</div>
+                                <div class="text-4xl font-bold mb-1" :class="simResults.stats.mulliganRate > 20 ? 'text-red-400' : 'text-green-400'">
+                                    [[ simResults.stats.mulliganRate ]]%
+                                </div>
+                                <div class="text-xs text-gray-500">模擬 [[ simResults.stats.totalRuns ]] 次，發生 [[ simResults.stats.mulliganCount ]] 次</div>
+                            </div>
+                            <div class="bg-gray-800 rounded-xl border border-gray-700 flex flex-col max-h-80">
+                                <div class="p-3 border-b border-gray-700 font-bold text-gray-300 text-sm bg-gray-750">單卡機率統計</div>
+                                <div class="overflow-y-auto flex-1 p-0 custom-scroll">
+                                    <table class="w-full text-sm text-left">
+                                        <thead class="text-xs text-gray-500 uppercase bg-gray-900 sticky top-0">
+                                            <tr>
+                                                <th class="px-4 py-2">卡片名稱</th>
+                                                <th class="px-4 py-2 text-right">上手率 (7張)</th>
+                                                <th class="px-4 py-2 text-right">入獎率 (6張)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="stat in sortedCardStats" :key="stat.name" class="border-b border-gray-700 hover:bg-gray-700">
+                                                <td class="px-4 py-2 font-medium text-white truncate max-w-[120px]" :title="stat.name">[[ stat.name ]]</td>
+                                                <td class="px-4 py-2 text-right font-mono" :class="getProbColor(stat.handProb)">[[ stat.handProb ]]%</td>
+                                                <td class="px-4 py-2 text-right font-mono" :class="getProbColor(stat.prizeProb)">[[ stat.prizeProb ]]%</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 頁籤 B: 獎賞分析 -->
+                    <div v-else-if="simTab === 'prize'" class="flex flex-col h-full">
+                        <div class="bg-blue-900/20 border border-blue-800 rounded p-4 mb-4 text-sm text-blue-200">
+                            <i class="fa-solid fa-circle-info mr-2"></i> 請勾選要監測的關鍵卡片，系統將計算它們「同時」掉入獎賞卡的機率。
+                        </div>
+                        <div class="flex flex-1 overflow-hidden gap-4">
+                            <div class="w-1/2 bg-gray-800 rounded border border-gray-700 flex flex-col">
+                                <div class="p-3 border-b border-gray-700 font-bold text-gray-300 bg-gray-750">監測目標 (牌組清單)</div>
+                                <div class="overflow-y-auto p-2 custom-scroll space-y-1">
+                                    <div v-for="card in uniqueDeckList" :key="card.name" 
+                                         class="flex items-center p-2 rounded hover:bg-gray-700 cursor-pointer"
+                                         @click="togglePrizeTarget(card.name)">
+                                        <div class="w-5 h-5 border rounded mr-3 flex items-center justify-center transition-colors"
+                                             :class="simResults.prizeTargets.has(card.name) ? 'bg-indigo-600 border-indigo-500' : 'border-gray-500'">
+                                            <i v-if="simResults.prizeTargets.has(card.name)" class="fa-solid fa-check text-white text-xs"></i>
+                                        </div>
+                                        <span class="text-sm text-gray-200">[[ card.name ]]</span>
+                                        <span class="ml-auto text-xs text-gray-500">x[[ getCardCountById(card.card_id) ]]</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="w-1/2 bg-gray-800 rounded border border-gray-700 flex flex-col">
+                                <div class="p-3 border-b border-gray-700 font-bold text-gray-300 bg-gray-750">組合卡獎機率</div>
+                                <div class="overflow-y-auto p-4 custom-scroll">
+                                    <div v-if="simResults.prizeStats.length === 0" class="text-center text-gray-500 mt-10">
+                                        <p>勾選卡片並執行模擬<br>以查看結果</p>
+                                    </div>
+                                    <div v-else class="space-y-2">
+                                        <div v-for="(res, idx) in simResults.prizeStats" :key="idx" 
+                                             class="bg-gray-700/50 p-3 rounded border border-gray-600 flex justify-between items-center">
+                                            <div class="text-sm text-white">
+                                                <div v-for="(count, name) in res.combo" :key="name">
+                                                    [[ name ]] <span class="text-yellow-400 font-bold">x[[ count ]]</span>
+                                                </div>
+                                            </div>
+                                            <div class="text-right">
+                                                <div class="text-xl font-bold" :class="res.prob > 10 ? 'text-red-400' : 'text-gray-200'">[[ res.prob ]]%</div>
+                                                <div class="text-xs text-gray-500">發生率</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 卡牌大更新彈窗 === -->
+<transition name="fade">
+    <div v-if="showUpdateModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-cloud-arrow-down mr-2 text-pink-400"></i>數據庫大更新</h2>
+                <button v-if="!updateState.running" @click="showUpdateModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+            </div>
+
+            <div class="p-6 flex flex-col space-y-6">
+                <!-- 狀態 1: 閒置 (準備檢查) -->
+                <div v-if="uiState === 'idle'" class="text-center space-y-4">
+                    <div class="w-20 h-20 bg-gray-800 rounded-full flex items-center justify-center mx-auto border-2 border-gray-600">
+                        <i class="fa-solid fa-magnifying-glass text-4xl text-gray-400"></i>
+                    </div>
+                    <h3 class="text-lg font-bold text-white">檢查官網版本</h3>
+                    <p class="text-gray-400 text-sm px-8">
+                        點擊下方按鈕，系統將會連線至官方網站，比對目前的卡牌總數。<br>
+                        如果發現官網數量多於本地，建議進行更新。
+                    </p>
+                    <button @click="checkVersion" class="bg-gray-600 hover:bg-gray-500 text-white px-8 py-3 rounded-full font-bold shadow-lg transition transform hover:scale-105">
+                        <i class="fa-solid fa-rotate mr-2"></i> 檢查更新
+                    </button>
+                </div>
+
+                <!-- 狀態 2: 檢查中 -->
+                <div v-else-if="uiState === 'checking'" class="text-center space-y-4 py-8">
+                    <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500"></i>
+                    <p class="text-gray-300">正在連線至官網獲取最新數據...</p>
+                </div>
+
+                <!-- 狀態 3: 顯示結果 (準備更新) -->
+                <div v-else-if="uiState === 'ready'" class="space-y-6">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                            <div class="text-gray-400 text-xs mb-1">本地資料庫</div>
+                            <div class="text-2xl font-bold text-white">[[ versionInfo.localCount ]] 張</div>
+                            <div class="text-xs text-gray-500 mt-1">上次更新: [[ versionInfo.lastUpdate ]]</div>
+                        </div>
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                            <div class="text-gray-400 text-xs mb-1">官網最新</div>
+                            <div class="text-2xl font-bold text-pink-400">[[ versionInfo.officialCount ]] 張</div>
+                            <div class="text-xs text-gray-500 mt-1">約 [[ versionInfo.officialPages ]] 頁</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 自定義網址輸入區 -->
+                    <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                        <label class="block text-gray-400 text-xs font-bold mb-2">自定義搜尋網址 (選填)</label>
+                        <div class="flex">
+                            <input v-model="customUrl" type="text" class="flex-1 bg-gray-900 text-white border border-gray-600 rounded-l px-3 py-2 text-sm focus:outline-none focus:border-blue-500" placeholder="貼上官網搜尋結果的網址以只更新特定卡片...">
+                            <button @click="customUrl = ''" class="px-3 bg-gray-700 border border-gray-600 border-l-0 rounded-r hover:bg-gray-600 text-gray-300"><i class="fa-solid fa-times"></i></button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">留空將執行全站差異更新。若輸入網址，系統將自動掃描該搜尋結果的所有頁面。</p>
+                    </div>
+                    
+                    <div v-if="versionInfo.diff > 0 && !customUrl" class="bg-green-900/30 border border-green-800 p-3 rounded text-center">
+                        <p class="text-green-400 font-bold"><i class="fa-solid fa-bell mr-2"></i>發現新卡片！</p>
+                        <p class="text-sm text-gray-300">官網比本地多出 <span class="text-white font-bold">[[ versionInfo.diff ]]</span> 張卡片。</p>
+                    </div>
+                    <div v-else-if="!customUrl" class="bg-blue-900/30 border border-blue-800 p-3 rounded text-center">
+                        <p class="text-blue-400 font-bold"><i class="fa-solid fa-check-circle mr-2"></i>目前已是最新版本</p>
+                        <p class="text-sm text-gray-300">但您仍可執行掃描來修復缺失的圖片。</p>
+                    </div>
+
+                    <div class="text-center">
+                        <button @click="startUpdate" class="bg-pink-600 hover:bg-pink-500 text-white px-8 py-3 rounded-full font-bold shadow-lg shadow-pink-600/30 transition transform hover:scale-105">
+                            <i class="fa-solid fa-cloud-download-alt mr-2"></i> [[ customUrl ? '開始自定義更新' : (versionInfo.diff > 0 ? '開始更新' : '強制掃描') ]]
+                        </button>
+                        <button @click="uiState = 'idle'" class="block mx-auto mt-4 text-gray-500 hover:text-white text-sm">返回</button>
+                    </div>
+                </div>
+
+                <!-- 狀態 4: 進行中 -->
+                <div v-else-if="uiState === 'updating'" class="flex flex-col space-y-4">
+                    <!-- 進度條 -->
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-sm">
+                            <span class="font-bold text-gray-300">
+                                <i class="fa-solid fa-circle-notch fa-spin text-pink-400 mr-2"></i>
+                                [[ updateState.running ? '更新中...' : '任務結束' ]]
+                            </span>
+                            <span class="text-pink-400 font-mono">[[ updateState.progress.toFixed(1) ]]%</span>
+                        </div>
+                        <div class="w-full bg-gray-800 rounded-full h-4 overflow-hidden border border-gray-700">
+                            <div class="bg-pink-500 h-full transition-all duration-300 ease-out relative" :style="{ width: updateState.progress + '%' }">
+                                <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-400 text-center">[[ updateState.message ]]</p>
+                    </div>
+
+                    <!-- 終端機日誌區 -->
+                    <div class="flex-1 bg-gray-950 rounded border border-gray-800 p-4 h-64 overflow-y-auto custom-scroll console-logs text-xs space-y-1">
+                        <div v-for="(log, idx) in updateState.logs" :key="idx" class="border-b border-gray-800/50 pb-1 last:border-0">
+                            <span class="opacity-50 mr-2">>></span>[[ log ]]
+                        </div>
+                    </div>
+
+                    <div v-if="!updateState.running" class="text-center pt-2">
+                        <button @click="showUpdateModal = false" class="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded font-bold">關閉視窗</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 新增卡牌彈窗 === -->
+<transition name="fade">
+    <div v-if="showAddCardModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-plus-circle mr-2 text-green-400"></i>新增卡牌到資料庫</h2>
+                <button @click="showAddCardModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+            </div>
+
+            <div class="flex border-b border-gray-700 bg-gray-850">
+                <button @click="addCardMode = 'new'" :class="addCardMode === 'new' ? 'border-b-2 border-green-500 text-green-400' : 'text-gray-400 hover:text-white'" class="flex-1 py-3 text-sm font-bold transition">全新卡牌</button>
+                <button @click="addCardMode = 'variant'" :class="addCardMode === 'variant' ? 'border-b-2 border-green-500 text-green-400' : 'text-gray-400 hover:text-white'" class="flex-1 py-3 text-sm font-bold transition">同名異畫 / 復刻</button>
+            </div>
+
+            <div class="p-6 overflow-y-auto custom-scroll flex-1">
+                <!-- 模式 1: 全新卡牌 -->
+                <div v-if="addCardMode === 'new'" class="space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-gray-400 text-xs font-bold mb-1">卡牌名稱</label>
+                            <input v-model="newCardData.name" type="text" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none" placeholder="例如：皮卡丘 ex">
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 text-xs font-bold mb-1">卡牌代號 (ID)</label>
+                            <input v-model="newCardData.id" type="text" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none" placeholder="例如：SV1a-001">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-gray-400 text-xs font-bold mb-1">卡牌類型</label>
+                            <select v-model="newCardData.type" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none">
+                                <option value="Pokémon">寶可夢 (Pokémon)</option>
+                                <option value="Trainer">訓練家 (Trainer)</option>
+                                <option value="Energy">能量 (Energy)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 text-xs font-bold mb-1">子類型</label>
+                            <input v-model="newCardData.subType" type="text" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none" placeholder="例如：Basic, Stage 1, Item...">
+                        </div>
+                    </div>
+                    <div v-if="newCardData.type === 'Pokémon'" class="grid grid-cols-2 gap-4 animate-fade-in">
+                        <div>
+                            <label class="block text-gray-400 text-xs font-bold mb-1">HP</label>
+                            <input v-model="newCardData.hp" type="number" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 text-xs font-bold mb-1">屬性</label>
+                            <select v-model="newCardData.element" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none">
+                                <option value="Lightning">雷 (Lightning)</option>
+                                <option value="Water">水 (Water)</option>
+                                <option value="Fire">火 (Fire)</option>
+                                <option value="Grass">草 (Grass)</option>
+                                <option value="Psychic">超 (Psychic)</option>
+                                <option value="Fighting">鬥 (Fighting)</option>
+                                <option value="Darkness">惡 (Darkness)</option>
+                                <option value="Metal">鋼 (Metal)</option>
+                                <option value="Dragon">龍 (Dragon)</option>
+                                <option value="Colorless">無 (Colorless)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs font-bold mb-1">技能/效果描述</label>
+                        <textarea v-model="newCardData.text" rows="3" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none resize-none" placeholder="輸入卡牌技能或效果文字..."></textarea>
+                    </div>
+                </div>
+
+                <!-- 模式 2: 同名異畫 -->
+                <div v-else class="space-y-4">
+                    <div class="bg-blue-900/20 border border-blue-800 rounded p-3 text-sm text-blue-200 mb-4">
+                        <i class="fa-solid fa-circle-info mr-2"></i> 搜尋已存在的卡牌，系統將自動複製其數值與技能資料，您只需上傳新圖片與設定新 ID。
+                    </div>
+                    <div class="relative">
+                        <label class="block text-gray-400 text-xs font-bold mb-1">搜尋來源卡牌</label>
+                        <div class="flex">
+                            <input v-model="sourceSearchQuery" @keyup.enter="searchSourceCard" type="text" class="flex-1 bg-gray-800 border border-gray-600 rounded-l px-3 py-2 text-white focus:border-green-500 outline-none" placeholder="輸入名稱搜尋...">
+                            <button @click="searchSourceCard" class="bg-gray-700 hover:bg-gray-600 px-4 rounded-r border border-l-0 border-gray-600"><i class="fa-solid fa-search"></i></button>
+                        </div>
+                        <!-- 搜尋結果下拉 -->
+                        <div v-if="sourceSearchResults.length > 0" class="absolute z-10 w-full bg-gray-800 border border-gray-600 mt-1 max-h-48 overflow-y-auto rounded shadow-xl">
+                            <div v-for="card in sourceSearchResults" :key="card.card_id" @click="selectSourceCard(card)" class="p-2 hover:bg-gray-700 cursor-pointer flex items-center border-b border-gray-700 last:border-0">
+                                <img :src="card.image_url" class="w-8 h-10 object-contain bg-gray-900 mr-3">
+                                <div>
+                                    <div class="font-bold text-sm">[[ card.name ]]</div>
+                                    <div class="text-xs text-gray-400">[[ card.card_id ]] | [[ card.card_type ]]</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="newCardData.sourceCardId" class="bg-gray-800 border border-green-500/50 rounded p-3 flex items-center">
+                        <i class="fa-solid fa-check-circle text-green-500 mr-3"></i>
+                        <div>
+                            <div class="text-xs text-gray-400">已選擇來源</div>
+                            <div class="font-bold text-green-400">[[ newCardData.sourceName ]]</div>
+                        </div>
+                        <button @click="newCardData.sourceCardId = ''" class="ml-auto text-gray-500 hover:text-white text-sm">重選</button>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs font-bold mb-1">新卡牌代號 (ID)</label>
+                        <input v-model="newCardData.id" type="text" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none" placeholder="例如：SV4a-100 (異畫)">
+                    </div>
+                </div>
+
+                <!-- 共通：圖片上傳 -->
+                <div class="mt-4 pt-4 border-t border-gray-700">
+                    <label class="block text-gray-400 text-xs font-bold mb-2">卡牌圖片 (上傳檔案)</label>
+                    <div class="flex items-center space-x-4">
+                        <label class="cursor-pointer bg-gray-800 hover:bg-gray-700 border border-gray-600 px-4 py-2 rounded transition flex items-center">
+                            <i class="fa-solid fa-upload mr-2"></i> 選擇圖片
+                            <input type="file" @change="handleFileUpload" class="hidden" accept="image/*">
+                        </label>
+                        <span v-if="newCardData.imageFile" class="text-sm text-gray-300">[[ newCardData.imageFile.name ]]</span>
+                    </div>
+                    <!-- 預覽 -->
+                    <div v-if="previewImage" class="mt-4 flex justify-center bg-gray-800 p-2 rounded border border-gray-700 border-dashed">
+                        <img :src="previewImage" class="max-h-48 object-contain">
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-end">
+                <button @click="showAddCardModal = false" class="px-4 py-2 text-gray-400 hover:text-white mr-2">取消</button>
+                <button @click="submitNewCard" :disabled="isSubmittingCard" class="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded font-bold transition flex items-center">
+                    <i v-if="isSubmittingCard" class="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                    [[ isSubmittingCard ? '處理中...' : '確認新增' ]]
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- 推薦牌組列表彈窗 -->
+<transition name="fade">
+    <div v-if="showDeckLibrary" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-6">
+        <div class="bg-gray-900 rounded-xl w-full max-w-6xl h-full flex flex-col border border-gray-700 shadow-2xl relative overflow-hidden">
+            <div class="p-6 border-b border-gray-700 flex justify-between items-center bg-gray-800 gap-4">
+                <h2 class="text-2xl font-bold text-white whitespace-nowrap"><i class="fa-solid fa-globe mr-2 text-blue-400"></i>推薦牌組</h2>
+                <div class="flex-1 max-w-md relative">
+                    <input v-model="publicDeckSearchQuery" @keyup.enter="searchPublicDecks" type="text" class="w-full bg-gray-700 text-white border border-gray-600 rounded-full py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="搜尋牌組名稱或內容...">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400"><i class="fa-solid fa-search"></i></span>
+                </div>
+                <button @click="showDeckLibrary = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-2x"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6 bg-grid custom-scroll">
+                <div v-if="publicDecksLoading" class="text-center mt-20 text-blue-400"><i class="fa-solid fa-circle-notch fa-spin fa-3x"></i><p class="mt-4">載入中...</p></div>
+                <div v-else-if="publicDecks.length === 0" class="text-center mt-20 text-gray-500"><p class="text-xl">沒有找到相關牌組</p></div>
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    <div v-for="d in publicDecks" :key="d.id" class="bg-gray-800 rounded-lg border border-gray-700 hover:border-blue-500 transition-all hover:shadow-xl group flex flex-col overflow-hidden">
+                        <div class="grid grid-cols-2 gap-0.5 bg-gray-900 aspect-video w-full">
+                            <div v-for="(img, idx) in d.preview_images.slice(0, 4)" :key="idx" class="relative overflow-hidden">
+                                <img :src="img" class="object-cover w-full h-full opacity-80 group-hover:opacity-100 transition" @error="handleImageError">
+                            </div>
+                            <div v-if="d.preview_images.length < 4" class="bg-gray-800 flex items-center justify-center text-gray-600"><i class="fa-solid fa-image"></i></div>
+                        </div>
+                        <div class="p-4 flex-1 flex flex-col">
+                            <h3 class="font-bold text-lg text-white mb-1 truncate">[[ d.name ]]</h3>
+                            <div class="text-xs text-gray-400 mb-4 flex justify-between">
+                                <span><i class="fa-solid fa-layer-group mr-1"></i>[[ d.count ]] 張</span>
+                                <span>[[ new Date(d.created_at).toLocaleDateString() ]]</span>
+                            </div>
+                            <button @click="loadPublicDeck(d.id)" class="mt-auto w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded font-bold transition">
+                                <i class="fa-solid fa-download mr-2"></i> 複製此牌組
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- 儲存牌組彈窗 -->
+<transition name="fade">
+    <div v-if="showSaveModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4">
+        <div class="bg-gray-800 rounded-xl p-6 w-full max-w-md border border-gray-700">
+            <h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-floppy-disk mr-2"></i>儲存牌組</h2>
+            <div class="mb-4">
+                <label class="block text-gray-400 text-sm mb-2">牌組名稱</label>
+                <input v-model="saveDeckName" type="text" class="w-full bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 focus:border-blue-500 outline-none" placeholder="例如：我的皮卡丘牌組">
+            </div>
+            <div class="mb-6 flex items-center">
+                <label class="flex items-center cursor-pointer relative">
+                    <input type="checkbox" v-model="saveIsPublic" class="sr-only peer">
+                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                    <span class="ml-3 text-sm font-medium text-gray-300">公開到推薦列表</span>
+                </label>
+            </div>
+            <div class="flex justify-end space-x-2">
+                <button @click="showSaveModal = false" class="px-4 py-2 text-gray-400 hover:text-white">取消</button>
+                <button @click="submitSaveDeck" :disabled="isSaving" class="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded font-bold flex items-center">
+                    <i v-if="isSaving" class="fa-solid fa-circle-notch fa-spin mr-2"></i> [[ isSaving ? '儲存中...' : '確認儲存' ]]
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- 詳情彈窗 -->
+<transition name="fade">
+    <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 backdrop-blur-sm p-4" @click.self="closeModal">
+        <div class="bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col md:flex-row max-h-[90vh]">
+            <div class="md:w-1/2 bg-gray-900 p-6 flex items-center justify-center flex-col">
+                <img :src="selectedCard.image_url" class="max-h-[65vh] rounded-lg shadow-lg object-contain" @load="checkResolution">
+                <div v-if="isLowResolution" class="mt-3 px-3 py-2 bg-yellow-900 text-yellow-200 text-xs rounded flex items-center border border-yellow-700">
+                    <i class="fa-solid fa-triangle-exclamation mr-2"></i>注意：此圖片解析度較低 ([[ resolutionInfo ]])，打印可能會模糊。
+                </div>
+            </div>
+            <div class="md:w-1/2 p-6 flex flex-col overflow-y-auto">
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white">[[ selectedCard.name ]]</h2>
+                        <div class="text-sm text-gray-400 mt-1 space-x-2 flex items-center">
+                            <span class="px-2 py-0.5 bg-gray-700 rounded border border-gray-600">[[ selectedCard.card_type ]]</span>
+                            <span v-if="selectedCard.hp" class="text-red-400 font-bold">HP [[ selectedCard.hp ]]</span>
+                            <img v-if="selectedCard.element_type" :src="getEnergyIcon(selectedCard.element_type)" class="w-5 h-5 inline-block">
+                        </div>
+                    </div>
+                    <button @click="closeModal" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+                </div>
+                
+                <div class="flex-1 space-y-4 mb-6 overflow-y-auto pr-2 custom-scroll">
+                    <div v-if="selectedCard.skills && selectedCard.skills.length > 0">
+                        <div v-for="(skill, idx) in selectedCard.skills" :key="idx" class="bg-gray-750 p-3 rounded border border-gray-700">
+                            <div class="flex justify-between items-baseline mb-1" v-if="skill.name || (skill.cost && skill.cost.length > 0) || skill.damage">
+                                <div class="flex items-center gap-1">
+                                    <div v-if="skill.cost" class="flex">
+                                        <img v-for="c in skill.cost" :src="getEnergyIcon(c)" class="w-4 h-4 mr-0.5">
+                                    </div>
+                                    <span v-if="skill.type === 'ability'" class="text-red-400 font-bold text-xs mr-1">【特性】</span>
+                                    <span v-if="skill.name" class="font-bold" :class="skill.type === 'ability' ? 'text-red-300' : 'text-yellow-100'">[[ skill.name ]]</span>
+                                </div>
+                                <span v-if="skill.damage" class="text-xl font-bold text-white">[[ skill.damage ]]</span>
+                            </div>
+                            <p class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">[[ skill.text || skill.effect ]]</p>
+                        </div>
+                    </div>
+                    <div v-else-if="selectedCard.text || selectedCard.effect || selectedCard.description" class="bg-gray-750 p-4 rounded border border-gray-700">
+                        <h4 class="text-gray-400 text-xs font-bold uppercase mb-2">效果説明</h4>
+                        <p class="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">[[ selectedCard.text || selectedCard.effect || selectedCard.description ]]</p>
+                    </div>
+                    <div v-else class="text-gray-500 italic text-sm text-center py-4">此卡片暫無詳細技能或效果説明文字。</div>
+                </div>
+
+                <div class="mt-auto space-y-3 border-t border-gray-700 pt-4">
+                    <div class="flex space-x-2">
+                        <button @click="addToDeck(selectedCard)" class="flex-1 bg-green-600 hover:bg-green-500 text-white py-3 rounded-lg font-bold transition flex items-center justify-center"><i class="fa-solid fa-plus mr-2"></i> 加入牌組</button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button @click="searchSameName(selectedCard.name)" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 rounded-lg text-sm transition"><i class="fa-solid fa-search mr-1"></i> 搜同名卡</button>
+                        <a :href="selectedCard.image_url" download target="_blank" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 rounded-lg text-sm transition text-center block decoration-0"><i class="fa-solid fa-download mr-1"></i> 下載圖片</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- 打印與導出等其他功能彈窗 -->
+<transition name="fade"><div v-if="showPrintModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-md border border-gray-700"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-print mr-2"></i>打印/合成牌組圖片</h2><p class="text-gray-400 text-sm mb-6">請選擇輸出格式。系統將自動分頁並保持圖片原始解析度（無損）。</p><div class="space-y-3"><button @click="generateDeckImage('A4')" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex justify-between px-4 items-center"><span><i class="fa-regular fa-file mr-2"></i>A4 格式 (9張/頁)</span><span class="text-xs opacity-70 bg-blue-800 px-2 py-1 rounded">3 x 3 排列</span></button><button @click="generateDeckImage('A3')" class="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-lg font-bold flex justify-between px-4 items-center"><span><i class="fa-regular fa-file-lines mr-2"></i>A3 格式 (18張/頁)</span><span class="text-xs opacity-70 bg-purple-800 px-2 py-1 rounded">6 x 3 排列</span></button></div><div v-if="generating" class="mt-4 text-center text-yellow-400 text-sm animate-pulse"><i class="fa-solid fa-gear fa-spin mr-1"></i> 正在下載圖片並繪製 (第 [[ currentGenPage ]] / [[ totalGenPages ]] 頁)...</div><button v-if="!generating" @click="showPrintModal = false" class="mt-6 w-full text-gray-400 hover:text-white text-sm">取消</button></div></div></transition>
+<transition name="fade"><div v-if="showShareModal" class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 text-center"><div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl text-white shadow-lg shadow-green-500/50"><i class="fa-solid fa-check"></i></div><h2 class="text-2xl font-bold text-white mb-2">儲存成功！</h2><p class="text-gray-400 text-sm mb-6">您的牌組已儲存，可以透過以下連結分享或日後訪問。</p><div class="bg-gray-900 p-4 rounded-lg border border-gray-700 mb-6 text-left"><div class="text-xs text-gray-500 mb-1">唯一識別碼</div><div class="text-xl font-mono text-yellow-400 font-bold mb-3 tracking-widest">[[ savedDeckId ]]</div><div class="text-xs text-gray-500 mb-1">分享連結</div><div class="flex space-x-2"><input readonly :value="shareUrl" class="flex-1 bg-gray-800 text-gray-300 text-sm px-3 py-2 rounded border border-gray-600 focus:outline-none select-all" @click="$event.target.select()"><button @click="copyShareLink" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-bold whitespace-nowrap"><i class="fa-regular fa-copy mr-1"></i> 複製</button></div></div><button @click="showShareModal = false" class="bg-gray-700 hover:bg-gray-600 text-white px-8 py-2 rounded-lg font-bold">關閉</button></div></div></transition>
+<transition name="fade"><div v-if="showImportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-2xl border border-gray-700 max-h-[90vh] flex flex-col overflow-hidden"><div v-if="conflictQueue.length === 0" class="flex flex-col h-full overflow-hidden"><h2 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-file-import mr-2"></i>導入文字列表</h2><p class="text-gray-400 text-xs mb-4">請貼上卡表，格式如：卡片名稱 數量 (例如：皮卡丘 3)</p><textarea v-model="importText" :class="{'h-32': notFoundList.length > 0, 'flex-1': notFoundList.length === 0}" class="w-full bg-gray-900 text-gray-200 p-4 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none font-mono text-sm mb-4 min-h-[120px]" placeholder="古鼎鹿 3&#10;月月熊 赫月 2&#10;基本火能量 5"></textarea><div v-if="notFoundList.length > 0" class="bg-red-900/30 border border-red-800 rounded p-3 mb-4 flex-1 overflow-y-auto custom-scroll min-h-0"><h3 class="text-red-400 font-bold text-sm mb-2 flex items-center"><i class="fa-solid fa-triangle-exclamation mr-2"></i> 以下卡片搜尋失敗：</h3><ul class="list-disc list-inside text-red-300 text-sm space-y-1"><li v-for="(name, idx) in notFoundList" :key="idx">[[ name ]]</li></ul></div><div v-if="isImporting" class="text-yellow-400 text-sm mb-2 animate-pulse"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> [[ importStatus ]]</div><div class="flex justify-end space-x-2 mt-auto"><button @click="showImportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">取消</button><button @click="startImport" :disabled="isImporting" class="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded font-bold transition">開始導入</button></div></div><div v-else class="flex flex-col h-full overflow-hidden"><div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 flex-shrink-0"><h2 class="text-xl font-bold text-yellow-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i>請選擇卡片版本</h2><span class="text-sm text-gray-400">剩餘待處理: [[ conflictQueue.length ]]</span></div><div class="mb-3 text-center flex-shrink-0"><p class="text-lg font-bold text-white">「[[ conflictQueue[0].name ]]」</p><p class="text-sm text-gray-400">需要加入 [[ conflictQueue[0].count ]] 張，請點擊下方其中一張來使用：</p></div><div class="flex-1 overflow-y-auto custom-scroll bg-gray-900 rounded p-4 min-h-0"><div class="grid grid-cols-3 gap-4"><div v-for="match in conflictQueue[0].matches" :key="match.card_id" @click="resolveConflict(conflictQueue[0], match)" class="cursor-pointer group relative hover:ring-2 ring-blue-500 rounded-lg overflow-hidden bg-gray-800 shadow-lg transition-transform hover:scale-105"><div class="w-full relative" style="aspect-ratio: 2.5 / 3.5;"><img :src="match.image_url" class="absolute inset-0 w-full h-full object-contain bg-gray-900" loading="lazy" @error="handleImageError"></div><div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-90 text-white text-xs py-2 px-2 text-center truncate border-t border-gray-700"><div class="font-medium">[[ match.name ]]</div></div></div></div></div><div class="mt-4 text-center flex-shrink-0"><button @click="skipConflict" class="text-gray-500 hover:text-gray-300 text-sm underline">跳過此卡片</button></div></div></div></div></transition>
+<transition name="fade"><div v-if="showExportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 flex flex-col"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-file-export mr-2"></i>導出文字列表</h2><div class="mb-4"><label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" v-model="exportWithId" @change="regenerateExportText" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-600 focus:ring-blue-500"><span class="text-sm text-gray-300">包含卡片 ID (便於分享給他人精確版本)</span></label></div><textarea readonly v-model="exportTextContent" class="w-full bg-gray-900 text-gray-200 p-3 rounded border border-gray-600 text-sm font-mono h-64 mb-4 custom-scroll outline-none focus:border-blue-500" @click="$event.target.select()"></textarea><div class="flex justify-end space-x-2"><button @click="showExportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">關閉</button><button @click="copyExportText" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded font-bold transition"><i class="fa-regular fa-copy mr-2"></i>複製到剪貼簿</button></div></div></div></transition>

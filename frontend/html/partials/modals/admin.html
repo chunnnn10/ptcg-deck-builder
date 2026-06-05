@@ -1,0 +1,1057 @@
+<!-- === 卡牌大更新彈窗 === -->
+<transition name="fade">
+    <div v-if="showUpdateModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-cloud-arrow-down mr-2 text-pink-400"></i>數據庫大更新</h2>
+                <button v-if="!updateState.running" @click="showUpdateModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+            </div>
+
+            <div class="p-6 flex-1 flex flex-col min-h-0 overflow-hidden space-y-6">
+                <!-- 狀態 1: 閒置 (選擇擴充包) -->
+                <div v-if="uiState === 'idle'" class="flex flex-col h-full overflow-hidden" style="min-height: 400px;">
+                    <div class="px-6 py-4 flex-1 overflow-y-auto custom-scroll">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-white">選擇更新目標</h3>
+                            <button @click="fetchExpansions" class="text-xs text-blue-400 hover:text-white"><i class="fa-solid fa-refresh mr-1"></i>重整列表</button>
+                        </div>
+                        
+                        <!-- 擴充包列表 (系列分組) -->
+                        <div v-if="loadingExpansions" class="text-center py-12 text-gray-400">
+                             <i class="fa-solid fa-circle-notch fa-spin fa-2x mb-2 text-pink-500"></i>
+                             <p>正在同步官方列表...</p>
+                        </div>
+                        <div v-else-if="expansionList.length === 0" class="text-center py-12 text-gray-500">
+                             <p>無法取得擴充包資料，請檢查網路或是資料庫。</p>
+                        </div>
+                        <div v-else class="space-y-3">
+                            <!-- 全選 / 取消 -->
+                            <div class="flex gap-2 text-xs">
+                                <button @click="selectedExpansions = expansionList.map(e => e.code)" class="text-pink-400 hover:text-pink-300 underline">全選</button>
+                                <button @click="selectedExpansions = []" class="text-gray-500 hover:text-gray-300 underline">取消全選</button>
+                                <span class="text-gray-500 ml-auto">已選 [[ selectedExpansions.length ]] / [[ expansionList.length ]]</span>
+                            </div>
+                            <!-- 系列分組 -->
+                            <div v-for="group in expansionGrouped" :key="group.series" class="border border-gray-700 rounded-lg overflow-hidden">
+                                <div class="bg-gray-750 px-3 py-2 text-sm font-bold text-gray-300 flex items-center gap-2">
+                                    <i class="fa-solid fa-layer-group text-pink-400 text-xs"></i>
+                                    [[ group.series ]]
+                                    <span class="text-xs text-gray-500">([[ group.expansions.length ]])</span>
+                                </div>
+                                <div class="divide-y divide-gray-700/50">
+                                    <div v-for="exp in group.expansions" :key="exp.code"
+                                         class="flex items-center px-3 py-2 cursor-pointer transition hover:bg-gray-700/50"
+                                         :class="selectedExpansions.includes(exp.code) ? 'bg-pink-900/20' : ''"
+                                         @click="selectedExpansions.includes(exp.code) ? selectedExpansions = selectedExpansions.filter(c => c !== exp.code) : selectedExpansions.push(exp.code)">
+                                        <div class="w-4 h-4 rounded border flex items-center justify-center mr-2 transition flex-shrink-0"
+                                             :class="selectedExpansions.includes(exp.code) ? 'bg-pink-500 border-pink-500' : 'bg-gray-700 border-gray-500'">
+                                            <i v-if="selectedExpansions.includes(exp.code)" class="fa-solid fa-check text-white text-[10px]"></i>
+                                        </div>
+                                        <span class="text-white text-sm truncate">[[ exp.name ]]</span>
+                                        <span class="ml-auto text-xs text-gray-500 bg-gray-900 px-1.5 py-0.5 rounded flex-shrink-0">[[ exp.code ]]</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 賽制選擇 -->
+                        <div class="mt-6 pt-4 border-t border-gray-700">
+                            <h4 class="text-sm font-bold text-gray-400 mb-2">賽制標記</h4>
+                            <div class="flex gap-4">
+                                <label class="flex items-center text-white cursor-pointer select-none">
+                                    <input type="checkbox" :value="1" v-model="selectedRegulations" class="w-4 h-4 mr-2 rounded bg-gray-700 border-gray-500 text-pink-500"> 
+                                    <span :class="selectedRegulations.includes(1) ? 'text-pink-400' : 'text-gray-400'">標準 (Standard)</span>
+                                </label>
+                                <label class="flex items-center text-white cursor-pointer select-none">
+                                    <input type="checkbox" :value="2" v-model="selectedRegulations" class="w-4 h-4 mr-2 rounded bg-gray-700 border-gray-500 text-pink-500"> 
+                                    <span :class="selectedRegulations.includes(2) ? 'text-pink-400' : 'text-gray-400'">開放 (Expanded)</span>
+                                </label>
+                            </div>
+
+                            <!-- [新增] 圖片更新控制 -->
+                            <div class="mt-2">
+                                <label class="flex items-center text-white cursor-pointer select-none hover:bg-gray-700/50 p-1 rounded -ml-1 transition">
+                                    <input type="checkbox" v-model="skipImages" class="w-4 h-4 mr-2 rounded bg-gray-700 border-gray-500 text-blue-500">
+                                    <span :class="skipImages ? 'text-blue-400 font-bold' : 'text-gray-400'">不更新/下載圖片 (急速模式)</span>
+                                </label>
+                                <p class="text-xs text-gray-500 mt-1 ml-7">勾選後將略過圖片下載檢查，由卡面文字更新為主。適合快速同步。</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="p-4 bg-gray-800 flex justify-between items-center rounded-b-xl border-t border-gray-700">
+                        <button @click="checkVersion" class="text-gray-400 hover:text-white text-xs underline">
+                            切換至舊版全站檢查
+                        </button>
+                        <button @click="startUpdate" 
+                                :disabled="selectedExpansions.length === 0"
+                                class="bg-pink-600 hover:bg-pink-500 disabled:bg-gray-600 disabled:text-gray-400 text-white px-6 py-2 rounded-full font-bold shadow-lg shadow-pink-600/30 transition transform text-sm flex items-center">
+                            <i class="fa-solid fa-cloud-download-alt mr-2"></i>
+                            開始更新 ([[ selectedExpansions.length ]])
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 狀態 2: 檢查中 -->
+                <div v-else-if="uiState === 'checking'" class="text-center space-y-4 py-8">
+                    <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500"></i>
+                    <p class="text-gray-300">正在連線至官網獲取最新數據...</p>
+                </div>
+
+                <!-- 狀態 3: 顯示結果 -->
+                <div v-else-if="uiState === 'ready'" class="space-y-6">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                            <div class="text-gray-400 text-xs mb-1">本地資料庫</div>
+                            <div class="text-2xl font-bold text-white">[[ versionInfo.localCount ]] 張</div>
+                            <div class="text-xs text-gray-500 mt-1">上次更新: [[ versionInfo.lastUpdate ]]</div>
+                        </div>
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700 text-center">
+                            <div class="text-gray-400 text-xs mb-1">官網最新</div>
+                            <div class="text-2xl font-bold text-pink-400">[[ versionInfo.officialCount ]] 張</div>
+                            <div class="text-xs text-gray-500 mt-1">約 [[ versionInfo.officialPages ]] 頁</div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                        <label class="block text-gray-400 text-xs font-bold mb-2">自定義搜尋網址 (選填)</label>
+                        <div class="flex">
+                            <input v-model="customUrl" type="text" class="flex-1 bg-gray-900 text-white border border-gray-600 rounded-l px-3 py-2 text-sm focus:outline-none focus:border-blue-500" placeholder="貼上官網搜尋結果的網址以只更新特定卡片...">
+                            <button @click="customUrl = ''" class="px-3 bg-gray-700 border border-gray-600 border-l-0 rounded-r hover:bg-gray-600 text-gray-300"><i class="fa-solid fa-times"></i></button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">留空將執行全站差異更新。若輸入網址，系統將自動掃描該搜尋結果的所有頁面。</p>
+                    </div>
+                    
+                    <div v-if="versionInfo.diff > 0 && !customUrl" class="bg-green-900/30 border border-green-800 p-3 rounded text-center">
+                        <p class="text-green-400 font-bold"><i class="fa-solid fa-bell mr-2"></i>發現新卡片！</p>
+                        <p class="text-sm text-gray-300">官網比本地多出 <span class="text-white font-bold">[[ versionInfo.diff ]]</span> 張卡片。</p>
+                    </div>
+                    <div v-else-if="!customUrl" class="bg-blue-900/30 border border-blue-800 p-3 rounded text-center">
+                        <p class="text-blue-400 font-bold"><i class="fa-solid fa-check-circle mr-2"></i>目前已是最新版本</p>
+                        <p class="text-sm text-gray-300">但您仍可執行掃描來修復缺失的圖片。</p>
+                    </div>
+
+                    <div class="text-center">
+                        <button @click="startUpdate" class="bg-pink-600 hover:bg-pink-500 text-white px-8 py-3 rounded-full font-bold shadow-lg shadow-pink-600/30 transition transform hover:scale-105">
+                            <i class="fa-solid fa-cloud-download-alt mr-2"></i> [[ customUrl ? '開始自定義更新' : (versionInfo.diff > 0 ? '開始更新' : '強制掃描') ]]
+                        </button>
+                        <button @click="uiState = 'idle'" class="block mx-auto mt-4 text-gray-500 hover:text-white text-sm">返回</button>
+                    </div>
+                </div>
+
+                <!-- 狀態 4: 進行中 -->
+                <div v-else-if="uiState === 'updating'" class="flex flex-col space-y-4">
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-sm">
+                            <span class="font-bold text-gray-300">
+                                <i class="fa-solid fa-circle-notch fa-spin text-pink-400 mr-2"></i>
+                                [[ updateState.running ? '更新中...' : '任務結束' ]]
+                            </span>
+                            <span class="text-pink-400 font-mono">[[ updateState.progress.toFixed(1) ]]%</span>
+                        </div>
+                        <div class="w-full bg-gray-800 rounded-full h-4 overflow-hidden border border-gray-700">
+                            <div class="bg-pink-500 h-full transition-all duration-300 ease-out relative" :style="{ width: updateState.progress + '%' }">
+                                <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-400 text-center">[[ updateState.message ]]</p>
+                    </div>
+
+                    <div class="flex-1 bg-gray-950 rounded border border-gray-800 p-4 h-64 overflow-y-auto custom-scroll console-logs text-xs space-y-1">
+                        <div v-for="(log, idx) in updateState.logs" :key="idx" class="border-b border-gray-800/50 pb-1 last:border-0">
+                            <span class="opacity-50 mr-2">>></span>[[ log ]]
+                        </div>
+                    </div>
+
+                    <div v-if="!updateState.running" class="text-center pt-2">
+                        <button @click="showUpdateModal = false" class="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded font-bold">關閉視窗</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === Admin Panel 用戶管理彈窗 === -->
+<transition name="fade">
+    <div v-if="showAdminPanel" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-4xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <!-- Header -->
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white">
+                    <i class="fa-solid fa-user-shield mr-2 text-yellow-400"></i>Admin Panel - 用戶管理
+                </h2>
+                <button @click="showAdminPanel = false" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times fa-lg"></i>
+                </button>
+            </div>
+
+            <!-- 統計區 -->
+            <div class="p-4 bg-gray-850 border-b border-gray-700">
+                <div class="grid grid-cols-4 gap-4">
+                    <div class="bg-gray-800 p-3 rounded-lg border border-gray-700 text-center">
+                        <div class="text-2xl font-bold text-white">[[ adminStats.totalUsers ]]</div>
+                        <div class="text-xs text-gray-400">總用戶數</div>
+                    </div>
+                    <div class="bg-gray-800 p-3 rounded-lg border border-gray-700 text-center">
+                        <div class="text-2xl font-bold text-yellow-400">[[ adminStats.adminCount ]]</div>
+                        <div class="text-xs text-gray-400">管理員</div>
+                    </div>
+                    <div class="bg-gray-800 p-3 rounded-lg border border-gray-700 text-center">
+                        <div class="text-2xl font-bold text-green-400">[[ adminStats.verifiedCount ]]</div>
+                        <div class="text-xs text-gray-400">已驗證</div>
+                    </div>
+                    <div class="bg-gray-800 p-3 rounded-lg border border-gray-700 text-center">
+                        <div class="text-2xl font-bold text-red-400">[[ adminStats.unverifiedCount ]]</div>
+                        <div class="text-xs text-gray-400">未驗證</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 搜尋與操作 -->
+            <div class="p-4 bg-gray-850 border-b border-gray-700 flex items-center gap-4">
+                <div class="relative flex-1">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
+                        <i class="fa-solid fa-search"></i>
+                    </span>
+                    <input v-model="adminUserSearch" @input="filterAdminUsers" type="text" 
+                           class="w-full bg-gray-800 text-white border border-gray-600 rounded-lg py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-yellow-500 transition" 
+                           placeholder="搜尋用戶名稱或 Email...">
+                </div>
+                <button @click="loadAdminUsers" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition">
+                    <i class="fa-solid fa-refresh mr-2"></i>刷新
+                </button>
+            </div>
+
+            <!-- 用戶列表 -->
+            <div class="flex-1 overflow-y-auto overflow-x-auto custom-scroll">
+                <table class="w-full min-w-[600px]">
+                    <thead class="bg-gray-800 sticky top-0">
+                        <tr class="text-left text-xs text-gray-400 uppercase">
+                            <th class="px-4 py-3">用戶</th>
+                            <th class="px-4 py-3">Email</th>
+                            <th class="px-4 py-3 text-center">角色</th>
+                            <th class="px-4 py-3 text-center">狀態</th>
+                            <th class="px-4 py-3 text-center">註冊時間</th>
+                            <th class="px-4 py-3 text-center">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700">
+                        <tr v-if="adminUsersLoading" class="text-center">
+                            <td colspan="6" class="py-10 text-gray-400">
+                                <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i>
+                                <p class="mt-2">載入中...</p>
+                            </td>
+                        </tr>
+                        <tr v-else-if="filteredAdminUsers.length === 0" class="text-center">
+                            <td colspan="6" class="py-10 text-gray-500">
+                                <i class="fa-solid fa-users-slash fa-2x mb-2"></i>
+                                <p>沒有找到用戶</p>
+                            </td>
+                        </tr>
+                        <tr v-for="u in filteredAdminUsers" :key="u.id" class="hover:bg-gray-800/50 transition">
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold"
+                                         :class="u.role === 'admin' ? 'bg-yellow-600 text-white' : 'bg-blue-600 text-white'">
+                                        [[ u.username.charAt(0).toUpperCase() ]]
+                                    </div>
+                                    <div>
+                                        <div class="font-medium text-white">[[ u.username ]]</div>
+                                        <div class="text-xs text-gray-500">[[ u.id.substring(0, 8) ]]...</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-4 py-3 text-gray-300 text-sm">[[ u.email || '-' ]]</td>
+                            <td class="px-4 py-3 text-center">
+                                <span v-if="u.role === 'admin'" class="px-2 py-1 bg-yellow-900/50 text-yellow-400 text-xs rounded-full border border-yellow-700">
+                                    <i class="fa-solid fa-crown mr-1"></i>Admin
+                                </span>
+                                <span v-else class="px-2 py-1 bg-gray-700 text-gray-300 text-xs rounded-full border border-gray-600">
+                                    <i class="fa-solid fa-user mr-1"></i>User
+                                </span>
+                            </td>
+                            <td class="px-4 py-3 text-center">
+                                <span v-if="u.is_verified" class="px-2 py-1 bg-green-900/50 text-green-400 text-xs rounded-full border border-green-700">
+                                    <i class="fa-solid fa-check mr-1"></i>已驗證
+                                </span>
+                                <span v-else class="px-2 py-1 bg-red-900/50 text-red-400 text-xs rounded-full border border-red-700">
+                                    <i class="fa-solid fa-clock mr-1"></i>未驗證
+                                </span>
+                            </td>
+                            <td class="px-4 py-3 text-center text-gray-400 text-sm">
+                                [[ formatDate(u.created_at) ]]
+                            </td>
+                            <td class="px-4 py-3 text-center">
+                                <div class="flex justify-center gap-2">
+                                    <!-- 編輯用戶 -->
+                                    <button v-if="u.id !== user.id"
+                                            @click="openEditUserModal(u)"
+                                            class="p-2 rounded hover:bg-gray-700 text-blue-400 transition"
+                                            title="編輯用戶資料">
+                                        <i class="fa-solid fa-pen-to-square"></i>
+                                    </button>
+                                    <!-- 切換角色 -->
+                                    <button v-if="u.id !== user.id" 
+                                            @click="toggleUserRole(u)" 
+                                            class="p-2 rounded hover:bg-gray-700 transition"
+                                            :class="u.role === 'admin' ? 'text-yellow-400' : 'text-gray-400'"
+                                            :title="u.role === 'admin' ? '降級為普通用戶' : '升級為管理員'">
+                                        <i class="fa-solid fa-crown"></i>
+                                    </button>
+                                    <!-- 手動驗證 -->
+                                    <button v-if="!u.is_verified" 
+                                            @click="verifyUser(u)" 
+                                            class="p-2 rounded hover:bg-gray-700 text-green-400 transition"
+                                            title="手動驗證此用戶">
+                                        <i class="fa-solid fa-check-circle"></i>
+                                    </button>
+                                    <!-- 刪除用戶 -->
+                                    <button v-if="u.id !== user.id" 
+                                            @click="deleteUser(u)" 
+                                            class="p-2 rounded hover:bg-gray-700 text-red-400 transition"
+                                            title="刪除此用戶">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>
+                                    <!-- 自己的帳號 -->
+                                    <span v-if="u.id === user.id" class="text-xs text-gray-500 italic">
+                                        (您自己)
+                                    </span>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-between items-center">
+                <div class="text-sm text-gray-400">
+                    共 [[ filteredAdminUsers.length ]] 位用戶
+                </div>
+                <div class="flex gap-2">
+                    <button @click="openRegulationModal" class="bg-yellow-700 hover:bg-yellow-600 text-white px-6 py-2 rounded-lg transition text-sm">
+                        <i class="fa-solid fa-flag mr-2"></i>賽季設定
+                    </button>
+                    <button @click="showAdminPanel = false" class="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
+                        關閉
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 編輯用戶彈窗 === -->
+<transition name="fade">
+    <div v-if="showEditUserModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700 shadow-2xl overflow-hidden">
+            <!-- Header -->
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-lg font-bold text-white">
+                    <i class="fa-solid fa-pen-to-square mr-2 text-blue-400"></i>編輯用戶
+                </h2>
+                <button @click="showEditUserModal = false" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times"></i>
+                </button>
+            </div>
+
+            <!-- 表單 -->
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-gray-400 text-sm mb-2">用戶名稱</label>
+                    <input v-model="editUserData.username" type="text"
+                           class="w-full bg-gray-900 text-white border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-sm mb-2">Email</label>
+                    <input v-model="editUserData.email" type="email"
+                           class="w-full bg-gray-900 text-white border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-sm mb-2">新密碼 (留空則不修改)</label>
+                    <input v-model="editUserData.password" type="password" placeholder="留空則不修改密碼"
+                           class="w-full bg-gray-900 text-white border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-end gap-3">
+                <button @click="showEditUserModal = false"
+                        class="px-4 py-2 text-gray-400 hover:text-white transition">
+                    取消
+                </button>
+                <button @click="submitEditUser" :disabled="editUserSaving"
+                        class="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-bold transition">
+                    <i v-if="editUserSaving" class="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                    [[ editUserSaving ? '儲存中...' : '儲存變更' ]]
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 賽季設定彈窗 === -->
+<transition name="fade">
+    <div v-if="showRegulationModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-800 rounded-xl w-full max-w-lg border border-gray-700 shadow-2xl overflow-hidden">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-lg font-bold text-white">
+                    <i class="fa-solid fa-flag mr-2 text-yellow-400"></i>賽季設定
+                </h2>
+                <button @click="showRegulationModal = false" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times"></i>
+                </button>
+            </div>
+
+            <div class="p-6 space-y-4">
+                <p class="text-gray-400 text-sm">勾選的字母代表 <span class="text-green-400 font-bold">標準賽季</span>，未勾選為 <span class="text-red-400 font-bold">開放賽季</span>。</p>
+
+                <div v-if="regulationLoading" class="text-center py-8 text-gray-400">
+                    <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i>
+                </div>
+
+                <div v-else class="grid grid-cols-6 gap-2">
+                    <div v-for="m in regulationMarks" :key="m.mark"
+                         @click="toggleRegulationMark(m.mark)"
+                         class="py-2 px-2 rounded text-center cursor-pointer transition border text-sm font-bold select-none"
+                         :class="m.is_standard
+                             ? 'bg-green-900/40 border-green-600 text-green-400 hover:bg-green-800/40'
+                             : 'bg-gray-700 border-gray-600 text-gray-500 hover:bg-gray-600'">
+                        [[ m.mark ]]
+                    </div>
+                </div>
+
+                <div class="bg-gray-900 rounded p-3 text-sm">
+                    <span class="text-gray-400">目前標準賽季：</span>
+                    <span class="text-green-400 font-bold">[[ standardMarks.length > 0 ? standardMarks.sort().join(', ') : '(無)' ]]</span>
+                </div>
+            </div>
+
+            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-end gap-3">
+                <button @click="showRegulationModal = false" class="px-4 py-2 text-gray-400 hover:text-white transition">取消</button>
+                <button @click="saveRegulationSettings" :disabled="regulationSaving"
+                        class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-bold transition">
+                    <i v-if="regulationSaving" class="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                    [[ regulationSaving ? '儲存中...' : '儲存設定' ]]
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 推薦列表管理彈窗 === -->
+<transition name="fade">
+    <div v-if="showDeckManager" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-5xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <!-- Header -->
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white">
+                    <i class="fa-solid fa-globe mr-2 text-blue-400"></i>推薦列表管理
+                </h2>
+                <button @click="showDeckManager = false" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times fa-lg"></i>
+                </button>
+            </div>
+
+            <!-- 搜尋與篩選 -->
+            <div class="p-4 bg-gray-850 border-b border-gray-700 flex gap-4 items-center flex-wrap">
+                <div class="relative flex-1 min-w-[200px]">
+                    <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                    <input v-model="deckManagerSearch" 
+                           @keyup.enter="loadAdminDecks"
+                           type="text" 
+                           class="w-full bg-gray-800 text-white border border-gray-600 rounded-lg py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500 transition" 
+                           placeholder="搜尋牌組名稱或內容...">
+                </div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" v-model="deckManagerShowAll" @change="loadAdminDecks" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-600">
+                    <span class="text-sm text-gray-300">顯示所有牌組（含非公開）</span>
+                </label>
+                <button @click="loadAdminDecks" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition">
+                    <i class="fa-solid fa-refresh mr-2"></i>刷新
+                </button>
+            </div>
+
+            <!-- 牌組列表 -->
+            <div class="flex-1 overflow-y-auto custom-scroll p-4">
+                <div v-if="deckManagerLoading" class="text-center py-10 text-gray-400">
+                    <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i>
+                    <p class="mt-2">載入中...</p>
+                </div>
+                <div v-else-if="adminDecks.length === 0" class="text-center py-10 text-gray-500">
+                    <i class="fa-solid fa-folder-open fa-2x mb-2"></i>
+                    <p>沒有找到牌組</p>
+                </div>
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div v-for="deck in filteredAdminDecks" :key="deck.id" 
+                         class="bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-500 transition overflow-hidden">
+                        <!-- 預覽圖 -->
+                        <div class="grid grid-cols-4 gap-0.5 bg-gray-900 h-24">
+                            <div v-for="(img, idx) in deck.preview_images.slice(0, 4)" :key="idx" class="overflow-hidden">
+                                <img :src="img" class="object-cover w-full h-full opacity-80" @error="handleImageError">
+                            </div>
+                            <div v-for="i in Math.max(0, 4 - deck.preview_images.length)" :key="'empty-'+i" 
+                                 class="bg-gray-800 flex items-center justify-center text-gray-600">
+                                <i class="fa-solid fa-image text-xs"></i>
+                            </div>
+                        </div>
+                        
+                        <!-- 資訊 -->
+                        <div class="p-3">
+                            <div class="flex items-start justify-between mb-2">
+                                <div class="flex-1 min-w-0">
+                                    <h3 class="font-bold text-white truncate" :title="deck.name">[[ deck.name ]]</h3>
+                                    <div class="text-xs text-gray-500 mt-1">
+                                        ID: [[ deck.id ]] | [[ deck.count ]] 張
+                                    </div>
+                                </div>
+                                <span v-if="deck.is_public" 
+                                      class="px-2 py-0.5 bg-green-900/50 text-green-400 text-xs rounded-full border border-green-700 ml-2 whitespace-nowrap">
+                                    <i class="fa-solid fa-eye mr-1"></i>公開
+                                </span>
+                                <span v-else 
+                                      class="px-2 py-0.5 bg-gray-700 text-gray-400 text-xs rounded-full border border-gray-600 ml-2 whitespace-nowrap">
+                                    <i class="fa-solid fa-eye-slash mr-1"></i>私密
+                                </span>
+                            </div>
+                            <div class="text-xs text-gray-500 mb-3">
+                                建立於: [[ formatDate(deck.created_at) ]]
+                            </div>
+                            
+                            <!-- 操作按鈕 -->
+                            <div class="flex gap-2">
+                                <button @click="openEditDeckModal(deck)" 
+                                        class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-1.5 rounded text-sm transition">
+                                    <i class="fa-solid fa-edit mr-1"></i>編輯
+                                </button>
+                                <button @click="toggleDeckPublic(deck)" 
+                                        class="px-3 py-1.5 rounded text-sm transition"
+                                        :class="deck.is_public ? 'bg-yellow-600 hover:bg-yellow-500 text-white' : 'bg-green-600 hover:bg-green-500 text-white'">
+                                    <i class="fa-solid" :class="deck.is_public ? 'fa-eye-slash' : 'fa-eye'"></i>
+                                </button>
+                                <button @click="deleteAdminDeck(deck)" 
+                                        class="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded text-sm transition">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-between items-center">
+                <div class="text-sm text-gray-400">
+                    共 [[ filteredAdminDecks.length ]] 個牌組
+                </div>
+                <button @click="showDeckManager = false" class="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
+                    關閉
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 編輯牌組彈窗 === -->
+<transition name="fade">
+    <div v-if="showEditDeckModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-md border border-gray-700 shadow-2xl overflow-hidden">
+            <!-- Header -->
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-lg font-bold text-white">
+                    <i class="fa-solid fa-edit mr-2 text-blue-400"></i>編輯牌組
+                </h2>
+                <button @click="showEditDeckModal = false" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times"></i>
+                </button>
+            </div>
+
+            <!-- 表單 -->
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-gray-400 text-sm mb-2">牌組名稱</label>
+                    <input v-model="editDeckData.name" 
+                           type="text" 
+                           class="w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <label class="flex items-center cursor-pointer">
+                        <input type="checkbox" v-model="editDeckData.is_public" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-green-600 mr-2">
+                        <span class="text-gray-300">公開到推薦列表</span>
+                    </label>
+                </div>
+
+                <div class="bg-gray-800 rounded-lg p-3 text-sm text-gray-400">
+                    <div class="flex justify-between mb-1">
+                        <span>牌組 ID:</span>
+                        <span class="text-gray-300 font-mono">[[ editDeckData.id ]]</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>卡片數量:</span>
+                        <span class="text-gray-300">[[ editDeckData.count ]] 張</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-end gap-3">
+                <button @click="showEditDeckModal = false" 
+                        class="px-4 py-2 text-gray-400 hover:text-white transition">
+                    取消
+                </button>
+                <button @click="saveEditDeck" 
+                        :disabled="editDeckSaving"
+                        class="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-bold transition">
+                    <i v-if="editDeckSaving" class="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                    [[ editDeckSaving ? '儲存中...' : '儲存變更' ]]
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- === 牌組管理彈窗（日本/美國/City Leagues） === -->
+<transition name="fade">
+    <div v-if="showDeckAdmin" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-4xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <!-- Header -->
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white">
+                    <i class="fa-solid fa-layer-group mr-2 text-purple-400"></i>牌組管理
+                </h2>
+                <button @click="showDeckAdmin = false" class="text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-times fa-lg"></i>
+                </button>
+            </div>
+
+            <!-- Tabs -->
+            <div class="flex border-b border-gray-700 bg-gray-850">
+                <button @click="deckAdminTab = 'jp'"
+                        :class="deckAdminTab === 'jp' ? 'bg-gray-900 text-red-400 border-b-2 border-red-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
+                    <i class="fa-solid fa-torii-gate"></i> 日本牌組管理
+                </button>
+                <button @click="deckAdminTab = 'us'"
+                        :class="deckAdminTab === 'us' ? 'bg-gray-900 text-blue-400 border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
+                    <i class="fa-solid fa-flag-usa"></i> 美國牌組管理
+                </button>
+                <button @click="deckAdminTab = 'cl'"
+                        :class="deckAdminTab === 'cl' ? 'bg-gray-900 text-yellow-400 border-b-2 border-yellow-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
+                    <i class="fa-solid fa-trophy"></i> City Leagues 牌組
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="flex-1 overflow-y-auto p-6 custom-scroll">
+
+                <!-- ========== 日本牌組管理 ========== -->
+                <div v-if="deckAdminTab === 'jp'" class="space-y-6">
+
+                    <!-- 資料庫狀態概覽 -->
+                    <div v-if="dbStats" class="bg-gray-800 rounded-xl border border-gray-700 p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-bold text-gray-400"><i class="fa-solid fa-database mr-2"></i>資料庫狀態</h3>
+                            <button @click="loadDbStats" class="text-xs text-blue-400 hover:text-white"><i class="fa-solid fa-refresh mr-1"></i>刷新</button>
+                        </div>
+                        <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-center text-sm">
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">總卡片</div><div class="font-bold text-white">[[ dbStats.cards_total ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">對照表</div><div class="font-bold text-green-400">[[ dbStats.mapping_total ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">高信心</div><div class="font-bold text-green-400">[[ dbStats.mapping_high ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">已匯牌組</div><div class="font-bold text-white">[[ dbStats.decks_total ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">含卡片</div><div class="font-bold text-blue-400">[[ dbStats.decks_with_cards ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">最新日期</div><div class="font-bold text-yellow-400 text-xs">[[ dbStats.latest_deck_date ]]</div></div>
+                        </div>
+                    </div>
+
+                    <!-- 功能 1: 牌組對照表完整更新 -->
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="w-10 h-10 bg-red-900/50 rounded-lg flex items-center justify-center">
+                                <i class="fa-solid fa-link text-red-400 text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold text-white">卡牌對照表完整更新</h3>
+                                <p class="text-xs text-gray-400">透過 ptcgtw API 掃描 variant_id 1–100000，比對 set_code/set_number 建立對照</p>
+                            </div>
+                        </div>
+
+                        <!-- 未運行時：設定區域 -->
+                        <div v-if="!mappingState.running" class="mt-4 space-y-4">
+                            <div class="flex items-center gap-4 flex-wrap">
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm text-gray-400 whitespace-nowrap">機器人數量：</label>
+                                    <input v-model.number="mappingBotCount" type="number" min="1"
+                                           class="w-20 bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 text-center">
+                                </div>
+                                <span class="text-xs text-gray-500">(最少 1，越多越快)</span>
+                            </div>
+
+                            <button @click="startMapping"
+                                    class="bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-full font-bold shadow-lg shadow-red-600/30 transition transform hover:scale-105 text-sm flex items-center">
+                                <i class="fa-solid fa-play mr-2"></i> 開始更新對照表
+                            </button>
+
+                            <!-- 上次結果摘要 -->
+                            <div v-if="mappingState.lastResult" class="mt-4 p-4 bg-gray-750 rounded-lg border border-gray-600 grid grid-cols-4 gap-3 text-center">
+                                <div><div class="text-xs text-gray-400">已處理</div><div class="text-lg font-bold text-white">[[ mappingState.lastResult.processed ]]</div></div>
+                                <div><div class="text-xs text-gray-400">已匹配</div><div class="text-lg font-bold text-green-400">[[ mappingState.lastResult.matched ]]</div></div>
+                                <div><div class="text-xs text-gray-400">未匹配</div><div class="text-lg font-bold text-yellow-400">[[ mappingState.lastResult.unmatched ]]</div></div>
+                                <div><div class="text-xs text-gray-400">耗時</div><div class="text-lg font-bold text-gray-300">[[ mappingState.lastResult.elapsed ]]</div></div>
+                            </div>
+                        </div>
+
+                        <!-- 運行中：進度條 -->
+                        <div v-else class="mt-4 space-y-4">
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-sm">
+                                    <span class="font-bold text-gray-300">
+                                        <i class="fa-solid fa-circle-notch fa-spin text-red-400 mr-2"></i>
+                                        對照表更新中...
+                                    </span>
+                                    <span class="text-red-400 font-mono">[[ mappingState.progress ]]%</span>
+                                </div>
+                                <div class="w-full bg-gray-800 rounded-full h-4 overflow-hidden border border-gray-700">
+                                    <div class="bg-red-500 h-full transition-all duration-300 ease-out relative" :style="{ width: mappingState.progress + '%' }">
+                                        <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-4 gap-3 text-center text-sm">
+                                <div><span class="text-gray-500">已處理</span> <span class="text-white font-bold">[[ mappingState.processed ]]</span></div>
+                                <div><span class="text-gray-500">已匹配</span> <span class="text-green-400 font-bold">[[ mappingState.matched ]]</span></div>
+                                <div><span class="text-gray-500">未匹配</span> <span class="text-yellow-400 font-bold">[[ mappingState.unmatched ]]</span></div>
+                                <div><span class="text-gray-500">錯誤</span> <span class="text-red-400 font-bold">[[ mappingState.errors ]]</span></div>
+                            </div>
+                            <p class="text-xs text-gray-400">[[ mappingState.message ]]</p>
+                        </div>
+                    </div>
+
+                    <!-- 功能 2: 每日自動更新牌組 -->
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="w-10 h-10 bg-green-900/50 rounded-lg flex items-center justify-center">
+                                <i class="fa-solid fa-clock text-green-400 text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold text-white">每日自動更新牌組</h3>
+                                <p class="text-xs text-gray-400">自動爬取 ptcgtw 當日最新牌組並匯入資料庫（掃描前 5 頁）</p>
+                            </div>
+                        </div>
+
+                        <!-- 未運行 -->
+                        <div v-if="!dailyUpdateState.running" class="mt-4 space-y-4">
+                            <div class="flex items-center gap-4 flex-wrap">
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm text-gray-400 whitespace-nowrap">機器人數量：</label>
+                                    <input v-model.number="dailyUpdateBotCount" type="number" min="1"
+                                           class="w-20 bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 text-center">
+                                </div>
+                                <span class="text-xs text-gray-500">(最少 1)</span>
+                            </div>
+                            <button @click="startDailyUpdate"
+                                    class="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-full font-bold shadow-lg shadow-green-600/30 transition transform hover:scale-105 text-sm flex items-center">
+                                <i class="fa-solid fa-play mr-2"></i> 更新今日牌組
+                            </button>
+                            <div v-if="dailyUpdateState.lastResult" class="mt-2 text-sm text-gray-400">
+                                上次：[[ dailyUpdateState.lastResult.new ]] 新牌組，[[ dailyUpdateState.lastResult.skipped ]] 跳過
+                            </div>
+                        </div>
+
+                        <!-- 運行中 -->
+                        <div v-else class="mt-4 space-y-3">
+                            <div class="flex justify-between text-sm">
+                                <span class="font-bold text-gray-300"><i class="fa-solid fa-circle-notch fa-spin text-green-400 mr-2"></i>[[ dailyUpdateState.message ]]</span>
+                                <span class="text-green-400 font-mono">[[ dailyUpdateState.progress ]]%</span>
+                            </div>
+                            <div class="w-full bg-gray-800 rounded-full h-3 overflow-hidden border border-gray-700">
+                                <div class="bg-green-500 h-full transition-all duration-300 ease-out" :style="{ width: dailyUpdateState.progress + '%' }"></div>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 text-center text-sm">
+                                <div><span class="text-gray-500">新</span> <span class="text-green-400 font-bold">[[ dailyUpdateState.decks_new ]]</span></div>
+                                <div><span class="text-gray-500">跳過</span> <span class="text-gray-400 font-bold">[[ dailyUpdateState.decks_skipped ]]</span></div>
+                                <div><span class="text-gray-500">失敗</span> <span class="text-red-400 font-bold">[[ dailyUpdateState.decks_failed ]]</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 功能 3: 牌組列表完整更新 -->
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="w-10 h-10 bg-blue-900/50 rounded-lg flex items-center justify-center">
+                                <i class="fa-solid fa-list-check text-blue-400 text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold text-white">牌組列表完整更新</h3>
+                                <p class="text-xs text-gray-400">重新爬取全部牌組列表（約 1980 頁），更新 imported_decks 資料</p>
+                            </div>
+                        </div>
+
+                        <!-- 未運行 -->
+                        <div v-if="!fullUpdateState.running" class="mt-4 space-y-4">
+                            <div class="flex items-center gap-4 flex-wrap">
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm text-gray-400 whitespace-nowrap">機器人數量：</label>
+                                    <input v-model.number="fullUpdateBotCount" type="number" min="1"
+                                           class="w-20 bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-center">
+                                </div>
+                                <span class="text-xs text-gray-500">(最少 1，越多越快)</span>
+                            </div>
+                            <button @click="startFullUpdate"
+                                    class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-full font-bold shadow-lg shadow-blue-600/30 transition transform hover:scale-105 text-sm flex items-center">
+                                <i class="fa-solid fa-play mr-2"></i> 開始完整更新
+                            </button>
+                            <div v-if="fullUpdateState.lastResult" class="mt-2 text-sm text-gray-400">
+                                上次：[[ fullUpdateState.lastResult.new ]] 新，耗時 [[ fullUpdateState.lastResult.elapsed ]]
+                            </div>
+                        </div>
+
+                        <!-- 運行中 -->
+                        <div v-else class="mt-4 space-y-3">
+                            <div class="flex justify-between text-sm">
+                                <span class="font-bold text-gray-300"><i class="fa-solid fa-circle-notch fa-spin text-blue-400 mr-2"></i>[[ fullUpdateState.message ]]</span>
+                                <span class="text-blue-400 font-mono">[[ fullUpdateState.progress ]]%</span>
+                            </div>
+                            <div class="w-full bg-gray-800 rounded-full h-3 overflow-hidden border border-gray-700">
+                                <div class="bg-blue-500 h-full transition-all duration-300 ease-out" :style="{ width: fullUpdateState.progress + '%' }"></div>
+                            </div>
+                            <div class="grid grid-cols-4 gap-2 text-center text-sm">
+                                <div><span class="text-gray-500">頁面</span> <span class="text-white font-bold">[[ fullUpdateState.pages_done ]]/[[ fullUpdateState.total_pages ]]</span></div>
+                                <div><span class="text-gray-500">新</span> <span class="text-green-400 font-bold">[[ fullUpdateState.decks_new ]]</span></div>
+                                <div><span class="text-gray-500">跳過</span> <span class="text-gray-400 font-bold">[[ fullUpdateState.decks_skipped ]]</span></div>
+                                <div><span class="text-gray-500">失敗</span> <span class="text-red-400 font-bold">[[ fullUpdateState.decks_failed ]]</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                    <!-- 清除資料 -->
+                    <div class="bg-gray-800 rounded-xl border border-red-900/50 p-6">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="w-10 h-10 bg-red-900/50 rounded-lg flex items-center justify-center">
+                                <i class="fa-solid fa-trash text-red-400 text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold text-white">清除全部牌組資料</h3>
+                                <p class="text-xs text-gray-400">刪除 imported_decks、deck_cards、id_mapping 三張表的所有資料，重新開始</p>
+                            </div>
+                        </div>
+                        <button @click="clearAllDecks"
+                                class="mt-4 bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-full font-bold text-sm flex items-center">
+                            <i class="fa-solid fa-trash mr-2"></i> 清除全部資料
+                        </button>
+                    </div>
+
+                <!-- ========== 美國牌組管理（預留） ========== -->
+                <div v-if="deckAdminTab === 'us'" class="flex flex-col items-center justify-center py-20 text-gray-500">
+                    <i class="fa-solid fa-flag-usa text-6xl mb-4 opacity-20"></i>
+                    <p class="text-xl font-bold">美國牌組管理</p>
+                    <p class="text-sm mt-2">此功能尚未啟用</p>
+                </div>
+
+                <!-- ========== City Leagues / Limitless ========== -->
+                <div v-if="deckAdminTab === 'cl'" class="space-y-6">
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 bg-yellow-900/50 rounded-lg flex items-center justify-center"><i class="fa-solid fa-trophy text-yellow-400 text-lg"></i></div>
+                            <div><h3 class="text-lg font-bold text-white">LimitLess DeckList update</h3><p class="text-xs text-gray-400">Fetches the complete tournament index, then every tournament detail page and every JP/EN decklist. MaxRarity is off by default.</p></div>
+                        </div>
+                        <div v-if="!limitlessUpdateState.running" class="space-y-4">
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <label class="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" v-model="limitlessRegionGlobal" class="accent-yellow-500"> Global tournaments</label>
+                                <label class="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" v-model="limitlessRegionJp" class="accent-yellow-500"> City Leagues</label>
+                                <label class="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" v-model="limitlessIncludeBling" class="accent-yellow-500"> Include MaxRarity</label>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label class="block text-xs text-gray-500 mb-1">Max tournaments</label><input v-model.number="limitlessMaxTournaments" type="number" min="1" class="w-full bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="All tournaments"></div>
+                                <div><label class="block text-xs text-gray-500 mb-1">Max decks per tournament</label><input v-model.number="limitlessMaxDecks" type="number" min="1" class="w-full bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="All decks"></div>
+                            </div>
+                            <p class="text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2">A full sync is intentionally long: it scans all Limitless pages, opens each tournament, then fetches normal JP/EN decklists for every deck. Use the max fields only for smoke tests.</p>
+                            <button @click="startLimitlessUpdate" class="bg-yellow-600 hover:bg-yellow-500 text-white px-6 py-3 rounded-full font-bold text-sm flex items-center"><i class="fa-solid fa-play mr-2"></i>Start Limitless update</button>
+                        </div>
+                        <div v-else class="space-y-3">
+                            <div class="flex justify-between text-sm"><span class="font-bold text-gray-300"><i class="fa-solid fa-circle-notch fa-spin text-yellow-400 mr-2"></i>[[ limitlessUpdateState.message ]]</span><span class="text-yellow-400 font-mono">[[ limitlessUpdateState.progress ]]%</span></div>
+                            <div class="w-full bg-gray-900 rounded-full h-3 overflow-hidden border border-gray-700"><div class="bg-yellow-500 h-full transition-all duration-300" :style="{ width: limitlessUpdateState.progress + '%' }"></div></div>
+                            <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-center text-sm">
+                                <div><span class="text-gray-500">T</span> <span class="text-white font-bold">[[ limitlessUpdateState.tournaments_done ]]/[[ limitlessUpdateState.tournaments_found ]]</span></div>
+                                <div><span class="text-gray-500">Decks</span> <span class="text-white font-bold">[[ limitlessUpdateState.decks_found ]]</span></div>
+                                <div><span class="text-gray-500">Fetched</span> <span class="text-green-400 font-bold">[[ limitlessUpdateState.decks_fetched ]]</span></div>
+                                <div><span class="text-gray-500">Skipped</span> <span class="text-gray-400 font-bold">[[ limitlessUpdateState.decks_skipped ]]</span></div>
+                                <div><span class="text-gray-500">Failed</span> <span class="text-red-400 font-bold">[[ limitlessUpdateState.decks_failed ]]</span></div>
+                                <div><span class="text-gray-500">Time</span> <span class="text-gray-300 font-bold">[[ limitlessUpdateState.elapsed ]]</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <h3 class="text-lg font-bold text-white mb-4">Manual update</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="space-y-2"><label class="block text-xs text-gray-500">Tournament ID</label><div class="flex gap-2"><input v-model="limitlessManualTournament" class="flex-1 bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="567 or jp-4827"><button @click="updateLimitlessTournament" class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded font-bold text-sm">Update</button></div></div>
+                            <div class="space-y-2"><label class="block text-xs text-gray-500">Deck ID</label><div class="flex gap-2"><input v-model="limitlessManualDeck" class="flex-1 bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="27586 or jp-70083"><button @click="updateLimitlessDeck" class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded font-bold text-sm">Update</button></div></div>
+                        </div>
+                    </div>
+                    <div v-if="limitlessUpdateState.logs && limitlessUpdateState.logs.length" class="bg-gray-900 border border-gray-700 rounded-xl p-4 max-h-48 overflow-y-auto custom-scroll text-xs font-mono">
+                        <div v-for="log in limitlessUpdateState.logs" :key="log.created_at + log.message" class="border-b border-gray-800 py-1 last:border-0"><span class="text-gray-500">[[ log.created_at ]]</span> <span :class="log.level === 'error' ? 'text-red-400' : 'text-green-400'">[[ log.level ]]</span> <span class="text-gray-300">[[ log.context ]]</span> <span class="text-gray-400">[[ log.message ]]</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>
+
+<!-- ==========================================
+     JP 卡牌更新面板 (Limitless TCG)
+     ========================================== -->
+<transition name="fade">
+    <div v-if="showJPUpdateModal" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-3xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-cloud-arrow-down mr-2 text-red-400"></i>日本卡牌數據更新 (Limitless)</h2>
+                <button v-if="!jpUpdateState.running" @click="showJPUpdateModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+            </div>
+
+            <div class="p-6 flex-1 overflow-y-auto space-y-5">
+                <!-- ─── 測試卡片區 ─── -->
+                <details class="bg-gray-800/50 rounded-lg border border-gray-700 p-4">
+                    <summary class="text-sm font-bold text-gray-400 cursor-pointer select-none">
+                        <i class="fa-solid fa-flask mr-2 text-yellow-400"></i>測試單卡解析
+                    </summary>
+                    <div class="mt-3 flex gap-2 items-end">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Set Code</label>
+                            <input v-model="jpTestSetCode" class="w-20 bg-gray-900 text-white border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-red-500" placeholder="SV8">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">編號</label>
+                            <input v-model="jpTestNumber" class="w-16 bg-gray-900 text-white border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-red-500" placeholder="1">
+                        </div>
+                        <button @click="jpTestCard" :disabled="jpTestResult && jpTestResult.loading"
+                                class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white px-4 py-1.5 rounded text-sm font-bold transition">
+                            <i v-if="jpTestResult && jpTestResult.loading" class="fa-solid fa-circle-notch fa-spin mr-1"></i>
+                            測試
+                        </button>
+                    </div>
+                    <!-- 測試結果 -->
+                    <div v-if="jpTestResult && !jpTestResult.loading" class="mt-3">
+                        <div v-if="jpTestResult.status === 'success'" class="bg-green-900/30 border border-green-700 rounded p-3 text-sm space-y-1">
+                            <div class="text-green-400 font-bold">✅ [[ jpTestResult.card.name ]]</div>
+                            <div class="text-gray-300">[[ jpTestResult.card.card_type ]] - [[ jpTestResult.card.sub_type ]] | [[ jpTestResult.card.element_type ]] | HP [[ jpTestResult.card.hp ]]</div>
+                            <div class="text-gray-400 text-xs">[[ jpTestResult.card.set_name ]] ([[ jpTestResult.card.set_code ]]) #[[ jpTestResult.card.set_number ]] · [[ jpTestResult.card.rarity ]]</div>
+                            <div class="text-gray-400 text-xs">繪師: [[ jpTestResult.card.artist ]] | 賽季: [[ jpTestResult.card.regulation_mark ]]</div>
+                            <div v-if="jpTestResult.card.skills && jpTestResult.card.skills.length" class="text-gray-500 text-xs">
+                                <div v-for="(sk, i) in jpTestResult.card.skills" :key="i">
+                                    [ [[ sk.type ]] ] [[ sk.name ]] [[ sk.damage ]] ( [[ sk.cost.join(', ') ]] )
+                                </div>
+                            </div>
+                        </div>
+                        <div v-else class="bg-red-900/30 border border-red-700 rounded p-3 text-sm text-red-400">
+                            ❌ [[ jpTestResult.msg || '解析失敗' ]]
+                        </div>
+                    </div>
+                </details>
+
+                <!-- ─── 系列選擇區 ─── -->
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-sm font-bold text-gray-400">
+                            選擇系列
+                            <span v-if="jpExpansionList.length" class="text-gray-600 ml-1">([[ jpExpansionList.length ]] 系列, [[ jpExpansionList.reduce((s,e) => s + e.card_count, 0) ]] 張)</span>
+                        </h3>
+                        <button @click="fetchJPExpansions" class="text-xs text-blue-400 hover:text-white"><i class="fa-solid fa-refresh mr-1"></i>重整</button>
+                    </div>
+                    <div v-if="jpLoadingExpansions" class="text-center py-8 text-gray-500">
+                        <i class="fa-solid fa-circle-notch fa-spin fa-2x mb-2 text-red-400"></i>
+                        <p>正在從 limitlesstcg.com 同步系列列表...</p>
+                    </div>
+                    <div v-else-if="jpExpansionList.length === 0" class="text-center py-8 text-gray-500">
+                        <p>無法取得系列資料，請檢查網路</p>
+                    </div>
+                    <div v-else class="space-y-2">
+                        <div class="flex gap-3 text-xs items-center">
+                            <button @click="toggleSelectAllJP" class="text-red-400 hover:text-red-300 underline">
+                                [[ jpSelectedExpansions.length === jpExpansionList.length ? '取消全選' : '全選' ]]
+                            </button>
+                            <span class="text-gray-500">已選 [[ jpSelectedExpansions.length ]] / [[ jpExpansionList.length ]]</span>
+                            <span class="text-gray-600">| 總計 [[ jpExpansionList.filter(e => jpSelectedExpansions.includes(e.code)).reduce((s,e) => s + e.card_count, 0) ]] 張</span>
+                        </div>
+                        <div class="bg-gray-800 rounded-lg border border-gray-700 p-2 max-h-60 overflow-y-auto text-xs grid grid-cols-2 md:grid-cols-3 gap-0.5">
+                            <div v-for="exp in jpExpansionList" :key="exp.code"
+                                 class="flex items-center px-1.5 py-1 cursor-pointer transition hover:bg-gray-700/50 rounded truncate"
+                                 :class="jpSelectedExpansions.includes(exp.code) ? 'bg-red-900/20' : ''"
+                                 @click="jpSelectedExpansions.includes(exp.code) ? jpSelectedExpansions = jpSelectedExpansions.filter(c => c !== exp.code) : jpSelectedExpansions.push(exp.code)">
+                                <div class="w-3.5 h-3.5 rounded border flex items-center justify-center mr-1.5 flex-shrink-0"
+                                     :class="jpSelectedExpansions.includes(exp.code) ? 'bg-red-500 border-red-500' : 'bg-gray-700 border-gray-500'">
+                                    <i v-if="jpSelectedExpansions.includes(exp.code)" class="fa-solid fa-check text-white text-[8px]"></i>
+                                </div>
+                                <span class="truncate flex-1" :title="exp.name + ' (' + exp.code + ')'">[[ exp.name ]]</span>
+                                <span class="text-gray-600 ml-1 flex-shrink-0">[[ exp.card_count ]]</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ─── 爬取設定 ─── -->
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">同時連線數 (Workers)</label>
+                        <input v-model.number="jpWorkers" type="number" min="1" max="20"
+                               class="w-full bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-red-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">請求延遲 (秒)</label>
+                        <input v-model.number="jpDelay" type="number" min="0.1" max="5" step="0.1"
+                               class="w-full bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-red-500">
+                    </div>
+                </div>
+
+                <!-- ─── 進度區 ─── -->
+                <div v-if="jpUpdateState.running || jpUpdateState.logs.length > 0" class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="font-bold text-gray-300">
+                            <i v-if="jpUpdateState.running" class="fa-solid fa-circle-notch fa-spin text-red-400 mr-2"></i>
+                            <i v-else class="fa-solid fa-check text-green-400 mr-2"></i>
+                            [[ jpUpdateState.running ? '更新中...' : '任務結束' ]]
+                        </span>
+                        <span class="text-red-400 font-mono">
+                            [[ jpUpdateState.progress ]]%
+                            <span v-if="jpUpdateState.total_sets" class="text-gray-500 ml-2">
+                                ([[ jpUpdateState.completed_sets ]]/[[ jpUpdateState.total_sets ]] 系列)
+                            </span>
+                        </span>
+                    </div>
+                    <div class="w-full bg-gray-800 rounded-full h-4 overflow-hidden border border-gray-700">
+                        <div class="bg-red-500 h-full transition-all duration-300" :style="{ width: jpUpdateState.progress + '%' }"></div>
+                    </div>
+                    <p class="text-xs text-gray-400 text-center">[[ jpUpdateState.message ]]</p>
+
+                    <div class="bg-gray-950 rounded border border-gray-800 p-4 h-60 overflow-y-auto custom-scroll console-logs text-xs space-y-1">
+                        <div v-for="(log, idx) in jpUpdateState.logs" :key="idx" class="border-b border-gray-800/50 pb-1 last:border-0">
+                            <span class="opacity-50 mr-2">&gt;&gt;</span>[[ log ]]
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 bg-gray-800 flex justify-between items-center border-t border-gray-700 gap-2">
+                <span class="text-xs text-gray-500">來源: limitlesstcg.com · Workers: [[ jpWorkers ]] · Delay: [[ jpDelay ]]s</span>
+                <div class="flex gap-2">
+                    <button v-if="jpSelectedExpansions.length > 0" @click="startJPSelected"
+                            :disabled="jpUpdateState.running"
+                            class="bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:text-gray-400 text-white px-4 py-2 rounded-full font-bold shadow-lg shadow-red-600/30 transition text-sm flex items-center">
+                        <i class="fa-solid fa-layer-group mr-2"></i>
+                        爬取已選 ([[ jpSelectedExpansions.length ]])
+                    </button>
+                    <button @click="startJPAll"
+                            :disabled="jpUpdateState.running"
+                            class="bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 disabled:text-gray-500 text-white px-4 py-2 rounded-full font-bold transition text-sm flex items-center">
+                        <i v-if="!jpUpdateState.running" class="fa-solid fa-cloud-download-alt mr-2"></i>
+                        <i v-else class="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                        [[ jpUpdateState.running ? '更新中...' : '全部爬取 (' + jpExpansionList.length + ' 系列)' ]]
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</transition>

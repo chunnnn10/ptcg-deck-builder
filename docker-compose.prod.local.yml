@@ -1,0 +1,10 @@
+services:
+  ptcg-web:
+    ports:
+      - "127.0.0.1:5577:5000"
+    networks:
+      - ptcg-internal
+
+networks:
+  proxy:
+    external: false

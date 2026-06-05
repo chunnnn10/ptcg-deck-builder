@@ -1,0 +1,58 @@
+if search_terms:
+            # 多詞搜索：直接查 deck_search_index，用 IN 或 LIKE
+            like_clauses = []
+            params = []
+            for term in search_terms:
+                like_clauses.append("card_name LIKE %s")
+                params.append(f"%{term}%")
+
+            where = " OR ".join(like_clauses)
+
+            # 總數
+            count_sql = f"""
+                SELECT COUNT(DISTINCT deck_id) as cnt FROM deck_search_index
+                WHERE {where}
+            """
+            cursor.execute(count_sql, params)
+            total_count = cursor.fetchone()['cnt']
+
+            # 排序
+            order_clause = "match_count DESC, d.deck_date DESC"
+            if sort_mode == 'date':
+                order_clause = "d.deck_date DESC, match_count DESC"
+
+            # match_count: 每個搜索詞 COUNT(DISTINCT CASE)，加總 = 命中幾個詞
+            # 參數順序：[WHERE like_params] + [case like_params] + [LIMIT, OFFSET]
+            case_parts = []
+            all_params = list(params)  # 複製 WHERE 用的 LIKE 參數
+            for i, term in enumerate(search_terms):
+                case_parts.append(f"COUNT(DISTINCT CASE WHEN dsi.card_name LIKE %s THEN 1 END)")
+                all_params.append(f"%{term}%")
+            match_expr = " + ".join(case_parts)
+
+            search_sql = f"""
+                SELECT d.id, d.deck_code, d.title, d.deck_date, d.image_url, d.card_list, d.tags,
+                       ({match_expr}) as match_count
+                FROM deck_search_index dsi
+                JOIN imported_decks d ON d.id = dsi.deck_id
+                WHERE {where}
+                GROUP BY d.id
+                ORDER BY {order_clause}
+                LIMIT %s OFFSET %s
+            """
+            all_params.extend([per_page, (page - 1) * per_page])
+            cursor.execute(search_sql, all_params)
+            deck_rows = cursor.fetchall()
+
+            has_full_match = any(r['match_count'] >= len(search_terms) for r in deck_rows)
+        else:
+            cursor.execute("SELECT COUNT(*) as cnt FROM imported_decks")
+            total_count = cursor.fetchone()['cnt']
+            cursor.execute("""
+                SELECT id, deck_code, title, deck_date, image_url, card_list, tags
+                FROM imported_decks ORDER BY deck_date DESC LIMIT %s OFFSET %s
+            """, (per_page, (page - 1) * per_page))
+            deck_rows = cursor.fetchall()
+            has_full_match = True
+
+        

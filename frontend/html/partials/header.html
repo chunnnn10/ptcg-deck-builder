@@ -1,0 +1,293 @@
+<!-- 1. 頂部導覽欄 -->
+<header class="bg-gray-800 border-b border-gray-700 p-2 md:p-4 shadow-md z-50 sticky top-0">
+    <div class="flex justify-between items-center gap-2 md:gap-4">
+        <div class="flex items-center space-x-2 md:space-x-4 flex-1 min-w-0">
+            <!-- Logo 和工作區切換 -->
+            <div class="flex items-center gap-2 md:gap-3 flex-shrink-0">
+                <!-- 手機版工作區切換按鈕 -->
+                 <button v-if="isAuthenticated" 
+                        @click="toggleWorkspace" 
+                        class="md:hidden p-2 rounded hover:bg-gray-700 transition text-gray-400 hover:text-white">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                
+                <h1 class="text-lg md:text-xl font-bold text-yellow-400 cursor-pointer whitespace-nowrap flex items-center" @click="goHome">
+                    <i class="fa-solid fa-layer-group md:mr-2 hidden md:inline"></i>
+                    <span class="hidden md:inline">Chun Deck Builder</span>
+                    <span class="md:hidden">Chun</span>
+                </h1>
+                
+                <!-- 桌面版工作區切換按鈕 -->
+                <button v-if="isAuthenticated" 
+                        @click="toggleWorkspace" 
+                        class="hidden md:block p-2 rounded hover:bg-gray-700 transition text-gray-400 hover:text-white"
+                        :title="workspaceVisible ? '隱藏工作區' : '顯示工作區'">
+                    <i class="fa-solid" :class="workspaceVisible ? 'fa-angles-left' : 'fa-angles-right'"></i>
+                </button>
+            </div>
+            
+            <!-- 搜尋框 -->
+            <div class="relative flex-1 max-w-md min-w-[100px] z-30">
+                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400"><i class="fa-solid fa-search"></i></span>
+                <input v-model="searchQuery" 
+                       @keyup.enter="searchCards" 
+                       type="text" 
+                       class="w-full bg-gray-700 text-white border border-gray-600 rounded-full py-1.5 md:py-2 pl-9 md:pl-10 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500 transition text-sm md:text-base" 
+                       placeholder="搜尋...">
+                
+                <!-- 篩選按鈕 -->
+                <button @click="showFilters = !showFilters" 
+                        class="absolute inset-y-0 right-0 px-3 text-gray-400 hover:text-white transition"
+                        :class="{'text-blue-400': hasActiveFilters}"
+                        title="篩選條件">
+                    <i class="fa-solid fa-filter"></i>
+                </button>
+
+                <!-- 篩選面板 -->
+                <div v-show="showFilters" class="absolute top-full left-0 right-0 bg-gray-800 border border-gray-600 rounded-lg shadow-xl p-3 mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <select v-model="searchFilters.type" @change="searchCards" class="bg-gray-700 text-white border border-gray-600 rounded text-xs py-1.5 px-2 outline-none focus:border-blue-500">
+                        <option value="">類別 (全部)</option>
+                        <option value="Pokémon">寶可夢</option>
+                        <option value="Trainer">訓練家 (所有)</option>
+                        <option value="Item">物品 (Item)</option>
+                        <option value="Pokémon Tool">裝備 (Tool)</option>
+                        <option value="Supporter">支援者</option>
+                        <option value="Stadium">競技場</option>
+                        <option value="Energy">能量</option>
+                    </select>
+                    <select v-model="searchFilters.element" @change="searchCards" class="bg-gray-700 text-white border border-gray-600 rounded text-xs py-1.5 px-2 outline-none focus:border-blue-500">
+                        <option value="">屬性 (全部)</option>
+                        <option value="Grass">草 (Grass)</option>
+                        <option value="Fire">火 (Fire)</option>
+                        <option value="Water">水 (Water)</option>
+                        <option value="Lightning">雷 (Lightning)</option>
+                        <option value="Psychic">超 (Psychic)</option>
+                        <option value="Fighting">鬥 (Fighting)</option>
+                        <option value="Darkness">惡 (Darkness)</option>
+                        <option value="Metal">鋼 (Metal)</option>
+                        <option value="Dragon">龍 (Dragon)</option>
+                        <option value="Colorless">無 (Colorless)</option>
+                    </select>
+                    <select v-model="searchFilters.stage" @change="searchCards" class="bg-gray-700 text-white border border-gray-600 rounded text-xs py-1.5 px-2 outline-none focus:border-blue-500">
+                        <option value="">階段 (全部)</option>
+                        <option value="Basic">基礎 (Basic)</option>
+                        <option value="Stage 1">一階 (Stage 1)</option>
+                        <option value="Stage 2">二階 (Stage 2)</option>
+                        <option value="VMAX">VMAX</option>
+                        <option value="VSTAR">VSTAR</option>
+                    </select>
+                    <select v-model="searchFilters.regulation" @change="searchCards" class="bg-gray-700 text-white border border-gray-600 rounded text-xs py-1.5 px-2 outline-none focus:border-blue-500">
+                        <option value="">賽季 (全部)</option>
+                        <option value="standard">標準 (Standard)</option>
+                        <option value="expanded">開放 (Expanded)</option>
+                    </select>
+                    <button v-if="hasActiveFilters" @click="searchFilters.type='';searchFilters.element='';searchFilters.stage='';searchFilters.regulation='';searchCards()" class="col-span-1 md:col-span-3 text-center text-xs text-red-400 hover:underline mt-1">
+                        清除篩選
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="flex items-center space-x-2 md:space-x-3 text-sm font-medium flex-shrink-0">
+            <!-- 當前牌組名稱 (桌面版) -->
+            <div v-if="currentDeckName || currentItem" 
+                 class="hidden lg:flex bg-blue-900/50 text-blue-200 px-3 py-1.5 rounded-lg border border-blue-800 items-center gap-2 max-w-[200px]">
+                <i class="fa-solid fa-folder-open"></i>
+                <span class="truncate">[[ currentItem ? currentItem.name : currentDeckName ]]</span>
+                <span v-if="hasUnsavedChanges" class="text-yellow-400" title="有未儲存的變更"><i class="fa-solid fa-circle text-[8px]"></i></span>
+            </div>
+
+            <!-- 推薦按鈕 (桌面版) -->
+            <button @click="openDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded hover:bg-gray-700 transition">
+                <i class="fa-solid fa-globe mr-1 text-blue-400"></i> 推薦
+            </button>
+            <button @click="openJpDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded hover:bg-gray-700 transition">
+                <i class="fa-solid fa-torii-gate mr-1 text-red-400"></i> 日本牌組
+            </button>
+            <button @click="openLimitlessDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded hover:bg-gray-700 transition">
+                <i class="fa-solid fa-trophy mr-1 text-yellow-400"></i> LimitLess
+            </button>
+
+            <!-- 語言切換 (桌面版) -->
+            <div class="hidden md:flex items-center bg-gray-700 rounded-lg p-1">
+                <button @click="currentLang = 'tw'" :class="{'bg-blue-600 text-white': currentLang === 'tw', 'text-gray-400': currentLang !== 'tw'}" class="px-3 py-1.5 rounded text-xs font-bold" title="中文版">中</button>
+                <button @click="currentLang = 'jp'" :class="{'bg-red-600 text-white': currentLang === 'jp', 'text-gray-400': currentLang !== 'jp'}" class="px-3 py-1.5 rounded text-xs font-bold" title="日本語版">日</button>
+            </div>
+
+            <!-- 模式切換 (桌面版) -->
+            <div class="hidden md:flex items-center bg-gray-700 rounded-lg p-1">
+                <button @click="isStandardMode = true" :class="{'bg-blue-600 text-white': isStandardMode, 'text-gray-400': !isStandardMode}" class="px-3 py-1.5 rounded text-xs font-bold">標準</button>
+                <button @click="isStandardMode = false" :class="{'bg-purple-600 text-white': !isStandardMode, 'text-gray-400': isStandardMode}" class="px-3 py-1.5 rounded text-xs font-bold">自定</button>
+            </div>
+            
+            <!-- 統計 (桌面版) -->
+            <div class="hidden lg:flex space-x-3 bg-gray-700 px-4 py-2 rounded-lg">
+                <span :class="getCountColorClass"><i class="fa-solid fa-clone"></i> [[ totalCards ]]<span v-if="isStandardMode">/60</span></span>
+                <span class="text-blue-300"><i class="fa-solid fa-paw"></i> [[ stats.pokemon ]]</span>
+                <span class="text-green-300"><i class="fa-solid fa-user-graduate"></i> [[ stats.trainers ]]</span>
+                <span class="text-yellow-300"><i class="fa-solid fa-bolt"></i> [[ stats.energy ]]</span>
+            </div>
+            
+            <!-- 模擬按鈕 (桌面版) -->
+            <button @click="openSimModal" class="hidden md:flex bg-indigo-600 hover:bg-indigo-500 text-white px-3 md:px-4 py-1.5 md:py-2 rounded-lg font-bold transition shadow-lg items-center text-sm md:text-base">
+                <i class="fa-solid fa-flask md:mr-2"></i> <span class="hidden md:inline">模擬</span>
+            </button>
+
+            <!-- 登入/用戶按鈕 -->
+            <div v-if="!isAuthenticated" class="hidden md:block">
+                <button @click.stop="openAuthModal('login')" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition border border-gray-600">
+                    <i class="fa-solid fa-user mr-2"></i> 登入
+                </button>
+            </div>
+            <div v-else class="relative hidden md:block">
+                <button @click.stop="showUserMenu = !showUserMenu" 
+                        class="flex items-center space-x-2 bg-gray-800 hover:bg-gray-700 text-blue-300 px-3 py-2 rounded-lg border border-blue-900/50 transition">
+                    <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs text-white font-bold"
+                         :class="user.is_admin ? 'bg-yellow-600' : 'bg-blue-600'">
+                        [[ user.username.charAt(0).toUpperCase() ]]
+                    </div>
+                    <span>[[ user.username ]]</span>
+                    <i class="fa-solid fa-chevron-down text-xs"></i>
+                </button>
+                <!-- 用戶下拉選單 (桌面版) -->
+                <div v-if="showUserMenu" 
+                     @click.stop
+                     class="absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-xl border border-gray-700 z-50 py-1">
+                    <div class="px-4 py-2 border-b border-gray-700">
+                        <div class="text-sm text-white font-medium">[[ user.username ]]</div>
+                        <div class="text-xs text-gray-400">[[ user.email ]]</div>
+                        <div class="text-xs mt-1">
+                            <span v-if="user.is_admin" class="text-yellow-400">
+                                <i class="fa-solid fa-crown mr-1"></i>管理員
+                            </span>
+                            <span v-else class="text-gray-500">
+                                <i class="fa-solid fa-user mr-1"></i>一般用戶
+                            </span>
+                        </div>
+                    </div>
+                    <a @click="logout(); showUserMenu = false" 
+                       class="block px-4 py-2 hover:bg-red-900/50 text-red-400 cursor-pointer">
+                        <i class="fa-solid fa-sign-out-alt mr-2"></i> 登出
+                    </a>
+                </div>
+                <!-- 點擊外部關閉 -->
+                <div v-if="showUserMenu" @click="showUserMenu = false" class="fixed inset-0 z-40"></div>
+            </div>
+
+            <!-- 功能選單 (整合手機版所有功能) -->
+            <div class="relative">
+                <button @click.stop="showMenu = !showMenu" class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition relative z-50">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <div v-if="showMenu" @click="showMenu = false" class="fixed inset-0 z-40 cursor-default"></div>
+                
+                <div v-if="showMenu" class="absolute right-0 mt-2 w-64 bg-gray-800 rounded-lg shadow-xl border border-gray-700 z-50 py-1 max-h-[80vh] overflow-y-auto">
+                    
+                    <!-- 手機版專屬區塊：語言、用戶資訊與模式 -->
+                    <div class="md:hidden border-b border-gray-700 pb-2 mb-2">
+                        <!-- 語言切換 (手機版) -->
+                        <div class="px-4 py-2 flex items-center justify-between">
+                            <span class="text-gray-400 text-sm">語言 Language</span>
+                            <div class="flex bg-gray-700 rounded p-1">
+                                <button @click="currentLang = 'tw'" :class="{'bg-blue-600 text-white': currentLang === 'tw', 'text-gray-400': currentLang !== 'tw'}" class="px-3 py-1 text-xs rounded">中文</button>
+                                <button @click="currentLang = 'jp'" :class="{'bg-red-600 text-white': currentLang === 'jp', 'text-gray-400': currentLang !== 'jp'}" class="px-3 py-1 text-xs rounded">日本語</button>
+                            </div>
+                        </div>
+
+                        <div v-if="isAuthenticated" class="px-4 py-2 bg-gray-750">
+                            <div class="flex items-center gap-2 mb-2">
+                                <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm text-white font-bold"
+                                     :class="user.is_admin ? 'bg-yellow-600' : 'bg-blue-600'">
+                                    [[ user.username.charAt(0).toUpperCase() ]]
+                                </div>
+                                <div>
+                                    <div class="text-white font-bold">[[ user.username ]]</div>
+                                    <div class="text-xs text-gray-400">[[ user.email ]]</div>
+                                </div>
+                            </div>
+                            <button @click="logout()" class="w-full text-center text-xs bg-red-900/30 text-red-400 py-1 rounded">登出</button>
+                        </div>
+                        <div v-else class="px-4 py-2">
+                            <button @click="openAuthModal('login'); showMenu = false" class="w-full bg-blue-600 text-white py-2 rounded-lg font-bold mb-2">登入 / 註冊</button>
+                        </div>
+
+                        <!-- 模式切換 -->
+                        <div class="px-4 py-2 flex items-center justify-between">
+                            <span class="text-gray-400 text-sm">模式</span>
+                            <div class="flex bg-gray-700 rounded p-1">
+                                <button @click="isStandardMode = true" :class="{'bg-blue-600 text-white': isStandardMode, 'text-gray-400': !isStandardMode}" class="px-3 py-1 text-xs rounded">標準</button>
+                                <button @click="isStandardMode = false" :class="{'bg-purple-600 text-white': !isStandardMode, 'text-gray-400': isStandardMode}" class="px-3 py-1 text-xs rounded">自定</button>
+                            </div>
+                        </div>
+
+                        <!-- 模擬按鈕 -->
+                        <div class="px-4 py-1">
+                             <button @click="openSimModal(); showMenu = false" class="w-full bg-indigo-600 text-white py-2 rounded font-bold text-sm">
+                                <i class="fa-solid fa-flask mr-2"></i> 起手模擬
+                            </button>
+                        </div>
+                        
+                        <!-- 推薦列表鏈接 -->
+                        <a @click="openDeckLibrary(); showMenu=false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-gray-300">
+                             <i class="fa-solid fa-globe mr-2 text-blue-400"></i> 推薦列表
+                        </a>
+                        <a @click="openJpDeckLibrary(); showMenu=false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-gray-300">
+                             <i class="fa-solid fa-torii-gate mr-2 text-red-400"></i> 日本牌組
+                        </a>
+                        <a @click="openLimitlessDeckLibrary(); showMenu=false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-gray-300">
+                             <i class="fa-solid fa-trophy mr-2 text-yellow-400"></i> LimitLess DeckList
+                        </a>
+                    </div>
+
+                    <!-- Admin 專用功能 -->
+                    <template v-if="user && user.is_admin">
+                        <!-- ...原有 Admin 功能... -->
+                        <div class="text-xs text-gray-500 px-4 py-1 uppercase font-bold">管理員</div>
+                        <a @click="openAdminPanel(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-yellow-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-user-shield mr-2"></i> 用戶管理
+                        </a>
+                        <a @click="openDeckManager(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-blue-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-globe mr-2"></i> 推薦管理
+                        </a>
+                        <a @click="openUpdateModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-pink-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-sync fa-spin-pulse mr-2"></i> 卡牌更新 (中文)
+                        </a>
+                        <a @click="openJPUpdateModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-red-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-cloud-arrow-down mr-2"></i> 卡牌更新 (日本)
+                        </a>
+                        <a @click="openLimitlessAdmin(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-yellow-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-trophy mr-2"></i> LimitLess 同步
+                        </a>
+                        <a @click="openAddCardModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-green-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-plus-circle mr-2"></i> 新增卡牌
+                        </a>
+                        <a @click="openDeckAdmin(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-purple-400 border-b border-gray-700 mb-1">
+                            <i class="fa-solid fa-layer-group mr-2"></i> 牌組管理
+                        </a>
+                    </template>
+                    
+                    <!-- 一般功能 -->
+                    <div class="text-xs text-gray-500 px-4 py-1 uppercase font-bold md:hidden">工具</div>
+                    <a @click="openSaveModal(); showMenu = false" class="block px-4 py-3 hover:bg-gray-700 cursor-pointer text-yellow-400 border-b border-gray-700">
+                        <i class="fa-solid fa-share-nodes mr-2"></i> 公開分享牌組
+                    </a>
+                    <a @click="openImportModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-green-400">
+                        <i class="fa-solid fa-file-import mr-2"></i> 導入文字列表
+                    </a>
+                    <a @click="openExportModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer">
+                        <i class="fa-solid fa-file-export mr-2"></i> 導出文字列表
+                    </a>
+                    <a @click="openPrintModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-blue-400">
+                        <i class="fa-solid fa-print mr-2"></i> 打印/合成圖片
+                    </a>
+                    <a @click="openLiveModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-indigo-400">
+                        <i class="fa-solid fa-gamepad mr-2"></i> 轉為 PTCG Live
+                    </a>
+                    <a @click="clearDeck(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-red-400 border-t border-gray-700 mt-1">
+                        <i class="fa-solid fa-trash mr-2"></i> 清空牌組
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</header>

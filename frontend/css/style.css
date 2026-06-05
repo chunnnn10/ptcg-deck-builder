@@ -1,0 +1,90 @@
+/* /Pokemon/public/css/style.css */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #1e1e1e; }
+::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+.card-hover:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+}
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.whitespace-pre-wrap { white-space: pre-wrap; }
+
+/* 右鍵選單樣式 */
+.context-menu {
+    position: fixed;
+    background: #2d3748;
+    border: 1px solid #4a5568;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0;
+    z-index: 100;
+    min-width: 160px;
+}
+.context-menu-item {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    color: #e2e8f0;
+    transition: background 0.1s;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+}
+.context-menu-item:hover {
+    background-color: #4a5568;
+}
+.context-menu-item i {
+    width: 20px;
+    margin-right: 8px;
+    text-align: center;
+}
+
+/* 拖曳中的樣式 */
+.dragging {
+    opacity: 0.5;
+    transform: scale(0.95);
+}
+.drop-zone-active {
+    background-color: rgba(59, 130, 246, 0.1);
+    border: 2px dashed #3b82f6;
+}
+
+/* 被選中的卡片樣式 */
+.card-selected {
+    outline: 3px solid #eab308; /* 黃色外框 */
+    box-shadow: 0 0 10px #eab308;
+}
+
+/* 獎賞卡背紋路 (簡單的網格或斜線) */
+.bg-prize-pattern {
+    background-image: repeating-linear-gradient(
+        45deg,
+        #1f2937,
+        #1f2937 10px,
+        #374151 10px,
+        #374151 20px
+    );
+}
+
+/* 3D 翻轉效果 (保留給未來或懸停翻開) */
+.perspective {
+    perspective: 1000px;
+}
+.backface-hidden {
+    backface-visibility: hidden;
+}
+.rotate-y-180 {
+    transform: rotateY(180deg);
+}
+
+/* Mobile Safe Area */
+.pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+.pt-safe {
+    padding-top: env(safe-area-inset-top);
+}
