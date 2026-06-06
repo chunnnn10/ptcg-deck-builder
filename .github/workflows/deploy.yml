@@ -75,5 +75,16 @@ jobs:
             set -e
             cd '$VPS_PATH'
             docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d --build db ptcg-web
-            curl -fsS http://127.0.0.1:5577/api/decks/japanese/list?page=1 > /dev/null
+            for i in \$(seq 1 30); do
+              if curl -fsS http://127.0.0.1:5577/api/decks/japanese/list?page=1 > /dev/null; then
+                echo 'API verification passed.'
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo 'API verification failed after waiting.'
+            docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.prod.local.yml ps
+            docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.prod.local.yml logs --tail=120 ptcg-web
+            exit 1
           "
