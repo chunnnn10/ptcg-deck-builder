@@ -1,32 +1,79 @@
-name: Deploy to VPS
+name: Deploy VPS
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PATH: ${{ secrets.VPS_PATH }}
+
     steps:
-      - name: Deploy to Server via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USERNAME }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT }}
-          script: |
-            # 進入 VPS 上的專案目錄
-            cd /opt/ptcg
-            
-            # 拉取最新程式碼
-            git pull origin main
-            
-            # 停止並重新構建 Prod 環境的 Docker 容器
-            docker-compose -f docker-compose.prod.yml down
-            docker-compose -f docker-compose.prod.yml up -d --build
-            
-            # 清理不需要的舊映像檔以節省空間
-            docker image prune -f
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Prepare remote directory
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_PATH'"
+
+      - name: Sync code
+        run: |
+          set -euo pipefail
+          rsync -az --delete --partial \
+            --exclude='.env' \
+            --exclude='.env.local' \
+            --exclude='.env.production' \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.reasonix' \
+            --exclude='.codex' \
+            --exclude='data' \
+            --exclude='__pycache__' \
+            --exclude='.pytest_cache' \
+            --exclude='.mypy_cache' \
+            --exclude='.ruff_cache' \
+            --exclude='node_modules' \
+            --exclude='dist' \
+            --exclude='build' \
+            --exclude='*.pyc' \
+            --exclude='*.dump' \
+            --exclude='*.sql' \
+            --exclude='*.backup' \
+            --exclude='*.zip' \
+            --exclude='*.7z' \
+            --exclude='*.tar' \
+            --exclude='*.tar.gz' \
+            -e "ssh -i ~/.ssh/deploy_key -p $VPS_PORT" \
+            ./ "$VPS_USER@$VPS_HOST:$VPS_PATH/"
+
+      - name: Rebuild and verify
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "
+            set -e
+            cd '$VPS_PATH'
+            docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d --build db ptcg-web
+            curl -fsS http://127.0.0.1:5577/api/decks/japanese/list?page=1 > /dev/null
+          "
