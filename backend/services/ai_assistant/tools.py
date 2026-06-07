@@ -399,6 +399,86 @@ def search_meta_decks(archetype_or_query: str, limit: int = META_LIMIT) -> list[
         conn.close()
 
 
+def search_japanese_decks_by_card(
+    card_name: str,
+    min_count: int = 1,
+    limit: int = META_LIMIT,
+    sort: str = "count",
+) -> list[dict[str, Any]]:
+    query = str(card_name or "").strip()
+    if not query:
+        return []
+    min_count = max(1, min(int(min_count or 1), 60))
+    limit = max(1, min(int(limit or META_LIMIT), META_LIMIT))
+    sort = str(sort or "count").lower()
+    order_clause = "matched_card_count DESC, d.deck_date DESC"
+    if sort == "date":
+        order_clause = "d.deck_date DESC, matched_card_count DESC"
+
+    search = f"%{query.replace('%', '').replace('_', '')}%"
+    conn = database.get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            WITH matched_cards AS (
+                SELECT deck_id, card_name, COALESCE(SUM(count), 0) AS card_count
+                FROM deck_search_index
+                WHERE card_name ILIKE %s
+                GROUP BY deck_id, card_name
+            ),
+            matched_decks AS (
+                SELECT deck_id,
+                       COALESCE(SUM(card_count), 0) AS matched_card_count,
+                       jsonb_agg(
+                           jsonb_build_object('name', card_name, 'count', card_count)
+                           ORDER BY card_count DESC, card_name
+                       ) AS matched_cards
+                FROM matched_cards
+                GROUP BY deck_id
+                HAVING COALESCE(SUM(card_count), 0) >= %s
+            )
+            SELECT d.deck_code, d.title, d.deck_date, d.image_url, d.tags,
+                   matched_decks.matched_card_count, matched_decks.matched_cards
+            FROM matched_decks
+            JOIN imported_decks d ON d.id = matched_decks.deck_id
+            ORDER BY {order_clause}
+            LIMIT %s
+            """,
+            (search, min_count, limit),
+        )
+        results = []
+        for row in cursor.fetchall():
+            matched_cards = row.get("matched_cards") or []
+            if isinstance(matched_cards, str):
+                try:
+                    matched_cards = json.loads(matched_cards)
+                except Exception:
+                    matched_cards = []
+            tags = row.get("tags") or []
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except Exception:
+                    tags = []
+            deck_date = row.get("deck_date")
+            results.append({
+                "source": "japanese",
+                "code": row.get("deck_code"),
+                "title": row.get("title"),
+                "date": deck_date.isoformat() if hasattr(deck_date, "isoformat") else deck_date,
+                "image": row.get("image_url") or "",
+                "tags": tags if isinstance(tags, list) else [],
+                "matched_card_count": int(row.get("matched_card_count") or 0),
+                "matched_cards": matched_cards if isinstance(matched_cards, list) else [],
+            })
+        return results
+    finally:
+        conn.close()
+
+
 def _meta_query_terms(query: str) -> list[str]:
     text = str(query or "").strip()
     if not text:

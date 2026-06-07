@@ -2169,13 +2169,13 @@ def get_japanese_decks():
             like_terms = [f"%{t}%" for t in safe_terms if t]
             if not like_terms:
                 return jsonify({'success': True, 'decks': [], 'total': 0, 'page': page, 'pages': 1, 'suggestion': None})
-            where_clause = " OR ".join(["dsi.card_name LIKE %s"] * len(like_terms))
-            match_parts = ["MAX(CASE WHEN dsi.card_name LIKE %s THEN 1 ELSE 0 END)" for _ in like_terms]
+            where_clause = " OR ".join(["dsi.card_name ILIKE %s"] * len(like_terms))
+            match_parts = ["MAX(CASE WHEN dsi.card_name ILIKE %s THEN 1 ELSE 0 END)" for _ in like_terms]
             match_expr = " + ".join(match_parts)
 
-            order_clause = "match_count DESC, d.deck_date DESC"
+            order_clause = "matched_card_count DESC, match_count DESC, d.deck_date DESC"
             if sort_mode == 'date':
-                order_clause = "d.deck_date DESC, match_count DESC"
+                order_clause = "d.deck_date DESC, matched_card_count DESC, match_count DESC"
 
             # 總數
             count_sql = f"SELECT COUNT(DISTINCT dsi.deck_id) as cnt FROM deck_search_index dsi WHERE {where_clause}"
@@ -2185,13 +2185,16 @@ def get_japanese_decks():
             # 主查詢
             search_sql = f"""
                 WITH matched_decks AS (
-                    SELECT dsi.deck_id, ({match_expr}) as match_count
+                    SELECT dsi.deck_id,
+                           ({match_expr}) as match_count,
+                           COALESCE(SUM(dsi.count), 0) as matched_card_count
                     FROM deck_search_index dsi
                     WHERE {where_clause}
                     GROUP BY dsi.deck_id
                 )
                 SELECT d.id, d.deck_code, d.title, d.deck_date, d.image_url, d.card_list, d.tags,
-                       matched_decks.match_count
+                       matched_decks.match_count,
+                       matched_decks.matched_card_count
                 FROM matched_decks
                 JOIN imported_decks d ON d.id = matched_decks.deck_id
                 ORDER BY {order_clause}
@@ -2286,6 +2289,7 @@ def get_japanese_decks():
                 'image': row.get('image_url', ''),
                 'tags': dynamic_tags,
                 'match_count': row.get('match_count', 0),
+                'matched_card_count': int(row.get('matched_card_count') or 0),
             })
 
         suggestion = None

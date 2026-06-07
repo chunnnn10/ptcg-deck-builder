@@ -16,6 +16,7 @@ from .tools import (
     get_meta_deck_cards,
     get_card_detail,
     propose_deck_patch,
+    search_japanese_decks_by_card,
     search_meta_decks,
     semantic_search_cards,
     summarize_meta_archetype,
@@ -41,7 +42,8 @@ Rules:
 - Do not use your memory or general Pokemon TCG knowledge as evidence. If a card role, combo, matchup, or counter is not supported by tool results, say it is not verified instead of inventing it.
 - Do not include a full 60-card decklist or markdown decklist tables in answer text when decklists is populated. The frontend renders the decklist visually; answer should focus on why the deck is recommended, how it plays, and what to adjust.
 - When referenced_tabs or referenced_cards are provided, treat them as user-selected context. Inspect those decks/cards before giving tab comparison, upgrade, or import advice, and name which tabs/cards were considered in the concise answer.
-- When referenced_tab_analysis or deck_play_analysis is provided, use that play-pattern analysis as the starting point for searches and recommendations. Do not contradict it unless later tool evidence clearly shows why."""
+- When referenced_tab_analysis or deck_play_analysis is provided, use that play-pattern analysis as the starting point for searches and recommendations. Do not contradict it unless later tool evidence clearly shows why.
+- When the user asks for tournament decks containing a card at a minimum count, use search_japanese_decks_by_card with min_count instead of approximating from general search text."""
 
 
 FINAL_JSON_INSTRUCTIONS = """Return one JSON object only with this shape:
@@ -111,6 +113,23 @@ TOOL_SCHEMAS = [
                     "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["archetype_or_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_japanese_decks_by_card",
+            "description": "Search indexed Japanese tournament decks that contain a named card at or above a minimum copy count.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "card_name": {"type": "string"},
+                    "min_count": {"type": "integer", "minimum": 1, "maximum": 60},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                    "sort": {"type": "string", "enum": ["count", "date"]},
+                },
+                "required": ["card_name"],
             },
         },
     },
@@ -868,6 +887,13 @@ def _run_tool(name: str, args: dict[str, Any], context: dict[str, Any]) -> Any:
         return get_card_detail(str(args.get("card_id") or ""), language)
     if name == "search_meta_decks":
         return search_meta_decks(str(args.get("archetype_or_query") or ""), int(args.get("limit") or 5))
+    if name == "search_japanese_decks_by_card":
+        return search_japanese_decks_by_card(
+            str(args.get("card_name") or ""),
+            int(args.get("min_count") or 1),
+            int(args.get("limit") or 5),
+            str(args.get("sort") or "count"),
+        )
     if name == "get_meta_deck_cards":
         return get_meta_deck_cards(
             str(args.get("deck_id") or ""),
