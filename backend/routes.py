@@ -23,7 +23,7 @@ from models import User
 from services.tcgdex.bridge import find_chinese_card, find_japanese_card, get_bridge
 from services.tcgdex.client import API_BASE as TCGDEX_API_BASE, get_client as get_tcgdex_client
 from services.deck_importer.card_resolver import resolve_variant, card_row_to_payload
-from services.ai_assistant.assistant import run_assistant
+from services.ai_assistant.assistant import get_assistant_job, run_assistant, start_assistant_job
 
 main_bp = Blueprint('main', __name__)
 
@@ -825,6 +825,17 @@ def ai_chat():
         messages = data.get('messages') or []
         context = data.get('context') or {}
         if not isinstance(messages, list) or not messages:
+            return jsonify({
+                'success': False,
+                'error': 'Missing messages',
+                'answer': '',
+                'cards': [],
+                'meta_references': [],
+                'deck_actions': [],
+                'deck_diff': {},
+                'tool_trace': [],
+                'tool_results': [],
+            }), 400
             return jsonify({'success': False, 'error': '缺少 messages', 'answer': '', 'tool_results': [], 'cards': []}), 400
         result = run_assistant(messages, context)
         status = 200 if result.get('success') else 400
@@ -835,7 +846,69 @@ def ai_chat():
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'answer': '',
+            'cards': [],
+            'meta_references': [],
+            'deck_actions': [],
+            'deck_diff': {},
+            'tool_trace': [],
+            'tool_results': [],
+        }), 500
         return jsonify({'success': False, 'error': str(e), 'answer': '', 'tool_results': [], 'cards': []}), 500
+
+
+@main_bp.route('/api/ai/chat/jobs', methods=['POST'])
+def ai_chat_job_start():
+    try:
+        data = request.get_json(silent=True) or {}
+        messages = data.get('messages') or []
+        context = data.get('context') or {}
+        if not isinstance(messages, list) or not messages:
+            return jsonify({
+                'success': False,
+                'error': 'Missing messages',
+                'job_id': None,
+                'status': 'failed',
+            }), 400
+        result = start_assistant_job(messages, context if isinstance(context, dict) else {})
+        return jsonify(result), 202
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e), 'job_id': None, 'status': 'failed'}), 500
+
+
+@main_bp.route('/api/ai/chat/jobs/<job_id>', methods=['GET'])
+def ai_chat_job_status(job_id):
+    result = get_assistant_job(job_id)
+    status = 200 if result.get('success') else 404
+    return jsonify(result), status
+
+@main_bp.route('/api/ai/embeddings/status', methods=['GET'])
+@admin_required
+def ai_embeddings_status():
+    from services.ai_assistant.indexer import embedding_status
+
+    result = embedding_status()
+    return jsonify(result), 200 if result.get('success') else 500
+
+
+@main_bp.route('/api/ai/embeddings/rebuild', methods=['POST'])
+@admin_required
+def ai_embeddings_rebuild():
+    from services.ai_assistant.indexer import start_rebuild_embeddings
+
+    data = request.get_json(silent=True) or {}
+    success, status = start_rebuild_embeddings(
+        source_type=data.get('source_type') or 'all',
+        batch_size=int(data.get('batch_size') or 64),
+        max_items=data.get('max_items'),
+    )
+    return jsonify({'success': success, 'status': status}), 202 if success else 409
+
 
 @main_bp.route('/api/search')
 def search_cards():

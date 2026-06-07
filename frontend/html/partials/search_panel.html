@@ -1,0 +1,107 @@
+<section class="h-full flex flex-col bg-gray-900">
+    <div class="h-12 px-3 border-b border-gray-700 bg-gray-800 flex items-center justify-between">
+        <div class="font-bold text-sm text-gray-100 flex items-center gap-2">
+            <i class="fa-solid fa-search text-blue-300"></i>
+            <span>Search</span>
+        </div>
+        <button @click="closeSidePanel" class="md:hidden w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+
+    <div class="p-3 border-b border-gray-800 space-y-2">
+        <div class="relative">
+            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">
+                <i class="fa-solid fa-search"></i>
+            </span>
+            <input v-model="searchQuery"
+                   @keyup.enter="searchCards"
+                   type="text"
+                   class="w-full bg-gray-950 text-white border border-gray-700 rounded px-9 py-2 text-sm focus:outline-none focus:border-blue-500"
+                   placeholder="搜尋卡片...">
+            <button @click="searchCards"
+                    class="absolute inset-y-1 right-1 px-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs">
+                Go
+            </button>
+        </div>
+
+        <button @click="showFilters = !showFilters"
+                class="w-full flex items-center justify-between text-xs text-gray-300 bg-gray-800 hover:bg-gray-750 border border-gray-700 rounded px-3 py-2">
+            <span><i class="fa-solid fa-filter mr-2" :class="{'text-blue-300': hasActiveFilters}"></i>Filters</span>
+            <i class="fa-solid" :class="showFilters ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+        </button>
+
+        <div v-show="showFilters" class="grid grid-cols-2 gap-2">
+            <select v-model="searchFilters.type" @change="searchCards" class="bg-gray-950 text-white border border-gray-700 rounded text-xs py-2 px-2 outline-none focus:border-blue-500">
+                <option value="">Type</option>
+                <option value="Pokemon">Pokemon</option>
+                <option value="Trainer">Trainer</option>
+                <option value="Item">Item</option>
+                <option value="Pokemon Tool">Tool</option>
+                <option value="Supporter">Supporter</option>
+                <option value="Stadium">Stadium</option>
+                <option value="Energy">Energy</option>
+            </select>
+            <select v-model="searchFilters.element" @change="searchCards" class="bg-gray-950 text-white border border-gray-700 rounded text-xs py-2 px-2 outline-none focus:border-blue-500">
+                <option value="">Element</option>
+                <option value="Grass">Grass</option>
+                <option value="Fire">Fire</option>
+                <option value="Water">Water</option>
+                <option value="Lightning">Lightning</option>
+                <option value="Psychic">Psychic</option>
+                <option value="Fighting">Fighting</option>
+                <option value="Darkness">Darkness</option>
+                <option value="Metal">Metal</option>
+                <option value="Dragon">Dragon</option>
+                <option value="Colorless">Colorless</option>
+            </select>
+            <select v-model="searchFilters.stage" @change="searchCards" class="bg-gray-950 text-white border border-gray-700 rounded text-xs py-2 px-2 outline-none focus:border-blue-500">
+                <option value="">Stage</option>
+                <option value="Basic">Basic</option>
+                <option value="Stage 1">Stage 1</option>
+                <option value="Stage 2">Stage 2</option>
+                <option value="VMAX">VMAX</option>
+                <option value="VSTAR">VSTAR</option>
+            </select>
+            <select v-model="searchFilters.regulation" @change="searchCards" class="bg-gray-950 text-white border border-gray-700 rounded text-xs py-2 px-2 outline-none focus:border-blue-500">
+                <option value="">Regulation</option>
+                <option value="standard">Standard</option>
+                <option value="expanded">Expanded</option>
+            </select>
+            <button v-if="hasActiveFilters"
+                    @click="searchFilters.type='';searchFilters.element='';searchFilters.stage='';searchFilters.regulation='';searchCards()"
+                    class="col-span-2 text-xs text-red-300 hover:text-red-200 py-1">
+                Clear filters
+            </button>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto custom-scroll p-3">
+        <div v-if="loading" class="text-center mt-12 text-gray-400">
+            <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i>
+            <p class="mt-2 text-sm">Searching...</p>
+        </div>
+        <div v-else-if="searchResults.length === 0" class="text-center mt-16 text-gray-500">
+            <i class="fa-solid fa-magnifying-glass fa-2x mb-3 opacity-50"></i>
+            <p class="text-sm">Enter a card name or filter.</p>
+        </div>
+        <div v-else class="grid grid-cols-3 gap-2">
+            <div v-for="card in searchResults"
+                 :key="card.card_id || card.id"
+                 @click="openModal(card)"
+                 @contextmenu.prevent="openContextMenu($event, card)"
+                 draggable="true"
+                 @dragstart="handleDragStart($event, card, 'search')"
+                 class="relative group cursor-pointer card-hover">
+                <img :src="card.image_url"
+                     class="rounded w-full object-cover aspect-[2.5/3.5] bg-gray-800"
+                     loading="lazy"
+                     @error="handleImageError">
+                <div v-if="getCardCountById(card.card_id) > 0"
+                     class="absolute top-1 right-1 bg-blue-600 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shadow border border-white">
+                    [[ getCardCountById(card.card_id) ]]
+                </div>
+            </div>
+        </div>
+    </div>
+</section>

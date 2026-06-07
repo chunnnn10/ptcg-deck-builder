@@ -34,6 +34,8 @@ ENABLE_DECK_UPDATER = os.environ.get('ENABLE_DECK_UPDATER', 'true').lower() in [
 AI_BASE_URL = os.environ.get('AI_BASE_URL') or 'https://api.openai.com/v1'
 AI_API_KEY = os.environ.get('AI_API_KEY') or ''
 AI_MODEL = os.environ.get('AI_MODEL') or ''
+AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL') or 'text-embedding-3-small'
+AI_EMBEDDING_DIMENSIONS = int(os.environ.get('AI_EMBEDDING_DIMENSIONS') or 1536)
 AI_TIMEOUT = int(os.environ.get('AI_TIMEOUT') or 45)
 
 # ── SMTP ──

@@ -4,6 +4,7 @@ import psycopg2
 import psycopg2.extras
 import config
 from services.limitless_decks.schema import LIMITLESS_SCHEMA_SQL
+from services.ai_assistant.schema import ai_schema_sql
 
 # 使用 RealDictCursor 讓查詢結果可以像 dict 一樣用 column name 取值
 def get_db_connection():
@@ -641,6 +642,7 @@ def init_db():
         """)
 
         cursor.execute(LIMITLESS_SCHEMA_SQL)
+        cursor.execute(ai_schema_sql())
 
         conn.commit()
         print("Database initialized successfully.")

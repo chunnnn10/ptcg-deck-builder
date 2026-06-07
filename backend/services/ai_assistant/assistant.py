@@ -1,493 +1,1127 @@
+from __future__ import annotations
+
 import json
 import re
+import threading
+import time
+import uuid
 from typing import Any
 
-from .client import AIClientError, AIConfigError, chat_completion
+from .client import AIClientError, AIConfigError, chat_completion, chat_message
 from .tools import (
-    get_card,
-    search_cards,
-    search_hand_size_damage,
-    search_skill_keyword,
-    search_skill_terms,
-    search_trainer_energy_attach,
+    STANDARD_MARKS,
+    analyze_current_deck,
+    build_deck_diff,
+    get_meta_deck_cards,
+    get_card_detail,
+    propose_deck_patch,
+    search_meta_decks,
+    semantic_search_cards,
+    summarize_meta_archetype,
 )
 
-
-SYSTEM_PROMPT = """You are a PTCG deck research assistant.
-Use only backend tool results as factual source.
-If tool results contain matching cards, do not claim the database has no result.
-If tool results are partial, say what was searched and what remains uncertain.
-For single-card questions or ambiguous card names, default to the newest listed card unless the user specifies a set code or set number.
-For single-card questions, include HP, element type, weakness, resistance, retreat cost, and skills when those fields are present.
-Before listing card recommendations/search results, summarize regulation marks in the tool results. Clearly highlight H/I/J-marked Pokemon. If there are no H/I/J results, warn that the listed cards may not be current standard-legal.
-Reply in Traditional Chinese with concise Markdown. When mentioning a card, include its name, language, set code, set number, and the relevant skill summary."""
-
-SKILL_WORDS = (
-    "特性", "技能", "攻擊", "攻击", "招式", "效果",
-    "傷害", "伤害", "抽牌", "抽", "檢索", "检索", "搜尋", "搜索",
-    "加到手牌", "手牌", "能量", "進化", "进化", "填充能量",
-    "加速能量", "能量加速", "貼能", "贴能", "附能", "填能",
-)
-
-TRAINER_WORDS = ("支援者", "物品", "道具", "訓練家", "训练家", "Trainer", "Supporter", "Item")
-
-QUESTION_WORDS = ("有哪", "哪張", "哪张", "哪種", "哪种", "哪些", "推薦", "推荐", "找")
-
-PHRASES_TO_STRIP = (
-    "是什麼卡", "是什么卡", "這張卡是什麼", "这张卡是什么",
-    "請問", "请问", "幫我查", "帮我查", "查一下", "告訴我", "告诉我",
-)
-
-CARD_DETAIL_WORDS = (
-    "血量", "HP", "hp", "屬性", "属性", "弱點", "弱点", "抵抗",
-    "撤退費用", "撤退费用", "撤退", "技能", "招式", "特性", "效果",
-    "資料", "资料", "詳情", "详情", "介紹", "介绍", "能量需求", "耗能",
-)
-
-CARD_NAME_LEADING_PHRASES = (
-    "請介紹一下", "请介绍一下", "請介紹", "请介绍", "介紹一下", "介绍一下",
-    "介紹", "介绍", "請問", "请问", "幫我查", "帮我查", "查一下",
-    "告訴我", "告诉我", "關於", "关于", "這張", "这张", "這隻", "这只",
-)
-
-CARD_NAME_TRAILING_TERMS = (
-    "血量", "HP", "hp", "屬性", "属性", "弱點", "弱点", "抵抗",
-    "撤退費用", "撤退费用", "撤退", "技能", "招式", "特性", "效果",
-    "資料", "资料", "詳情", "详情", "能量需求", "耗能",
-)
+_JOBS_LOCK = threading.Lock()
+_JOBS: dict[str, dict[str, Any]] = {}
+_JOB_TTL_SECONDS = 20 * 60
 
 
-def _last_user_message(messages: list[dict[str, str]]) -> str:
+SYSTEM_PROMPT = """You are a high-agency Pokemon TCG deck-building agent for a Traditional Chinese deck builder.
+
+Rules:
+- Use only tool results as factual card text and meta evidence.
+- Standard format is limited to regulation marks H, I, J. Do not recommend older regulation cards unless the user explicitly asks for non-standard, and even then flag it.
+- Never invent card effects, HP, types, retreat costs, or tournament data.
+- You may call tools freely and in multiple steps, but final deck edits must be structured as deck_actions/deck_diff only. The user must confirm before the frontend applies changes.
+- Prefer Traditional Chinese in user-facing text.
+- Include concise reasoning and cite relevant meta references when recommending an archetype or card package.
+- When a requested card cannot be resolved, say so and propose a search/refinement instead of guessing.
+- If the task is a deck recommendation, inspect concrete Limitless decklists when available and return an actual list, not only a strategy paragraph.
+- In DeepThink mode, compare multiple tool results and explain the practical deck-building conclusion without exposing hidden chain-of-thought.
+- Do not use your memory or general Pokemon TCG knowledge as evidence. If a card role, combo, matchup, or counter is not supported by tool results, say it is not verified instead of inventing it.
+- Do not include a full 60-card decklist or markdown decklist tables in answer text when decklists is populated. The frontend renders the decklist visually; answer should focus on why the deck is recommended, how it plays, and what to adjust.
+- When referenced_tabs or referenced_cards are provided, treat them as user-selected context. Inspect those decks/cards before giving tab comparison, upgrade, or import advice, and name which tabs/cards were considered in the concise answer."""
+
+
+FINAL_JSON_INSTRUCTIONS = """Return one JSON object only with this shape:
+{
+  "answer": "Traditional Chinese concise response",
+  "cards": [],
+  "meta_references": [],
+  "decklists": [],
+  "deck_actions": [],
+  "deck_diff": {"current_total": 0, "projected_total": 0, "additions": [], "removals": [], "warnings": []}
+}
+
+cards should contain real cards from tool results. meta_references should contain Limitless references from tool results. decklists should contain concrete visual decklists from get_meta_deck_cards results or a proposed 60-card skeleton. deck_actions must be proposed changes only, not already-applied changes.
+
+If the user asks for a deck recommendation, do not stop at strategic description. You must return at least one concrete decklist or proposed deck skeleton, with card counts and sections when enough data is available.
+
+Important: answer must not contain a full decklist, markdown card-count table, or raw JSON. Put complete decklists only in decklists. Keep answer to recommendation rationale, game plan, evidence checked, and notable tech choices."""
+
+
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "semantic_search_cards",
+            "description": "Semantic search over H/I/J standard card data using pgvector embeddings with keyword fallback.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "language": {"type": "string", "enum": ["tw", "jp"]},
+                            "standard_marks": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_card_detail",
+            "description": "Get exact H/I/J card details by local card_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "card_id": {"type": "string"},
+                    "language": {"type": "string", "enum": ["tw", "jp"]},
+                },
+                "required": ["card_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_meta_decks",
+            "description": "Search recent indexed Limitless meta decks by archetype or strategy query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "archetype_or_query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+                "required": ["archetype_or_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_meta_deck_cards",
+            "description": "Get a concrete Limitless decklist with card counts and image URLs for visual rendering.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deck_id": {"type": "string"},
+                    "language": {"type": "string", "enum": ["tw", "jp", "en"]},
+                    "mode": {"type": "string", "enum": ["normal", "bling"]},
+                },
+                "required": ["deck_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_meta_archetype",
+            "description": "Summarize a Limitless archetype with common cards and sample decks.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_current_deck",
+            "description": "Analyze current deck count, type counts, regulation marks, and obvious count issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deck": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["deck"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_deck_patch",
+            "description": "Create a deterministic deck patch draft from user intent, current deck, and retrieved context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string"},
+                    "deck": {"type": "array", "items": {"type": "object"}},
+                    "retrieved_context": {"type": "object"},
+                    "language": {"type": "string", "enum": ["tw", "jp"]},
+                },
+                "required": ["intent", "deck"],
+            },
+        },
+    },
+]
+
+
+def _last_user_message(messages: list[dict[str, Any]]) -> str:
     for msg in reversed(messages or []):
         if msg.get("role") == "user":
             return str(msg.get("content") or "").strip()
     return ""
 
 
-def _has_japanese(text: str) -> bool:
-    return any(("\u3040" <= ch <= "\u30ff") for ch in text or "")
+def _json_loads(value: Any, default: Any = None) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value).strip()
+    candidates = [text]
 
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        candidates.insert(0, fenced.group(1).strip())
 
-def _extract_query(text: str) -> str:
-    cleaned = str(text or "").strip()
-    for phrase in PHRASES_TO_STRIP:
-        cleaned = cleaned.replace(phrase, " ")
-    cleaned = re.sub(r"[？?！!。,.，]", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned or text.strip()
+    first_obj = text.find("{")
+    last_obj = text.rfind("}")
+    if first_obj >= 0 and last_obj > first_obj:
+        candidates.append(text[first_obj:last_obj + 1])
 
+    first_arr = text.find("[")
+    last_arr = text.rfind("]")
+    if first_arr >= 0 and last_arr > first_arr:
+        candidates.append(text[first_arr:last_arr + 1])
 
-def _has_card_detail_intent(text: str) -> bool:
-    return any(word in text for word in CARD_DETAIL_WORDS)
-
-
-def _strip_card_query_noise(value: str) -> str:
-    cleaned = str(value or "").strip()
-    cleaned = re.sub(r"[「」『』\"'（）()\[\]【】？?！!。,.，:：]", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-    changed = True
-    while changed:
-        changed = False
-        for phrase in CARD_NAME_LEADING_PHRASES:
-            if cleaned.startswith(phrase):
-                cleaned = cleaned[len(phrase):].strip()
-                changed = True
-
-    trailing_terms = "|".join(re.escape(term) for term in CARD_NAME_TRAILING_TERMS)
-    trailing_pattern = (
-        rf"\s*(?:的)?(?:有什麼|有什么|有哪些|是什麼|是什么|是多少|有多少|幾|几)?"
-        rf"(?:{trailing_terms})(?:(?:和|與|与|及|、)(?:{trailing_terms}))*"
-        rf"(?:是什麼|是什么|是多少|有哪些|有什麼|有什么|嗎|吗|呢|啊)?$"
-    )
-    while re.search(trailing_pattern, cleaned):
-        cleaned = re.sub(trailing_pattern, "", cleaned).strip()
-
-    cleaned = re.sub(r"^(?:這張|这张|這隻|这只|卡牌|卡片)\s*", "", cleaned).strip()
-    cleaned = re.sub(r"\s*(?:這張|这张)?(?:卡牌|卡片)$", "", cleaned).strip()
-    return cleaned
-
-
-def _is_probable_card_query(value: str) -> bool:
-    query = str(value or "").strip()
-    if len(query) < 2 or len(query) > 40:
-        return False
-    if any(word in query for word in ("哪", "哪些", "哪張", "哪张", "哪種", "哪种", "推薦", "推荐", "找")):
-        return False
-    return bool(re.search(r"[\w\u3040-\u30ff\u3400-\u9fff]", query))
-
-
-def _card_name_candidates(text: str) -> list[str]:
-    if not _has_card_detail_intent(text):
-        return []
-
-    raw = str(text or "").strip()
-    candidates: list[str] = []
-    candidates.extend(re.findall(r"[「『\"']([^」』\"']{2,40})[」』\"']", raw))
-
-    cleaned = _extract_query(raw)
-    candidates.append(cleaned)
-
-    if "的" in cleaned:
-        before, after = cleaned.rsplit("的", 1)
-        if any(term in after for term in CARD_NAME_TRAILING_TERMS):
-            candidates.append(before)
-
-    normalized: list[str] = []
-    seen = set()
     for candidate in candidates:
-        query = _strip_card_query_noise(candidate)
-        if _is_probable_card_query(query) and query not in seen:
-            seen.add(query)
-            normalized.append(query)
-    return normalized[:3]
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, str) and parsed.strip() != candidate:
+                nested = _json_loads(parsed, None)
+                return nested if nested is not None else parsed
+            return parsed
+        except Exception:
+            continue
+    return default
 
 
-def _extract_skill_type(text: str) -> str:
-    if "特性" in text:
-        return "ability"
-    if any(word in text for word in ("攻擊", "攻击", "招式", "傷害", "伤害")):
-        return "attack"
-    return ""
+def _compact_tool_result(value: Any, max_chars: int = 14000) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) > max_chars:
+        return text[:max_chars] + "...[truncated]"
+    return text
 
 
-def _is_skill_search(text: str) -> bool:
-    if any(word in text for word in SKILL_WORDS):
-        return True
-    return any(w in text for w in SKILL_WORDS) and any(w in text for w in QUESTION_WORDS)
-
-
-def _keyword_for_text(text: str) -> str:
-    if "抽" in text:
-        return "抽"
-    if "手牌" in text:
-        return "手牌"
-    if "能量" in text:
-        return "能量"
-    if "傷害" in text or "伤害" in text:
-        return "傷害"
-    for keyword in SKILL_WORDS:
-        if keyword in text:
-            return keyword
-    return _extract_query(text)
-
-
-def _plan_searches(text: str, language: str, current_card_id: str = "") -> list[dict[str, Any]]:
-    plan: list[dict[str, Any]] = []
-    skill_type = _extract_skill_type(text)
-
-    if current_card_id and ("這張" in text or "这张" in text):
-        plan.append({"tool": "get_card", "args": {"card_id": current_card_id, "language": language}})
-        return plan
-
-    card_queries = _card_name_candidates(text)
-    if card_queries:
-        for query in card_queries:
-            plan.append({"tool": "search_cards", "args": {"query": query, "language": language}})
-        return plan
-
-    if _is_skill_search(text):
-        if any(word in text for word in TRAINER_WORDS) and "能量" in text and any(word in text for word in ("附", "填", "貼", "贴", "加速")):
-            subtypes = []
-            if "支援者" in text or "Supporter" in text:
-                subtypes.append("Supporter")
-            if "物品" in text or "Item" in text:
-                subtypes.append("Item")
-            if "道具" in text:
-                subtypes.append("Pokémon Tool")
-            plan.append({"tool": "search_trainer_energy_attach", "args": {"language": language, "subtypes": subtypes}})
-            return plan
-
-        if any(word in text for word in ("填充能量", "加速能量", "能量加速", "貼能", "贴能", "附能", "填能")):
-            terms = ["能量", "附"]
-            if "進化" in text or "进化" in text:
-                terms.append("進化")
-            if "牌庫" in text or "牌库" in text:
-                terms.append("牌庫")
-            plan.append({"tool": "search_skill_terms", "args": {"terms": terms, "language": language, "skill_type": skill_type}})
-            return plan
-
-        if "手牌" in text and ("傷害" in text or "伤害" in text):
-            plan.append({"tool": "search_hand_size_damage", "args": {"language": language}})
-            return plan
-
-        keyword = _keyword_for_text(text)
-        plan.append({"tool": "search_skill_keyword", "args": {"keyword": keyword, "language": language, "skill_type": skill_type}})
-        return plan
-
-    query = _extract_query(text)
-    plan.append({"tool": "search_cards", "args": {"query": query, "language": language}})
-    return plan
-
-
-def _run_tool(tool: str, args: dict[str, Any]) -> Any:
-    if tool == "get_card":
-        return get_card(str(args.get("card_id") or ""), str(args.get("language") or "tw"))
-    if tool == "search_cards":
-        return search_cards(str(args.get("query") or ""), str(args.get("language") or "tw"), 20)
-    if tool == "search_skill_keyword":
-        return search_skill_keyword(
-            str(args.get("keyword") or ""),
-            str(args.get("language") or "tw"),
-            20,
-            str(args.get("skill_type") or ""),
-        )
-    if tool == "search_skill_terms":
-        return search_skill_terms(
-            list(args.get("terms") or []),
-            str(args.get("language") or "tw"),
-            20,
-            str(args.get("skill_type") or ""),
-        )
-    if tool == "search_hand_size_damage":
-        return search_hand_size_damage(str(args.get("language") or "tw"), 20)
-    if tool == "search_trainer_energy_attach":
-        return search_trainer_energy_attach(
-            str(args.get("language") or "tw"),
-            20,
-            list(args.get("subtypes") or []),
-        )
-    return None
-
-
-def _collect_cards(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    cards = []
-    seen = set()
-    for result in tool_results:
-        data = result.get("result")
-        items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
-        for card in items:
-            cid = card.get("card_id") or card.get("id")
-            key = f"{card.get('language')}:{cid}"
-            if cid and key not in seen:
-                seen.add(key)
-                cards.append(card)
-    return cards
-
-
-def _relevant_skills(card: dict[str, Any]) -> list[dict[str, Any]]:
-    if str(card.get("card_type") or "") == "Trainer" and card.get("description"):
-        return [{
-            "type": card.get("sub_type") or "Trainer",
-            "name": "效果",
-            "damage": "",
-            "effect": card.get("description"),
-        }]
-    skills = card.get("skills") or []
-    relevant = []
-    for skill in skills:
-        text = f"{skill.get('name') or ''} {skill.get('damage') or ''} {skill.get('effect') or ''}"
-        if any(term in text for term in ("手牌", "張數", "数量", "能量", "進化", "牌庫", "抽", "傷害", "傷害指示物", "增加")):
-            relevant.append({
-                "type": skill.get("type"),
-                "name": skill.get("name"),
-                "damage": skill.get("damage"),
-                "effect": skill.get("effect"),
-            })
-    return relevant[:3] or [
-        {
-            "type": skill.get("type"),
-            "name": skill.get("name"),
-            "damage": skill.get("damage"),
-            "effect": skill.get("effect"),
-        }
-        for skill in skills[:2]
-    ]
-
-
-def _compact_card(card: dict[str, Any]) -> dict[str, Any]:
+def _compact_card_context(card: Any) -> dict[str, Any] | None:
+    if not isinstance(card, dict):
+        return None
+    name = str(card.get("name") or card.get("card_name") or card.get("jp_card_name") or "").strip()
+    card_id = str(card.get("card_id") or card.get("id") or "").strip()
+    if not name and not card_id:
+        return None
     return {
-        "card_id": card.get("card_id") or card.get("id"),
-        "language": card.get("language"),
-        "name": card.get("name"),
-        "card_type": card.get("card_type"),
-        "sub_type": card.get("sub_type"),
-        "hp": card.get("hp"),
-        "element_type": card.get("element_type"),
-        "weakness_type": card.get("weakness_type"),
-        "weakness_value": card.get("weakness_value"),
-        "resistance_type": card.get("resistance_type"),
-        "resistance_value": card.get("resistance_value"),
-        "retreat_cost": card.get("retreat_cost"),
-        "set_code": card.get("set_code"),
-        "set_number": card.get("set_number"),
-        "set_name": card.get("set_name"),
-        "regulation_mark": card.get("regulation_mark"),
-        "description": card.get("description") if str(card.get("card_type") or "") == "Trainer" else None,
-        "skills": _relevant_skills(card),
+        "card_id": card_id,
+        "name": name,
+        "language": card.get("language") or "",
+        "card_type": card.get("card_type") or "",
+        "sub_type": card.get("sub_type") or "",
+        "set_code": card.get("set_code") or "",
+        "set_number": card.get("set_number") or "",
+        "regulation_mark": card.get("regulation_mark") or "",
+        "description": card.get("description") or "",
+        "skills": card.get("skills") if isinstance(card.get("skills"), list) else [],
     }
 
 
-def _tool_context(tool_results: list[dict[str, Any]]) -> str:
-    compact = []
-    for item in tool_results:
-        data = item.get("result")
-        regulation_counts: dict[str, int] = {}
-        if isinstance(data, list):
-            for card in data:
-                mark = str(card.get("regulation_mark") or "無標").strip() or "無標"
-                regulation_counts[mark] = regulation_counts.get(mark, 0) + 1
-            data = [_compact_card(card) for card in data[:20]]
-        elif isinstance(data, dict):
-            mark = str(data.get("regulation_mark") or "無標").strip() or "無標"
-            regulation_counts[mark] = 1
-            data = _compact_card(data)
-        compact.append({
-            "tool": item.get("tool"),
-            "args": item.get("args"),
-            "result_count": len(data) if isinstance(data, list) else (1 if data else 0),
-            "regulation_counts": regulation_counts,
-            "hij_count": sum(regulation_counts.get(mark, 0) for mark in ("H", "I", "J")),
-            "result": data,
-        })
-    return json.dumps(compact, ensure_ascii=False, default=str)
-
-
-def _public_tool_results(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    public = []
-    for item in tool_results:
-        data = item.get("result")
-        regulation_counts: dict[str, int] = {}
-        if isinstance(data, list):
-            for card in data:
-                mark = str(card.get("regulation_mark") or "無標").strip() or "無標"
-                regulation_counts[mark] = regulation_counts.get(mark, 0) + 1
-            result = [_compact_card(card) for card in data[:20]]
-        elif isinstance(data, dict):
-            mark = str(data.get("regulation_mark") or "無標").strip() or "無標"
-            regulation_counts[mark] = 1
-            result = _compact_card(data)
-        else:
-            result = data
-        public.append({
-            "tool": item.get("tool"),
-            "args": item.get("args"),
-            "regulation_counts": regulation_counts,
-            "hij_count": sum(regulation_counts.get(mark, 0) for mark in ("H", "I", "J")),
-            "result": result,
-        })
-    return public
-
-
-def _fallback_answer(user_text: str, tool_results: list[dict[str, Any]], error: str = "") -> str:
-    cards = _collect_cards(tool_results)
-    if not cards:
-        return f"AI 模型暫時沒有回應，且工具沒有找到可用卡牌結果。\n\n錯誤：`{error}`" if error else "沒有找到可用卡牌結果。"
-
-    lines = []
-    if error:
-        lines.append("> AI 模型回應逾時，以下先根據本地資料庫工具結果整理。")
-        lines.append("")
-
-    if "手牌" in user_text and ("傷害" in user_text or "伤害" in user_text):
-        lines.append("### 根據手牌數量或手牌投入量計算傷害的寶可夢")
-    elif "能量" in user_text and ("進化" in user_text or "进化" in user_text):
-        lines.append("### 進化時可加速/附加能量的寶可夢")
-    else:
-        lines.append("### 工具搜尋結果")
-
-    mark_counts: dict[str, int] = {}
-    for card in cards:
-        mark = str(card.get("regulation_mark") or "無標").strip() or "無標"
-        mark_counts[mark] = mark_counts.get(mark, 0) + 1
-    mark_summary = "、".join(f"{mark}: {count}" for mark, count in sorted(mark_counts.items()))
-    current_count = sum(mark_counts.get(mark, 0) for mark in ("H", "I", "J"))
-    lines.append("")
-    lines.append(f"**標數統計**：{mark_summary}")
-    if current_count:
-        lines.append(f"**H/I/J 標結果**：共 {current_count} 張，以下優先參考這些較新的卡。")
-    else:
-        lines.append("**提醒**：這批結果沒有 H/I/J 標卡，可能不是目前新環境標準可用。")
-    lines.append("")
-
-    for card in cards[:15]:
-        relevant = _relevant_skills(card)
-        if not relevant:
+def _compact_referenced_cards(value: Any, limit: int = 24) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    cards: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        card = _compact_card_context(item)
+        if not card:
             continue
-        skill_summaries = []
-        for skill in relevant[:2]:
-            name = skill.get("name") or "未命名技能"
-            damage = f" {skill.get('damage')}" if skill.get("damage") else ""
-            effect = skill.get("effect") or ""
-            skill_summaries.append(f"**{name}**{damage}：{effect}")
-        lines.append(
-            f"- **{card.get('name')}** `{card.get('set_code')} {card.get('set_number')}`"
-            f" [{card.get('regulation_mark') or '無標'}]："
-            + "；".join(skill_summaries)
+        key = f"{card.get('language')}:{card.get('card_id') or card.get('name')}:{card.get('set_number')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        cards.append(card)
+        if len(cards) >= limit:
+            break
+    return cards
+
+
+def _compact_referenced_deck_cards(value: Any, limit: int = 80) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for item in value:
+        card = _compact_card_context(item)
+        if not card:
+            continue
+        key = f"{card.get('language')}:{card.get('card_id') or card.get('name')}:{card.get('set_number')}"
+        if key not in grouped:
+            grouped[key] = card
+            grouped[key]["count"] = 0
+            order.append(key)
+        try:
+            count = int(item.get("count") or 1) if isinstance(item, dict) else 1
+        except Exception:
+            count = 1
+        grouped[key]["count"] += max(1, count)
+    return [grouped[key] for key in order[:limit]]
+
+
+def _compact_referenced_tabs(value: Any, max_tabs: int = 6, max_cards_per_tab: int = 80) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    tabs: list[dict[str, Any]] = []
+    for item in value[:max_tabs]:
+        if not isinstance(item, dict):
+            continue
+        raw_deck = item.get("deck") if isinstance(item.get("deck"), list) else []
+        cards = _compact_referenced_deck_cards(raw_deck, max_cards_per_tab)
+        try:
+            count = int(item.get("count") or len(raw_deck) or sum(int(card.get("count") or 0) for card in cards))
+        except Exception:
+            count = len(raw_deck) or sum(int(card.get("count") or 0) for card in cards)
+        tabs.append({
+            "id": str(item.get("id") or ""),
+            "title": str(item.get("title") or "Untitled Deck"),
+            "source": str(item.get("source") or "scratch"),
+            "count": count,
+            "cards": cards,
+        })
+    return tabs
+
+
+def _result_count(result: Any) -> int:
+    if isinstance(result, list):
+        return len(result)
+    if isinstance(result, dict):
+        for key in ("cards", "sample_decks", "meta_references", "deck_actions"):
+            if isinstance(result.get(key), list):
+                return len(result.get(key) or [])
+        return 1 if result else 0
+    return 1 if result else 0
+
+
+def _tool_step_message(item: dict[str, Any]) -> str:
+    tool = item.get("tool") or "tool"
+    args = item.get("args") if isinstance(item.get("args"), dict) else {}
+    count = item.get("result_count", 0)
+    if item.get("error"):
+        return f"{tool} 失敗：{item.get('error')}"
+
+    if tool == "semantic_search_cards":
+        return f"搜尋標準卡池：{args.get('query') or ''}（{count}）"
+    if tool == "search_meta_decks":
+        return f"搜尋 Limitless Meta：{args.get('archetype_or_query') or ''}（{count}）"
+    if tool == "get_meta_deck_cards":
+        return f"讀取 Limitless 牌表：{args.get('deck_id') or ''}（{count}）"
+    if tool == "summarize_meta_archetype":
+        return f"整理 Meta 共通牌：{args.get('query') or ''}（{count}）"
+    if tool == "analyze_current_deck":
+        return "分析目前牌組結構"
+    if tool == "propose_deck_patch":
+        return f"產生牌組變更草案（{count}）"
+    if tool == "get_card_detail":
+        return f"讀取卡牌詳情：{args.get('card_id') or ''}"
+    return f"{tool} returned {count} result(s)"
+
+
+def _tool_step_status(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "done" if not item.get("error") else "error",
+        "message": _tool_step_message(item),
+        "tool": item.get("tool"),
+        "result_count": item.get("result_count"),
+        "error": item.get("error"),
+    }
+
+
+def _cleanup_jobs() -> None:
+    now = time.time()
+    with _JOBS_LOCK:
+        stale = [job_id for job_id, job in _JOBS.items() if now - float(job.get("updated_at") or 0) > _JOB_TTL_SECONDS]
+        for job_id in stale:
+            _JOBS.pop(job_id, None)
+
+
+def _set_job(job_id: str, **updates: Any) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job["updated_at"] = time.time()
+
+
+def _append_job_step(job_id: str | None, step: dict[str, Any]) -> None:
+    if not job_id:
+        return
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        steps = job.setdefault("steps", [])
+        if steps and steps[-1].get("status") == "running" and step.get("status") == "running":
+            steps[-1]["status"] = "done"
+        steps.append(step)
+        job["message"] = step.get("message") or job.get("message") or ""
+        job["updated_at"] = time.time()
+
+
+def _start_job(messages: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, Any]:
+    _cleanup_jobs()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Agent 已排入工作佇列",
+            "steps": [{"status": "running", "message": "Agent 已排入工作佇列"}],
+            "result": None,
+            "error": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    thread = threading.Thread(target=_run_job, args=(job_id, messages, context), daemon=True)
+    thread.start()
+    return {"success": True, "job_id": job_id, "status": "queued"}
+
+
+def _run_job(job_id: str, messages: list[dict[str, Any]], context: dict[str, Any]) -> None:
+    _set_job(job_id, status="running", message="Agent 正在啟動")
+    try:
+        result = run_assistant(messages, context | {"job_id": job_id})
+        _set_job(
+            job_id,
+            status="finished" if result.get("success") else "failed",
+            message="Agent 已完成" if result.get("success") else result.get("error") or "Agent 失敗",
+            result=result,
+            error=result.get("error") or "",
         )
+    except Exception as exc:
+        _set_job(job_id, status="failed", message=str(exc), error=str(exc), result=None)
 
-    return "\n".join(lines)
+
+def start_assistant_job(messages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _start_job(messages, context or {})
 
 
-def run_assistant(messages: list[dict[str, str]], context: dict[str, Any] | None = None) -> dict[str, Any]:
+def get_assistant_job(job_id: str) -> dict[str, Any]:
+    _cleanup_jobs()
+    with _JOBS_LOCK:
+        job = _JOBS.get(str(job_id or ""))
+        if not job:
+            return {"success": False, "error": "AI job not found"}
+        result = {
+            "success": True,
+            "job_id": job.get("job_id"),
+            "status": job.get("status"),
+            "message": job.get("message") or "",
+            "steps": list(job.get("steps") or []),
+            "result": job.get("result"),
+            "error": job.get("error") or "",
+        }
+    return result
+
+
+def _is_deck_request(text: str) -> bool:
+    markers = ("牌組", "卡組", "構築", "构筑", "deck", "Deck", "推薦", "推荐", "組一套", "组一套")
+    return any(marker in str(text or "") for marker in markers)
+
+
+def _append_tool_result(tool_results: list[dict[str, Any]], tool: str, args: dict[str, Any], result: Any) -> Any:
+    item = {"tool": tool, "args": args, "result": result, "result_count": _result_count(result)}
+    tool_results.append(item)
+    return result
+
+
+def _append_tool_error(tool_results: list[dict[str, Any]], tool: str, args: dict[str, Any], error: Exception | str) -> None:
+    tool_results.append({"tool": tool, "args": args, "error": str(error), "result_count": 0})
+
+
+def _publish_new_steps(context: dict[str, Any], tool_results: list[dict[str, Any]], published_count: int) -> int:
+    job_id = context.get("job_id")
+    for item in tool_results[published_count:]:
+        _append_job_step(job_id, _tool_step_status(item))
+    return len(tool_results)
+
+
+def _prefetch_context(user_text: str, context: dict[str, Any], deep_think: bool, deck_request: bool) -> list[dict[str, Any]]:
+    if not user_text:
+        return []
+
+    language = str(context.get("language") or "tw")
+    tool_results: list[dict[str, Any]] = []
+    should_prefetch = deep_think or deck_request
+    if not should_prefetch:
+        return tool_results
+
+    published_count = 0
+    try:
+        _append_job_step(context.get("job_id"), {"status": "running", "message": "搜尋 H/I/J 標準卡池"})
+        cards = semantic_search_cards(user_text, 12 if deep_think else 8, {"language": language, "standard_marks": list(STANDARD_MARKS)})
+        _append_tool_result(tool_results, "semantic_search_cards", {"query": user_text, "limit": 12 if deep_think else 8}, cards)
+    except Exception as exc:
+        _append_tool_error(tool_results, "semantic_search_cards", {"query": user_text}, exc)
+    published_count = _publish_new_steps(context, tool_results, published_count)
+
+    try:
+        _append_job_step(context.get("job_id"), {"status": "running", "message": "搜尋 Limitless Meta 牌組索引"})
+        meta = search_meta_decks(user_text, 6 if deep_think else 4)
+        _append_tool_result(tool_results, "search_meta_decks", {"archetype_or_query": user_text, "limit": 6 if deep_think else 4}, meta)
+    except Exception as exc:
+        meta = []
+        _append_tool_error(tool_results, "search_meta_decks", {"archetype_or_query": user_text}, exc)
+    published_count = _publish_new_steps(context, tool_results, published_count)
+
+    if deep_think:
+        try:
+            _append_job_step(context.get("job_id"), {"status": "running", "message": "整理 Meta 共通牌與樣本牌表"})
+            summary = summarize_meta_archetype(user_text)
+            _append_tool_result(tool_results, "summarize_meta_archetype", {"query": user_text}, summary)
+        except Exception as exc:
+            _append_tool_error(tool_results, "summarize_meta_archetype", {"query": user_text}, exc)
+        published_count = _publish_new_steps(context, tool_results, published_count)
+
+    deck_ids: list[str] = []
+    for ref in meta or []:
+        if isinstance(ref, dict) and ref.get("deck_id"):
+            deck_id = str(ref.get("deck_id"))
+            if deck_id not in deck_ids:
+                deck_ids.append(deck_id)
+        for sample in (ref.get("sample_decks") if isinstance(ref, dict) else None) or []:
+            deck_id = str(sample.get("deck_id") or "")
+            if deck_id and deck_id not in deck_ids:
+                deck_ids.append(deck_id)
+
+    for deck_id in deck_ids[: (2 if deep_think else 1)]:
+        try:
+            _append_job_step(context.get("job_id"), {"status": "running", "message": f"讀取 Limitless 牌表 {deck_id}"})
+            decklist = get_meta_deck_cards(deck_id, language, "normal")
+            _append_tool_result(tool_results, "get_meta_deck_cards", {"deck_id": deck_id, "language": language, "mode": "normal"}, decklist)
+        except Exception as exc:
+            _append_tool_error(tool_results, "get_meta_deck_cards", {"deck_id": deck_id, "language": language, "mode": "normal"}, exc)
+        published_count = _publish_new_steps(context, tool_results, published_count)
+
+    if context.get("deck"):
+        try:
+            _append_job_step(context.get("job_id"), {"status": "running", "message": "分析目前牌組結構"})
+            analysis = analyze_current_deck(context.get("deck") or [])
+            _append_tool_result(tool_results, "analyze_current_deck", {"deck": "[current_deck]"}, analysis)
+        except Exception as exc:
+            _append_tool_error(tool_results, "analyze_current_deck", {"deck": "[current_deck]"}, exc)
+        _publish_new_steps(context, tool_results, published_count)
+
+    return tool_results
+
+
+def _run_tool(name: str, args: dict[str, Any], context: dict[str, Any]) -> Any:
+    language = str(args.get("language") or context.get("language") or "tw")
+    if language not in ("tw", "jp"):
+        language = "tw"
+    if name == "semantic_search_cards":
+        filters = args.get("filters") if isinstance(args.get("filters"), dict) else {}
+        filters.setdefault("language", language)
+        filters.setdefault("standard_marks", list(STANDARD_MARKS))
+        return semantic_search_cards(str(args.get("query") or ""), int(args.get("limit") or 10), filters)
+    if name == "get_card_detail":
+        return get_card_detail(str(args.get("card_id") or ""), language)
+    if name == "search_meta_decks":
+        return search_meta_decks(str(args.get("archetype_or_query") or ""), int(args.get("limit") or 5))
+    if name == "get_meta_deck_cards":
+        return get_meta_deck_cards(
+            str(args.get("deck_id") or ""),
+            str(args.get("language") or context.get("language") or "tw"),
+            str(args.get("mode") or "normal"),
+        )
+    if name == "summarize_meta_archetype":
+        return summarize_meta_archetype(str(args.get("query") or ""))
+    if name == "analyze_current_deck":
+        deck = args.get("deck") if isinstance(args.get("deck"), list) else context.get("deck") or []
+        return analyze_current_deck(deck)
+    if name == "propose_deck_patch":
+        deck = args.get("deck") if isinstance(args.get("deck"), list) else context.get("deck") or []
+        return propose_deck_patch(
+            str(args.get("intent") or _last_user_message(context.get("messages") or [])),
+            deck,
+            args.get("retrieved_context") if isinstance(args.get("retrieved_context"), dict) else {},
+            language,
+        )
+    raise ValueError(f"Unknown tool: {name}")
+
+
+def _collect_cards_from_value(value: Any, seen: set[str] | None = None) -> list[dict[str, Any]]:
+    seen = seen or set()
+    cards = []
+    if isinstance(value, dict):
+        if value.get("card_id") and value.get("name"):
+            key = f"{value.get('language') or ''}:{value.get('card_id')}"
+            if key not in seen:
+                seen.add(key)
+                cards.append(value)
+        for nested in value.values():
+            cards.extend(_collect_cards_from_value(nested, seen))
+    elif isinstance(value, list):
+        for item in value:
+            cards.extend(_collect_cards_from_value(item, seen))
+    return cards
+
+
+def _collect_meta_from_value(value: Any) -> list[dict[str, Any]]:
+    refs = []
+    if isinstance(value, dict):
+        if value.get("type") in ("deck", "archetype") or value.get("deck_id") or value.get("sample_decks"):
+            refs.append(value)
+        for nested in value.values():
+            refs.extend(_collect_meta_from_value(nested))
+    elif isinstance(value, list):
+        for item in value:
+            refs.extend(_collect_meta_from_value(item))
+    compact = []
+    seen = set()
+    for ref in refs:
+        key = ref.get("deck_id") or ref.get("archetype") or ref.get("title") or json.dumps(ref, ensure_ascii=False, default=str)[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        compact.append(ref)
+    return compact[:10]
+
+
+def _collect_decklists_from_value(value: Any) -> list[dict[str, Any]]:
+    decklists = []
+    if isinstance(value, dict):
+        if value.get("cards") and (value.get("deck") or value.get("deck_id") or value.get("name")):
+            deck = value.get("deck") if isinstance(value.get("deck"), dict) else {}
+            decklists.append({
+                "deck_id": value.get("deck_id") or deck.get("deck_id"),
+                "name": value.get("name") or deck.get("archetype_zh") or deck.get("archetype") or deck.get("title") or value.get("deck_id"),
+                "source": value.get("source") or "limitless",
+                "language": value.get("language") or "tw",
+                "cards": _normalize_decklist_cards(value.get("cards") or []),
+                "meta": deck,
+            })
+        for nested in value.values():
+            decklists.extend(_collect_decklists_from_value(nested))
+    elif isinstance(value, list):
+        for item in value:
+            decklists.extend(_collect_decklists_from_value(item))
+    compact = []
+    seen = set()
+    for decklist in decklists:
+        key = decklist.get("deck_id") or decklist.get("name") or json.dumps(decklist, ensure_ascii=False, default=str)[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        compact.append(decklist)
+    return compact[:3]
+
+
+def _usable_decklist(decklist: Any) -> bool:
+    if not isinstance(decklist, dict):
+        return False
+    cards = _normalize_decklist_cards(decklist.get("cards") or [])
+    total = sum(int(card.get("count") or 0) for card in cards)
+    return len(cards) >= 10 and total >= 40
+
+
+def _normalize_output_decklists(decklists: Any) -> list[dict[str, Any]]:
+    normalized = []
+    if not isinstance(decklists, list):
+        return normalized
+    for decklist in decklists:
+        if not isinstance(decklist, dict):
+            continue
+        deck = decklist.get("meta") if isinstance(decklist.get("meta"), dict) else {}
+        if not deck and isinstance(decklist.get("deck"), dict):
+            deck = decklist.get("deck")
+        item = dict(decklist)
+        item["deck_id"] = item.get("deck_id") or deck.get("deck_id")
+        item["name"] = item.get("name") or deck.get("archetype_zh") or deck.get("archetype") or deck.get("title") or item.get("deck_id")
+        item["source"] = item.get("source") or "assistant"
+        item["language"] = item.get("language") or "tw"
+        item["cards"] = _normalize_decklist_cards(item.get("cards") or [])
+        item["meta"] = deck
+        normalized.append(item)
+    return normalized
+
+
+def _decklist_summary_lines(decklist: dict[str, Any]) -> list[str]:
+    cards = _normalize_decklist_cards(decklist.get("cards") or [])
+    total = sum(int(card.get("count") or 0) for card in cards)
+    if not cards or total < 40:
+        return []
+
+    sections = {"pokemon": 0, "trainer": 0, "energy": 0}
+    for card in cards:
+        section = card.get("section") or "unknown"
+        if section in sections:
+            sections[section] += int(card.get("count") or 0)
+
+    meta = decklist.get("meta") if isinstance(decklist.get("meta"), dict) else {}
+    title = decklist.get("name") or meta.get("archetype_zh") or meta.get("archetype") or decklist.get("deck_id") or "推薦牌表"
+    source_parts = [
+        meta.get("player_name"),
+        f"#{meta.get('placement')}" if meta.get("placement") else "",
+        meta.get("tournament_title"),
+        meta.get("date"),
+    ]
+    source = " · ".join(str(part) for part in source_parts if part)
+
+    pokemon_names = [
+        str(card.get("name") or "")
+        for card in cards
+        if card.get("section") == "pokemon" and card.get("name")
+    ][:6]
+
+    lines = [
+        f"我推薦先參考 **{title}** 這副完整構築。",
+    ]
+    if source:
+        lines.append(f"來源：{source}。")
+    lines.append(f"牌表合計 {total} 張：Pokémon {sections['pokemon']} / Trainer {sections['trainer']} / Energy {sections['energy']}。")
+    if pokemon_names:
+        lines.append("核心寶可夢包含：" + "、".join(dict.fromkeys(pokemon_names)) + "。")
+    lines.append("完整 60 張已在下方用卡圖展示；文字區只保留打法與調整重點，避免重複列牌表。")
+    return lines
+
+
+def _strip_visual_decklist_text(answer: str) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return ""
+
+    cut_markers = (
+        "📋 牌組列表",
+        "牌組列表（60",
+        "完整牌組列表",
+        "完整牌表",
+        "以下是完整牌表",
+        "以下是牌表",
+        "#### 🔹 寶可夢",
+        "#### 寶可夢",
+    )
+    cut_positions = [text.find(marker) for marker in cut_markers if marker in text]
+    if cut_positions:
+        text = text[:min(cut_positions)].strip()
+
+    cleaned_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            cleaned_lines.append(line)
+            continue
+        if stripped.startswith("|") and stripped.endswith("|"):
+            continue
+        if re.match(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$", stripped):
+            continue
+        if re.match(r"^#{2,6}\s*(?:🔹\s*)?(寶可夢|Pokemon|Trainer|訓練家|Energy|能量)", stripped, re.I):
+            continue
+        if re.match(r"^\s*(?:[-*]\s*)?\d+\s*[xX張]?\s+[^，。]{2,40}\s+(?:[A-Z0-9]{2,8}\s+)?\d{1,3}(?:/\d{1,3})?\s+[A-J]\s*$", stripped):
+            continue
+        cleaned_lines.append(line)
+
+    text = "\n".join(cleaned_lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _evidence_terms(cards: list[dict[str, Any]], meta_refs: list[dict[str, Any]], decklists: list[dict[str, Any]]) -> set[str]:
+    terms: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if len(text) >= 2:
+            terms.add(text)
+
+    for card in cards or []:
+        if isinstance(card, dict):
+            add(card.get("name"))
+            add(card.get("card_name"))
+            add(card.get("jp_card_name"))
+            add(card.get("japanese_name"))
+
+    for ref in meta_refs or []:
+        if not isinstance(ref, dict):
+            continue
+        add(ref.get("archetype"))
+        add(ref.get("title"))
+        add(ref.get("tournament_title"))
+        for card in ref.get("matched_cards") or ref.get("common_cards") or []:
+            if isinstance(card, dict):
+                add(card.get("name"))
+                add(card.get("jp_name"))
+
+    for decklist in decklists or []:
+        if not isinstance(decklist, dict):
+            continue
+        add(decklist.get("name"))
+        meta = decklist.get("meta") if isinstance(decklist.get("meta"), dict) else {}
+        add(meta.get("archetype"))
+        add(meta.get("archetype_zh"))
+        add(meta.get("title"))
+        add(meta.get("title_zh"))
+        for card in decklist.get("cards") or []:
+            if isinstance(card, dict):
+                add(card.get("name"))
+                add(card.get("card_name"))
+                add(card.get("jp_card_name"))
+
+    return terms
+
+
+def _strip_unverified_examples(answer: str, evidence: set[str]) -> str:
+    text = str(answer or "")
+    if not text or not evidence:
+        return text
+
+    def has_evidence(fragment: str) -> bool:
+        compact = str(fragment or "").replace(" ", "")
+        return any(term and term.replace(" ", "") in compact for term in evidence)
+
+    def replace_parenthetical(match: re.Match[str]) -> str:
+        fragment = match.group(1) or ""
+        return match.group(0) if has_evidence(fragment) else ""
+
+    text = re.sub(r"[（(]\s*(?:如|例如|像)\s*([^）)]+)\s*[）)]", replace_parenthetical, text)
+    text = re.sub(r"\s+([，。；])", r"\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _ensure_deck_recommendation_answer(answer: str, decklists: list[dict[str, Any]], deck_request: bool) -> str:
+    if not deck_request or not decklists:
+        return answer
+    usable = next((decklist for decklist in decklists if _usable_decklist(decklist)), None)
+    if not usable:
+        return answer
+
+    cards = _normalize_decklist_cards(usable.get("cards") or [])
+    total = sum(int(card.get("count") or 0) for card in cards)
+    title = str(usable.get("name") or usable.get("deck_id") or "")
+    answer_text = _strip_visual_decklist_text(answer)
+    already_specific = title and title in answer_text and (str(total) in answer_text or "完整" in answer_text or "牌表" in answer_text)
+    summary = "\n".join(_decklist_summary_lines(usable))
+    if already_specific:
+        return answer_text
+    if answer_text:
+        return summary + "\n\n" + answer_text
+    return summary
+
+
+def _normalize_decklist_cards(cards: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(cards, list):
+        return normalized
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        name = str(card.get("name") or card.get("card_name") or card.get("jp_card_name") or "").strip()
+        if not name:
+            continue
+        item = dict(card)
+        item["name"] = name
+        item["card_name"] = item.get("card_name") or name
+        try:
+            item["count"] = max(0, int(item.get("count") or 0))
+        except Exception:
+            item["count"] = 0
+        section = str(item.get("section") or "").lower()
+        if section not in ("pokemon", "trainer", "energy", "unknown"):
+            ctype = str(item.get("card_type") or "").lower()
+            if "energy" in ctype:
+                section = "energy"
+            elif "pok" in ctype:
+                section = "pokemon"
+            else:
+                section = "trainer"
+        item["section"] = section
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_final(
+    final_data: dict[str, Any],
+    context: dict[str, Any],
+    tool_results: list[dict[str, Any]],
+    fallback_answer: str = "",
+) -> dict[str, Any]:
+    cards = final_data.get("cards") if isinstance(final_data.get("cards"), list) else []
+    meta_refs = final_data.get("meta_references") if isinstance(final_data.get("meta_references"), list) else []
+    decklists = final_data.get("decklists") if isinstance(final_data.get("decklists"), list) else []
+    actions = final_data.get("deck_actions") if isinstance(final_data.get("deck_actions"), list) else []
+    diff = final_data.get("deck_diff") if isinstance(final_data.get("deck_diff"), dict) else None
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if action.get("type") not in ("add_card", "add") or action.get("card"):
+            continue
+        name = str(action.get("card_name") or action.get("name") or "").strip()
+        if not name:
+            continue
+        matches = semantic_search_cards(name, 3, {"language": context.get("language") or "tw", "standard_marks": list(STANDARD_MARKS)})
+        exact = [card for card in matches if str(card.get("name") or "").strip() == name]
+        card = (exact or matches or [None])[0]
+        if card:
+            action["card"] = card
+
+    seen_cards = set()
+    merged_cards = []
+    for card in cards + _collect_cards_from_value([item.get("result") for item in tool_results]):
+        if not isinstance(card, dict) or not card.get("card_id"):
+            continue
+        key = f"{card.get('language') or ''}:{card.get('card_id')}"
+        if key not in seen_cards:
+            seen_cards.add(key)
+            merged_cards.append(card)
+
+    merged_meta = meta_refs or _collect_meta_from_value([item.get("result") for item in tool_results])
+    tool_decklists = _collect_decklists_from_value([item.get("result") for item in tool_results])
+    final_decklists = _normalize_output_decklists(decklists)
+    merged_decklists = tool_decklists or [decklist for decklist in final_decklists if _usable_decklist(decklist)]
+    deck_request = _is_deck_request(_last_user_message(context.get("messages") or []))
+    answer = _strip_unverified_examples(
+        str(final_data.get("answer") or fallback_answer or "我已根據標準 H/I/J 卡池與可用資料整理建議。"),
+        _evidence_terms(merged_cards, merged_meta, merged_decklists),
+    )
+    answer = _ensure_deck_recommendation_answer(
+        answer,
+        merged_decklists,
+        deck_request,
+    )
+    if actions:
+        diff = build_deck_diff(context.get("deck") or [], actions)
+    if not diff:
+        diff = {"current_total": len(context.get("deck") or []), "projected_total": len(context.get("deck") or []), "additions": [], "removals": [], "warnings": []}
+
+    return {
+        "success": True,
+        "answer": answer,
+        "cards": merged_cards[:20],
+        "meta_references": merged_meta[:10],
+        "decklists": merged_decklists[:3],
+        "deck_actions": actions,
+        "deck_diff": diff,
+        "tool_trace": [
+            {
+                "tool": item.get("tool"),
+                "args": item.get("args"),
+                "result_count": item.get("result_count"),
+                "error": item.get("error"),
+                "message": _tool_step_message(item),
+            }
+            for item in tool_results
+        ],
+        "steps": [
+            {
+                "status": "done" if not item.get("error") else "error",
+                "message": _tool_step_message(item),
+                "tool": item.get("tool"),
+                "result_count": item.get("result_count"),
+            }
+            for item in tool_results
+        ],
+    }
+
+
+def _deterministic_fallback(messages: list[dict[str, Any]], context: dict[str, Any], error: str = "") -> dict[str, Any]:
+    user_text = _last_user_message(messages)
+    language = str(context.get("language") or "tw")
+    deck = context.get("deck") if isinstance(context.get("deck"), list) else []
+    prefetch_results = _prefetch_context(user_text, context, bool(context.get("deep_think")), _is_deck_request(user_text))
+    cards = semantic_search_cards(user_text, 10, {"language": language, "standard_marks": list(STANDARD_MARKS)})
+    meta = search_meta_decks(user_text, 5)
+    patch = propose_deck_patch(user_text, deck, {"cards": cards, "meta_references": meta}, language)
+    answer = "AI 模型暫時無法完成完整 Agent 流程，我先用本地檢索整理可用結果。"
+    if error:
+        answer += f" 錯誤：{error}"
+
+    tool_results = list(prefetch_results)
+    _append_tool_result(tool_results, "semantic_search_cards", {"query": user_text}, cards)
+    _append_tool_result(tool_results, "search_meta_decks", {"archetype_or_query": user_text}, meta)
+    _append_tool_result(tool_results, "propose_deck_patch", {"intent": user_text}, patch)
+    final = {
+        "answer": answer,
+        "cards": cards,
+        "meta_references": meta,
+        "deck_actions": patch.get("deck_actions", []),
+        "deck_diff": patch.get("deck_diff", {}),
+    }
+    result = _normalize_final(final, context, tool_results)
+    result["warning"] = error
+    return result
+
+
+def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> dict[str, Any]:
     context = context or {}
+    context["messages"] = messages
     user_text = _last_user_message(messages)
     if not user_text:
-        return {"success": False, "error": "Missing message content", "answer": "", "tool_results": [], "cards": [], "steps": []}
+        return {
+            "success": False,
+            "error": "Missing message content",
+            "answer": "",
+            "cards": [],
+            "meta_references": [],
+            "decklists": [],
+            "deck_actions": [],
+            "deck_diff": {},
+            "tool_trace": [],
+        }
 
-    language = str(context.get("language") or "").strip()
+    language = str(context.get("language") or "tw")
     if language not in ("tw", "jp"):
-        language = "jp" if _has_japanese(user_text) else "tw"
+        language = "tw"
+    context["language"] = language
+    if not isinstance(context.get("deck"), list):
+        context["deck"] = []
+    context["referenced_tabs"] = _compact_referenced_tabs(context.get("referenced_tabs"))
+    context["referenced_cards"] = _compact_referenced_cards(context.get("referenced_cards"))
+    if context["referenced_tabs"] or context["referenced_cards"]:
+        _append_job_step(
+            context.get("job_id"),
+            {
+                "status": "running",
+                "message": f"讀取引用內容：{len(context['referenced_tabs'])} 個 tab / {len(context['referenced_cards'])} 張卡",
+            },
+        )
+    context["standard_marks"] = [mark for mark in context.get("standard_marks") or list(STANDARD_MARKS) if mark in STANDARD_MARKS] or list(STANDARD_MARKS)
+    deep_think = bool(context.get("deep_think"))
+    is_deck_request = _is_deck_request(user_text)
+    tool_results: list[dict[str, Any]] = _prefetch_context(user_text, context, deep_think, is_deck_request)
+    prefetched_context = {
+        "cards": _collect_cards_from_value([item.get("result") for item in tool_results])[:16],
+        "meta_references": _collect_meta_from_value([item.get("result") for item in tool_results])[:8],
+        "decklists": _collect_decklists_from_value([item.get("result") for item in tool_results])[:2],
+        "referenced_tabs": context.get("referenced_tabs") or [],
+        "referenced_cards": context.get("referenced_cards") or [],
+    }
 
-    current_card_id = str(context.get("current_card_id") or "").strip()
-    search_plan = _plan_searches(user_text, language, current_card_id)
-    tool_results: list[dict[str, Any]] = []
-    steps = [{"status": "planning", "message": "規劃搜尋流程", "plan": search_plan}]
-
-    for item in search_plan:
-        tool = item["tool"]
-        args = item["args"]
-        steps.append({"status": "running", "message": f"AI 調用工具查找寶可夢中：{tool}", "tool": tool, "args": args})
-        result = _run_tool(tool, args)
-        tool_results.append({"tool": tool, "args": args, "result": result})
-        result_count = len(result) if isinstance(result, list) else (1 if result else 0)
-        steps.append({"status": "done", "message": f"{tool} 找到 {result_count} 筆結果", "tool": tool, "result_count": result_count})
-
-    if language == "tw" and _is_skill_search(user_text) and sum(len(r.get("result") or []) for r in tool_results if isinstance(r.get("result"), list)) < 5:
-        jp_plan = _plan_searches(user_text, "jp", current_card_id)
-        for item in jp_plan:
-            tool = item["tool"]
-            args = item["args"]
-            steps.append({"status": "running", "message": f"中文結果不足，改查日文資料：{tool}", "tool": tool, "args": args})
-            result = _run_tool(tool, args)
-            tool_results.append({"tool": tool, "args": args, "result": result})
-            result_count = len(result) if isinstance(result, list) else (1 if result else 0)
-            steps.append({"status": "done", "message": f"{tool} 找到 {result_count} 筆日文結果", "tool": tool, "result_count": result_count})
-
-    cards = _collect_cards(tool_results)
-    prompt_messages = [
+    agent_messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *[
-            {"role": m.get("role", "user"), "content": str(m.get("content") or "")}
-            for m in (messages or [])[-8:]
-            if m.get("role") in ("user", "assistant")
+            {"role": item.get("role", "user"), "content": str(item.get("content") or "")}
+            for item in (messages or [])[-10:]
+            if item.get("role") in ("user", "assistant")
         ],
         {
             "role": "user",
-            "content": "Search plan:\n"
-            + json.dumps(search_plan, ensure_ascii=False)
-            + "\nUse only these backend tool results as factual source:\n"
-            + _tool_context(tool_results),
+            "content": json.dumps(
+                {
+                    "task": user_text,
+                    "current_deck_count": len(context.get("deck") or []),
+                    "current_deck": context.get("deck") or [],
+                    "referenced_tabs": context.get("referenced_tabs") or [],
+                    "referenced_cards": context.get("referenced_cards") or [],
+                    "standard_marks": context["standard_marks"],
+                    "language": language,
+                    "deep_think": deep_think,
+                    "prefetched_context": prefetched_context,
+                    "instruction": (
+                        "DeepThink mode: investigate broadly, compare meta decks, inspect concrete decklists, then provide a visual decklist/deck_actions. Tell the user which evidence was checked, but do not reveal hidden chain-of-thought."
+                        if deep_think else
+                        "Use prefetched context and tools as needed, then provide final structured JSON."
+                    ),
+                    "deck_request": is_deck_request,
+                    "final_json_contract": FINAL_JSON_INSTRUCTIONS,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
         },
     ]
 
+    default_steps = 12 if deep_think else 6
+    max_steps = int(context.get("max_agent_steps") or default_steps)
     try:
-        answer = chat_completion(prompt_messages)
-    except AIConfigError as exc:
-        return {"success": False, "error": str(exc), "answer": "", "tool_results": _public_tool_results(tool_results), "cards": cards, "steps": steps}
-    except AIClientError as exc:
-        error = str(exc)
-        if "timed out" in error.lower() or "read timed out" in error.lower():
-            answer = _fallback_answer(user_text, tool_results, error)
-            steps.append({"status": "done", "message": "AI 模型逾時，已改用本地工具結果回答", "tool": "fallback_answer"})
-            return {
-                "success": True,
-                "warning": error,
-                "answer": answer,
-                "tool_results": _public_tool_results(tool_results),
-                "cards": cards,
-                "steps": steps,
-            }
-        return {"success": False, "error": error, "answer": "", "tool_results": _public_tool_results(tool_results), "cards": cards, "steps": steps}
+        for _ in range(max_steps):
+            _append_job_step(context.get("job_id"), {"status": "running", "message": "呼叫 AI 模型決定下一步工具"})
+            message = chat_message(agent_messages, temperature=0.2, tools=TOOL_SCHEMAS, tool_choice="auto")
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                content = str(message.get("content") or "").strip()
+                final_data = _json_loads(content, {})
+                if not isinstance(final_data, dict) or not final_data:
+                    final_data = {"answer": content}
+                return _normalize_final(final_data, context, tool_results)
 
-    return {"success": True, "answer": answer, "tool_results": _public_tool_results(tool_results), "cards": cards, "steps": steps}
+            agent_messages.append({
+                "role": "assistant",
+                "content": message.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+            for call in tool_calls:
+                fn = call.get("function") or {}
+                name = str(fn.get("name") or "")
+                args = _json_loads(fn.get("arguments"), {}) or {}
+                try:
+                    _append_job_step(context.get("job_id"), {"status": "running", "message": f"執行工具：{name}"})
+                    result = _run_tool(name, args, context)
+                    result_count = _result_count(result)
+                    item = {"tool": name, "args": args, "result": result, "result_count": result_count}
+                    tool_results.append(item)
+                    _append_job_step(context.get("job_id"), _tool_step_status(item))
+                    content = _compact_tool_result(result)
+                except Exception as exc:
+                    item = {"tool": name, "args": args, "error": str(exc), "result_count": 0}
+                    tool_results.append(item)
+                    _append_job_step(context.get("job_id"), _tool_step_status(item))
+                    content = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                agent_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "name": name,
+                    "content": content,
+                })
+
+        final_prompt = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Conversation and tool trace are complete. "
+                    + FINAL_JSON_INSTRUCTIONS
+                    + "\nReference context:\n"
+                    + _compact_tool_result(
+                        {
+                            "current_deck_count": len(context.get("deck") or []),
+                            "current_deck": context.get("deck") or [],
+                            "referenced_tabs": context.get("referenced_tabs") or [],
+                            "referenced_cards": context.get("referenced_cards") or [],
+                        },
+                        18000,
+                    )
+                    + "\nTool results:\n"
+                    + _compact_tool_result(tool_results, 30000)
+                ),
+            },
+        ]
+        _append_job_step(context.get("job_id"), {"status": "running", "message": "整理最終推薦與可視覺化牌表"})
+        content = chat_completion(final_prompt, response_format={"type": "json_object"})
+        final_data = _json_loads(content, {}) or {"answer": content}
+        return _normalize_final(final_data, context, tool_results)
+    except AIConfigError as exc:
+        return {"success": False, "error": str(exc), "answer": "", "cards": [], "meta_references": [], "decklists": [], "deck_actions": [], "deck_diff": {}, "tool_trace": []}
+    except AIClientError as exc:
+        return _deterministic_fallback(messages, context, str(exc))
+    except Exception as exc:
+        return _deterministic_fallback(messages, context, str(exc))

@@ -35,9 +35,32 @@ Common search filters:
 
 | Method | Route | Description |
 |---|---|---|
-| `POST` | `/api/ai/chat` | Ask the AI assistant with `messages` and optional `context` |
+| `POST` | `/api/ai/chat` | Ask the PTCG Agent with `messages` and optional deck/context |
 
-The assistant can search local card data first, then pass compact card context to an OpenAI-compatible chat completion provider.
+The assistant returns structured data for H/I/J standard cards and proposed deck changes. The frontend must show `deck_diff` and ask for confirmation before applying `deck_actions`.
+
+Request body:
+
+```json
+{
+  "messages": [{"role": "user", "content": "幫我把兩張博士的研究換成裁判"}],
+  "context": {
+    "deck": [],
+    "workspace_item_id": null,
+    "language": "tw",
+    "standard_marks": ["H", "I", "J"]
+  }
+}
+```
+
+Response fields include `answer`, `cards`, `meta_references`, `deck_actions`, `deck_diff`, `tool_trace`, and `error`.
+
+Admin embedding routes:
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/ai/embeddings/status` | Get pgvector embedding index status |
+| `POST` | `/api/ai/embeddings/rebuild` | Rebuild card/meta embeddings with `source_type`, `batch_size`, and optional `max_items` |
 
 ## Decks
 

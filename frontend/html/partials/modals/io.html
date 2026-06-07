@@ -357,8 +357,134 @@
 <!-- 分享 -->
 <transition name="fade"><div v-if="showShareModal" class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 text-center"><div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl text-white shadow-lg shadow-green-500/50"><i class="fa-solid fa-check"></i></div><h2 class="text-2xl font-bold text-white mb-2">儲存成功！</h2><p class="text-gray-400 text-sm mb-6">您的牌組已儲存，可以透過以下連結分享或日後訪問。</p><div class="bg-gray-900 p-4 rounded-lg border border-gray-700 mb-6 text-left"><div class="text-xs text-gray-500 mb-1">唯一識別碼</div><div class="text-xl font-mono text-yellow-400 font-bold mb-3 tracking-widest">[[ savedDeckId ]]</div><div class="text-xs text-gray-500 mb-1">分享連結</div><div class="flex space-x-2"><input readonly :value="shareUrl" class="flex-1 bg-gray-800 text-gray-300 text-sm px-3 py-2 rounded border border-gray-600 focus:outline-none select-all" @click="$event.target.select()"><button @click="copyShareLink" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-bold whitespace-nowrap"><i class="fa-regular fa-copy mr-1"></i> 複製</button></div></div><button @click="showShareModal = false" class="bg-gray-700 hover:bg-gray-600 text-white px-8 py-2 rounded-lg font-bold">關閉</button></div></div></transition>
 
+<!-- 導入缺卡提示 -->
+<transition name="fade">
+    <div v-if="importMissingNotice" class="fixed inset-0 z-[95] flex items-center justify-center bg-black bg-opacity-85 backdrop-blur p-4">
+        <div class="bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-700 shadow-2xl overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-700 bg-gray-800 flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <h2 class="text-lg font-bold text-white">
+                        <i class="fa-solid fa-triangle-exclamation mr-2 text-amber-300"></i>
+                        部分卡片無法導入
+                    </h2>
+                    <p class="mt-1 text-xs text-gray-400 truncate">[[ importMissingNotice.title ]]</p>
+                </div>
+                <button @click="closeImportMissingNotice" class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white shrink-0" title="Close">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="p-5 space-y-4">
+                <div class="grid grid-cols-2 gap-3 text-xs">
+                    <div class="rounded-lg bg-gray-950 border border-gray-800 p-3">
+                        <div class="text-gray-500">已開啟</div>
+                        <div class="mt-1 text-xl font-mono text-emerald-300">[[ importMissingNotice.importedCount ]]</div>
+                    </div>
+                    <div class="rounded-lg bg-gray-950 border border-gray-800 p-3">
+                        <div class="text-gray-500">缺卡種類</div>
+                        <div class="mt-1 text-xl font-mono text-amber-300">[[ importMissingNotice.missing.length ]]</div>
+                    </div>
+                </div>
+
+                <div class="rounded-lg bg-red-950/30 border border-red-800 p-3">
+                    <div class="text-sm font-bold text-red-200 mb-3">中文牌庫中無法找到此卡牌</div>
+                    <div class="max-h-72 overflow-y-auto custom-scroll grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div v-for="(card, idx) in importMissingNotice.missing"
+                             :key="idx"
+                             class="flex gap-3 rounded bg-gray-950/80 border border-gray-800 p-2">
+                            <div class="w-12 h-[67px] bg-gray-800 rounded overflow-hidden shrink-0 flex items-center justify-center">
+                                <img v-if="card.image_url" :src="card.image_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'">
+                                <i v-else class="fa-regular fa-image text-gray-600"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="font-bold text-white text-sm truncate">[[ card.name ]]</div>
+                                    <span class="text-xs font-mono text-amber-200 bg-amber-950/60 border border-amber-800 rounded px-2">x[[ card.count ]]</span>
+                                </div>
+                                <div class="mt-1 text-xs text-gray-400 font-mono truncate">[[ card.code || '-' ]]</div>
+                                <div class="mt-1 text-[11px] text-red-300 truncate">[[ card.reason ]]</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-5 py-4 border-t border-gray-700 bg-gray-800 flex justify-end">
+                <button @click="closeImportMissingNotice"
+                        class="px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-bold">
+                    知道了
+                </button>
+            </div>
+        </div>
+    </div>
+</transition>
+
 <!-- 導入 -->
-<transition name="fade"><div v-if="showImportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-2xl border border-gray-700 max-h-[90vh] flex flex-col overflow-hidden"><div v-if="conflictQueue.length === 0" class="flex flex-col h-full overflow-hidden"><h2 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-file-import mr-2"></i>導入文字列表</h2><p class="text-gray-400 text-xs mb-4">請貼上卡表，格式如：卡片名稱 數量 (例如：皮卡丘 3)</p><textarea v-model="importText" :class="{'h-32': notFoundList.length > 0, 'flex-1': notFoundList.length === 0}" class="w-full bg-gray-900 text-gray-200 p-4 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none font-mono text-sm mb-4 min-h-[120px]" placeholder="古鼎鹿 3&#10;月月熊 赫月 2&#10;基本火能量 5"></textarea><div v-if="notFoundList.length > 0" class="bg-red-900/30 border border-red-800 rounded p-3 mb-4 flex-1 overflow-y-auto custom-scroll min-h-0"><h3 class="text-red-400 font-bold text-sm mb-2 flex items-center"><i class="fa-solid fa-triangle-exclamation mr-2"></i> 以下卡片搜尋失敗：</h3><ul class="list-disc list-inside text-red-300 text-sm space-y-1"><li v-for="(name, idx) in notFoundList" :key="idx">[[ name ]]</li></ul></div><div v-if="isImporting" class="text-yellow-400 text-sm mb-2 animate-pulse"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> [[ importStatus ]]</div><div class="flex justify-end space-x-2 mt-auto"><button @click="showImportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">取消</button><button @click="startImport" :disabled="isImporting" class="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded font-bold transition">開始導入</button></div></div><div v-else class="flex flex-col h-full overflow-hidden"><div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 flex-shrink-0"><h2 class="text-xl font-bold text-yellow-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i>請選擇卡片版本</h2><span class="text-sm text-gray-400">剩餘待處理: [[ conflictQueue.length ]]</span></div><div class="mb-3 text-center flex-shrink-0"><p class="text-lg font-bold text-white">「[[ conflictQueue[0].name ]]」</p><p class="text-sm text-gray-400">需要加入 [[ conflictQueue[0].count ]] 張，請點擊下方其中一張來使用：</p></div><div class="flex-1 overflow-y-auto custom-scroll bg-gray-900 rounded p-4 min-h-0"><div class="grid grid-cols-3 gap-4"><div v-for="match in conflictQueue[0].matches" :key="match.card_id" @click="resolveConflict(conflictQueue[0], match)" class="cursor-pointer group relative hover:ring-2 ring-blue-500 rounded-lg overflow-hidden bg-gray-800 shadow-lg transition-transform hover:scale-105"><div class="w-full relative" style="aspect-ratio: 2.5 / 3.5;"><img :src="match.image_url" class="absolute inset-0 w-full h-full object-contain bg-gray-900" loading="lazy" @error="handleImageError"></div><div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-90 text-white text-xs py-2 px-2 text-center truncate border-t border-gray-700"><div class="font-medium">[[ match.name ]]</div></div></div></div></div><div class="mt-4 text-center flex-shrink-0"><button @click="skipConflict" class="text-gray-500 hover:text-gray-300 text-sm underline">跳過此卡片</button></div></div></div></div></transition>
+<transition name="fade">
+    <div v-if="showImportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4">
+        <div class="bg-gray-800 rounded-xl p-6 w-full max-w-2xl border border-gray-700 max-h-[90vh] flex flex-col overflow-hidden">
+            <div v-if="conflictQueue.length === 0" class="flex flex-col h-full overflow-hidden">
+                <h2 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-file-import mr-2"></i>導入文字列表</h2>
+                <p class="text-gray-400 text-xs mb-4">請貼上卡表，格式如：卡片名稱 數量 (例如：皮卡丘 3)</p>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                    <label class="cursor-pointer rounded-lg border p-3 transition"
+                           :class="importIntoNewTab ? 'border-green-500 bg-green-900/20 text-green-100' : 'border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-600'">
+                        <div class="flex items-center gap-2 font-bold text-sm">
+                            <input type="radio" v-model="importIntoNewTab" :value="true" class="text-green-600">
+                            <i class="fa-solid fa-table-columns text-green-400"></i>
+                            <span>導入到新分頁</span>
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">預設，不覆蓋目前牌組。</div>
+                    </label>
+                    <label class="cursor-pointer rounded-lg border p-3 transition"
+                           :class="!importIntoNewTab ? 'border-blue-500 bg-blue-900/20 text-blue-100' : 'border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-600'">
+                        <div class="flex items-center gap-2 font-bold text-sm">
+                            <input type="radio" v-model="importIntoNewTab" :value="false" class="text-blue-600">
+                            <i class="fa-solid fa-plus text-blue-400"></i>
+                            <span>加入目前分頁</span>
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">保留原本逐張加入行為。</div>
+                    </label>
+                </div>
+
+                <textarea v-model="importText" :class="{'h-32': notFoundList.length > 0, 'flex-1': notFoundList.length === 0}" class="w-full bg-gray-900 text-gray-200 p-4 rounded border border-gray-600 focus:border-blue-500 outline-none resize-none font-mono text-sm mb-4 min-h-[120px]" placeholder="古鼎鹿 3&#10;月月熊 赫月 2&#10;基本火能量 5"></textarea>
+                <div v-if="notFoundList.length > 0" class="bg-red-900/30 border border-red-800 rounded p-3 mb-4 flex-1 overflow-y-auto custom-scroll min-h-0">
+                    <h3 class="text-red-400 font-bold text-sm mb-2 flex items-center"><i class="fa-solid fa-triangle-exclamation mr-2"></i> 以下卡片搜尋失敗：</h3>
+                    <ul class="list-disc list-inside text-red-300 text-sm space-y-1"><li v-for="(name, idx) in notFoundList" :key="idx">[[ name ]]</li></ul>
+                </div>
+                <div v-if="isImporting" class="text-yellow-400 text-sm mb-2 animate-pulse"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> [[ importStatus ]]</div>
+                <div class="flex justify-end space-x-2 mt-auto">
+                    <button @click="showImportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">取消</button>
+                    <button @click="startImport" :disabled="isImporting" class="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded font-bold transition">開始導入</button>
+                </div>
+            </div>
+            <div v-else class="flex flex-col h-full overflow-hidden">
+                <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2 flex-shrink-0">
+                    <h2 class="text-xl font-bold text-yellow-400"><i class="fa-solid fa-triangle-exclamation mr-2"></i>請選擇卡片版本</h2>
+                    <span class="text-sm text-gray-400">剩餘待處理: [[ conflictQueue.length ]]</span>
+                </div>
+                <div class="mb-3 text-center flex-shrink-0">
+                    <p class="text-lg font-bold text-white">「[[ conflictQueue[0].name ]]」</p>
+                    <p class="text-sm text-gray-400">需要加入 [[ conflictQueue[0].count ]] 張，請點擊下方其中一張來使用：</p>
+                </div>
+                <div class="flex-1 overflow-y-auto custom-scroll bg-gray-900 rounded p-4 min-h-0">
+                    <div class="grid grid-cols-3 gap-4">
+                        <div v-for="match in conflictQueue[0].matches" :key="match.card_id" @click="resolveConflict(conflictQueue[0], match)" class="cursor-pointer group relative hover:ring-2 ring-blue-500 rounded-lg overflow-hidden bg-gray-800 shadow-lg transition-transform hover:scale-105">
+                            <div class="w-full relative" style="aspect-ratio: 2.5 / 3.5;">
+                                <img :src="match.image_url" class="absolute inset-0 w-full h-full object-contain bg-gray-900" loading="lazy" @error="handleImageError">
+                            </div>
+                            <div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-90 text-white text-xs py-2 px-2 text-center truncate border-t border-gray-700">
+                                <div class="font-medium">[[ match.name ]]</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 text-center flex-shrink-0"><button @click="skipConflict" class="text-gray-500 hover:text-gray-300 text-sm underline">跳過此卡片</button></div>
+            </div>
+        </div>
+    </div>
+</transition>
 
 <!-- 導出 -->
 <transition name="fade"><div v-if="showExportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 flex flex-col"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-file-export mr-2"></i>導出文字列表</h2><div class="mb-4"><label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" v-model="exportWithId" @change="regenerateExportText" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-600 focus:ring-blue-500"><span class="text-sm text-gray-300">包含卡片 ID (便於分享給他人精確版本)</span></label></div><textarea readonly v-model="exportTextContent" class="w-full bg-gray-900 text-gray-200 p-3 rounded border border-gray-600 text-sm font-mono h-64 mb-4 custom-scroll outline-none focus:border-blue-500" @click="$event.target.select()"></textarea><div class="flex justify-end space-x-2"><button @click="showExportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">關閉</button><button @click="copyExportText" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded font-bold transition"><i class="fa-regular fa-copy mr-2"></i>複製到剪貼簿</button></div></div></div></transition>

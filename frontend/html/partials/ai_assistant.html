@@ -1,103 +1,331 @@
-<button @click.stop="toggleAIPanel"
-        class="fixed bottom-5 right-5 z-[55] w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xl border border-indigo-400/40 flex items-center justify-center transition"
-        title="AI Assistant">
-    <i class="fa-solid fa-wand-magic-sparkles text-xl"></i>
-</button>
-
-<transition name="fade">
-    <aside v-if="aiPanelOpen"
-           class="fixed right-4 bottom-24 top-20 z-[70] w-[min(440px,calc(100vw-2rem))] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl flex flex-col overflow-hidden">
-        <div class="h-14 px-4 border-b border-gray-700 bg-gray-800 flex items-center justify-between gap-3">
-            <div class="min-w-0">
-                <div class="font-bold text-white flex items-center gap-2">
-                    <i class="fa-solid fa-robot text-indigo-300"></i>
-                    <span>AI Assistant</span>
-                </div>
-                <div class="text-xs text-gray-400 truncate">中文/日文查卡與技能搜尋</div>
+<section class="h-full flex flex-col bg-gray-900"
+         @dragover.prevent="handleAIDragOver"
+         @dragleave="handleAIDragLeave"
+         @drop.prevent="handleAIDrop">
+    <div class="h-12 px-3 border-b border-gray-700 bg-gray-800 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+            <div class="font-bold text-sm text-white flex items-center gap-2">
+                <i class="fa-solid fa-robot text-indigo-300"></i>
+                <span>AI Agent</span>
             </div>
-            <div class="flex items-center gap-1">
-                <button @click="clearAIChat" class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white" title="清除對話">
-                    <i class="fa-solid fa-rotate-left text-sm"></i>
+            <div class="text-[11px] text-gray-400 truncate">H/I/J, Meta, RAG</div>
+        </div>
+        <div class="flex items-center gap-1">
+            <button @click="clearAIChat"
+                    class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white"
+                    title="Clear chat">
+                <i class="fa-solid fa-rotate-left text-sm"></i>
+            </button>
+            <button @click="closeSidePanel"
+                    class="md:hidden w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white"
+                    title="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+
+    <div id="ai-assistant-messages" class="flex-1 min-h-0 overflow-y-auto custom-scroll p-3 space-y-4 bg-gray-950/70">
+        <div v-for="(message, idx) in aiMessages" :key="idx" class="space-y-2">
+            <div class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
+                <div class="max-w-[92%] rounded-lg px-3 py-2 text-sm leading-relaxed"
+                     :class="message.role === 'user'
+                        ? 'bg-indigo-600 text-white whitespace-pre-wrap'
+                        : (message.error ? 'bg-red-950/70 text-red-200 border border-red-800 whitespace-pre-wrap' : 'bg-gray-800 text-gray-100 border border-gray-700')">
+                    <span v-if="message.role === 'user' || message.error">[[ message.content ]]</span>
+                    <div v-else class="ai-md space-y-2" v-html="renderMarkdown(message.content)"></div>
+                </div>
+            </div>
+
+            <details v-if="message.steps && message.steps.length && message.role !== 'user'"
+                     class="ml-1 bg-gray-900/70 border border-gray-800 rounded p-2 text-xs text-gray-400">
+                <summary class="cursor-pointer select-none text-gray-300 font-bold">Agent steps</summary>
+                <div class="mt-2 border-l border-gray-700 pl-3 space-y-1">
+                    <div v-for="(step, sidx) in message.steps.slice(0, 24)" :key="sidx" class="flex items-center gap-2">
+                        <i class="fa-solid"
+                           :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : (step.status === 'error' ? 'fa-triangle-exclamation text-amber-400' : 'fa-list-check text-gray-500'))"></i>
+                        <span class="truncate">[[ step.message ]]</span>
+                    </div>
+                </div>
+            </details>
+
+            <div v-if="message.cards && message.cards.length && message.role !== 'user'" class="grid grid-cols-1 gap-2 pl-1">
+                <button v-for="card in message.cards.slice(0, 6)"
+                        :key="(card.language || '') + '-' + (card.card_id || card.id)"
+                        @click="openAICard(card)"
+                        class="text-left bg-gray-900 border border-gray-700 hover:border-indigo-400 rounded-lg p-2 flex gap-3 transition">
+                    <div class="w-12 h-[67px] bg-gray-800 rounded overflow-hidden shrink-0 flex items-center justify-center">
+                        <img v-if="card.image_url" :src="card.image_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'">
+                        <i v-else class="fa-regular fa-image text-gray-600"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="font-bold text-white text-sm truncate">[[ card.name ]]</div>
+                            <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 shrink-0">[[ card.language ]]</span>
+                        </div>
+                        <div class="text-xs text-gray-400 truncate">[[ card.card_type ]] [[ card.sub_type || '' ]]</div>
+                        <div class="text-xs text-gray-500 font-mono truncate">[[ card.set_code || '-' ]] [[ card.set_number || '-' ]]</div>
+                    </div>
                 </button>
-                <button @click="closeAIPanel" class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white" title="關閉">
+            </div>
+
+            <div v-if="message.meta_references && message.meta_references.length && message.role !== 'user'" class="pl-1 space-y-2">
+                <div class="text-xs font-bold uppercase tracking-wide text-gray-500">Limitless Meta</div>
+                <div v-for="(ref, ridx) in message.meta_references.slice(0, 4)"
+                     :key="ridx"
+                     class="bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-gray-300">
+                    <div class="font-bold text-indigo-200 truncate">[[ metaTitle(ref) ]]</div>
+                    <div class="mt-1 flex flex-wrap gap-1 text-[11px] text-gray-400">
+                        <span v-if="ref.placement"># [[ ref.placement ]]</span>
+                        <span v-if="ref.deck_count">[[ ref.deck_count ]] decks</span>
+                        <span v-if="ref.players">[[ ref.players ]] players</span>
+                        <span v-if="ref.score">score [[ ref.score ]]</span>
+                    </div>
+                    <div v-if="ref.common_cards && ref.common_cards.length" class="mt-1 text-gray-500 truncate">
+                        [[ ref.common_cards.slice(0, 5).map(c => c.name + (c.typical_count ? ' x' + c.typical_count : '')).join(' / ') ]]
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="message.decklists && message.decklists.length && message.role !== 'user'" class="pl-1 space-y-3">
+                <div v-for="(decklist, didx) in message.decklists.slice(0, 3)"
+                     :key="decklist.deck_id || didx"
+                     class="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden">
+                    <div class="px-3 py-2 border-b border-gray-800 flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-sm font-bold text-white truncate">[[ decklistTitle(decklist) ]]</div>
+                            <div class="text-[11px] text-gray-400 truncate">[[ decklistSubtitle(decklist) || decklist.deck_id ]]</div>
+                        </div>
+                        <div class="shrink-0 flex items-center gap-2">
+                            <div class="text-xs font-mono text-indigo-200 bg-indigo-950/60 border border-indigo-800 rounded px-2 py-1">
+                                [[ decklistTotal(decklist) ]]
+                            </div>
+                            <button @click="importAIDecklist(decklist)"
+                                    :disabled="decklistTotal(decklist) !== 60"
+                                    class="h-7 px-2 rounded bg-emerald-700 hover:bg-emerald-600 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-bold flex items-center gap-1"
+                                    title="Open as a new tab">
+                                <i class="fa-solid fa-file-import text-[11px]"></i>
+                                <span>Open</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="p-3 space-y-3">
+                        <section v-for="section in decklistSections(decklist)" :key="section.key" class="space-y-2">
+                            <div class="flex items-center justify-between text-xs">
+                                <div class="font-bold text-gray-200">[[ section.label ]]</div>
+                                <div class="font-mono text-gray-500">[[ section.total ]]</div>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2">
+                                <div v-for="(card, cidx) in section.cards"
+                                     :key="decklistCardKey(decklist, card, cidx)"
+                                     class="group bg-gray-950 border border-gray-800 rounded overflow-hidden">
+                                    <button @click="openAICard(card)" class="relative w-full h-[118px] bg-gray-800 flex items-center justify-center overflow-hidden">
+                                        <img v-if="card.image_url" :src="card.image_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'">
+                                        <i v-else class="fa-regular fa-image text-gray-600"></i>
+                                        <span class="absolute top-1 left-1 min-w-5 h-5 px-1 rounded bg-gray-950/90 border border-gray-600 text-white text-[11px] font-bold flex items-center justify-center">
+                                            x[[ card.count || 0 ]]
+                                        </span>
+                                    </button>
+                                    <div class="p-1.5 space-y-1">
+                                        <button @click="openAICard(card)" class="w-full text-left text-[11px] leading-tight text-gray-200 h-8 overflow-hidden">
+                                            [[ cardDisplayName(card) ]]
+                                        </button>
+                                        <div class="flex items-center justify-between gap-1">
+                                            <span class="text-[10px] text-gray-500 truncate">[[ card.set_code || '-' ]] [[ card.set_number || '' ]]</span>
+                                            <button @click.stop="addAIDecklistCard(card, 1)"
+                                                    :disabled="!card.card_id || card.missing"
+                                                    class="w-6 h-6 rounded bg-emerald-700 hover:bg-emerald-600 disabled:bg-gray-800 disabled:text-gray-600 text-white flex items-center justify-center"
+                                                    title="Add one to active tab">
+                                                <i class="fa-solid fa-plus text-[10px]"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="message.deck_actions && message.deck_actions.length && message.role !== 'user'" class="pl-1 space-y-2">
+                <div class="bg-gray-900 border border-amber-700/60 rounded-lg p-3">
+                    <div class="flex items-center justify-between gap-2">
+                        <div>
+                            <div class="text-sm font-bold text-amber-100">Deck changes</div>
+                            <div v-if="message.deck_diff" class="text-xs text-gray-400 mt-0.5">
+                                [[ message.deck_diff.current_total ]] -> [[ message.deck_diff.projected_total ]]
+                            </div>
+                        </div>
+                        <button @click="applyAIMessageActions(message)"
+                                :disabled="message.applied"
+                                class="shrink-0 px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-bold">
+                            [[ message.applied ? 'Applied' : 'Apply' ]]
+                        </button>
+                    </div>
+                    <div class="mt-2 space-y-1 text-xs">
+                        <div v-for="(action, aidx) in message.deck_actions" :key="aidx" class="flex items-center gap-2 text-gray-300">
+                            <i class="fa-solid" :class="(action.type === 'remove_card' || action.type === 'remove') ? 'fa-minus text-red-400' : 'fa-plus text-emerald-400'"></i>
+                            <span>[[ actionLabel(action) ]]</span>
+                        </div>
+                    </div>
+                    <div v-if="message.deck_diff && message.deck_diff.warnings && message.deck_diff.warnings.length" class="mt-2 text-xs text-amber-200 space-y-1">
+                        <div v-for="(warning, widx) in message.deck_diff.warnings" :key="widx">
+                            <i class="fa-solid fa-triangle-exclamation mr-1"></i>[[ warning ]]
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="aiLoading" class="space-y-2">
+            <div class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-indigo-200 inline-block">
+                <i class="fa-solid fa-circle-notch fa-spin mr-2"></i>[[ aiLoadingMessage || 'Agent is working...' ]]
+            </div>
+            <div v-if="aiToolSteps.length" class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
+                <div v-for="(step, sidx) in aiToolSteps.slice(-10)" :key="sidx" class="flex items-center gap-2">
+                    <i class="fa-solid"
+                       :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : 'fa-circle text-gray-600')"></i>
+                    <span class="truncate">[[ step.message ]]</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="border-t border-gray-700 bg-gray-800 p-3">
+        <div class="mb-2 flex items-center justify-between gap-2">
+            <label class="inline-flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+                <input type="checkbox" v-model="aiDeepThink" class="w-4 h-4 rounded bg-gray-900 border-gray-600 text-indigo-600">
+                <span class="font-bold">DeepThink</span>
+            </label>
+            <button @click.stop="aiTabPickerOpen = !aiTabPickerOpen"
+                    class="h-7 px-2 rounded bg-gray-900 border border-gray-700 hover:border-indigo-400 text-xs text-gray-200 flex items-center gap-1"
+                    title="Reference deck tabs in this AI message">
+                <i class="fa-solid fa-at text-indigo-300"></i>
+                <span>tab</span>
+            </button>
+        </div>
+
+        <div v-if="aiTabPickerOpen" class="mb-2 max-h-36 overflow-y-auto custom-scroll rounded border border-gray-700 bg-gray-900 shadow-xl">
+            <button v-for="tab in availableAITabs"
+                    :key="tab.id"
+                    @click="addAITabReference(tab)"
+                    class="w-full px-2 py-2 text-left hover:bg-gray-800 flex items-center gap-2 text-xs border-b border-gray-800 last:border-b-0">
+                <i class="fa-solid" :class="tab.active ? 'fa-circle-dot text-indigo-300' : 'fa-layer-group text-gray-500'"></i>
+                <span class="min-w-0 flex-1 truncate text-gray-200">[[ tab.title ]]</span>
+                <span class="text-[10px] uppercase text-gray-500">[[ tab.source ]]</span>
+                <span class="text-[10px] font-mono text-gray-400">[[ tab.count ]]</span>
+            </button>
+            <div v-if="!availableAITabs.length" class="px-2 py-3 text-xs text-gray-500">
+                No deck tabs open.
+            </div>
+        </div>
+
+        <div v-if="aiReferencedTabs.length || aiReferencedCards.length" class="mb-2 flex flex-wrap gap-1">
+            <span v-for="tab in aiReferencedTabs"
+                  :key="'tab-' + tab.id"
+                  class="max-w-full h-6 rounded bg-indigo-950/70 border border-indigo-700 text-indigo-100 text-[11px] flex items-center gap-1 px-2">
+                <i class="fa-solid fa-layer-group text-[10px]"></i>
+                <span class="truncate max-w-[180px]">@tab:[[ tab.title ]]</span>
+                <button @click="removeAITabReference(tab.id)" class="text-indigo-300 hover:text-white" title="Remove reference">
+                    <i class="fa-solid fa-xmark text-[10px]"></i>
+                </button>
+            </span>
+            <span v-for="item in aiReferencedCards"
+                  :key="'card-' + item.key"
+                  class="max-w-full h-6 rounded bg-emerald-950/70 border border-emerald-700 text-emerald-100 text-[11px] flex items-center gap-1 px-2">
+                <i class="fa-solid fa-address-card text-[10px]"></i>
+                <span class="truncate max-w-[180px]">[[ item.mention ]]</span>
+                <button @click="removeAICardReference(item.key)" class="text-emerald-300 hover:text-white" title="Remove reference">
+                    <i class="fa-solid fa-xmark text-[10px]"></i>
+                </button>
+            </span>
+        </div>
+        <div class="flex gap-2">
+            <textarea v-model="aiInput"
+                      id="ai-input"
+                      @keydown.enter.exact.prevent="sendAIMessage"
+                      @dragover.stop.prevent="handleAIDragOver"
+                      @dragleave.stop="handleAIDragLeave"
+                      @drop.stop.prevent="handleAIDrop"
+                      rows="2"
+                      class="flex-1 resize-none bg-gray-900 border border-gray-700 focus:border-indigo-400 outline-none rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500"
+                      :class="aiDropActive ? 'border-emerald-400 ring-2 ring-emerald-500/40' : ''"
+                      placeholder="Ask for a deck, card explanation, or matchup advice..."></textarea>
+            <button @click="sendAIMessage"
+                    :disabled="aiLoading || !aiInput.trim()"
+                    class="w-11 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white flex items-center justify-center">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
+        <div class="mt-1 text-[11px] text-gray-500">
+            Drag a card here to reference it, or add deck tabs with @tab.
+        </div>
+    </div>
+
+    <div v-if="pendingAIDeckImport"
+         class="fixed inset-0 z-[95] flex items-center justify-center bg-black/80 backdrop-blur p-4">
+        <div class="w-full max-w-lg bg-gray-900 border border-gray-700 rounded-lg shadow-2xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-700 bg-gray-800 flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="font-bold text-white">部分卡片無法導入</div>
+                    <div class="text-xs text-gray-400 truncate">[[ pendingAIDeckImport.title ]]</div>
+                </div>
+                <button @click="cancelAIDeckImport" class="w-8 h-8 rounded hover:bg-gray-700 text-gray-400 hover:text-white" title="Close">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
-        </div>
-
-        <div id="ai-assistant-messages" class="flex-1 overflow-y-auto custom-scroll p-4 space-y-4 bg-gray-950/70">
-            <div v-for="(message, idx) in aiMessages" :key="idx" class="space-y-2">
-                <div class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
-                    <div class="max-w-[88%] rounded-lg px-3 py-2 text-sm leading-relaxed"
-                         :class="message.role === 'user' ? 'bg-indigo-600 text-white whitespace-pre-wrap' : (message.error ? 'bg-red-950/70 text-red-200 border border-red-800 whitespace-pre-wrap' : 'bg-gray-800 text-gray-100 border border-gray-700')">
-                        <span v-if="message.role === 'user' || message.error">[[ message.content ]]</span>
-                        <div v-else class="ai-md space-y-2" v-html="renderMarkdown(message.content)"></div>
+            <div class="p-4 space-y-3">
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div class="rounded bg-gray-950 border border-gray-800 p-2">
+                        <div class="text-gray-500">可導入</div>
+                        <div class="mt-1 text-lg font-mono text-emerald-300">[[ pendingAIDeckImport.resolved ]]</div>
+                    </div>
+                    <div class="rounded bg-gray-950 border border-gray-800 p-2">
+                        <div class="text-gray-500">原始牌表</div>
+                        <div class="mt-1 text-lg font-mono text-indigo-300">[[ pendingAIDeckImport.total ]]</div>
                     </div>
                 </div>
 
-                <div v-if="message.steps && message.steps.length && message.role !== 'user'"
-                     class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
-                    <div v-for="(step, sidx) in message.steps.slice(0, 8)" :key="sidx" class="flex items-center gap-2">
-                        <i class="fa-solid"
-                           :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : 'fa-list-check text-gray-500')"></i>
-                        <span class="truncate">[[ step.message ]]</span>
-                    </div>
-                </div>
-
-                <div v-if="message.cards && message.cards.length"
-                     class="grid grid-cols-1 gap-2 pl-2"
-                     :class="message.role === 'user' ? 'hidden' : ''">
-                    <button v-for="card in message.cards.slice(0, 6)"
-                            :key="(card.language || '') + '-' + (card.card_id || card.id)"
-                            @click="openAICard(card)"
-                            class="text-left bg-gray-900 border border-gray-700 hover:border-indigo-400 rounded-lg p-2 flex gap-3 transition">
-                        <div class="w-12 h-[67px] bg-gray-800 rounded overflow-hidden shrink-0 flex items-center justify-center">
-                            <img v-if="card.image_url" :src="card.image_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'">
-                            <i v-else class="fa-regular fa-image text-gray-600"></i>
-                        </div>
-                        <div class="min-w-0 flex-1">
-                            <div class="flex items-start justify-between gap-2">
-                                <div class="font-bold text-white text-sm truncate">[[ card.name ]]</div>
-                                <div class="flex items-center gap-1 shrink-0">
-                                    <span v-if="card.regulation_mark" class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-emerald-800/70 text-emerald-100">[[ card.regulation_mark ]]</span>
-                                    <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">[[ card.language ]]</span>
+                <div v-if="pendingAIDeckImport.missing && pendingAIDeckImport.missing.length" class="space-y-2">
+                    <div class="text-xs font-bold text-gray-300">無法對應到本地卡池</div>
+                    <div class="max-h-64 overflow-y-auto custom-scroll space-y-2">
+                        <div v-for="(card, idx) in pendingAIDeckImport.missing"
+                             :key="idx"
+                             class="rounded bg-gray-950 border border-gray-800 p-2 flex gap-3">
+                            <div class="w-12 h-[67px] bg-gray-800 rounded overflow-hidden shrink-0 flex items-center justify-center">
+                                <img v-if="card.image_url" :src="card.image_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'">
+                                <i v-else class="fa-regular fa-image text-gray-600"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="font-bold text-white text-sm truncate">[[ card.name || card.card_name || 'Unknown card' ]]</div>
+                                    <span class="text-xs font-mono text-amber-200 bg-amber-950/60 border border-amber-800 rounded px-2">x[[ card.count || 0 ]]</span>
+                                </div>
+                                <div class="mt-1 text-xs text-gray-500 truncate">
+                                    [[ card.set_code || '-' ]] [[ card.set_number || '' ]]
+                                </div>
+                                <div class="mt-1 text-[11px] text-gray-500 truncate">
+                                    [[ card.reason || 'not matched' ]]
                                 </div>
                             </div>
-                            <div class="text-xs text-gray-400 truncate">[[ card.card_type ]] [[ card.sub_type || '' ]]</div>
-                            <div class="text-xs text-gray-500 font-mono truncate">[[ card.set_code || '-' ]] [[ card.set_number || '-' ]]</div>
                         </div>
-                    </button>
-                </div>
-            </div>
-
-            <div v-if="aiLoading" class="space-y-2">
-                <div class="flex justify-start">
-                    <div class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-indigo-200">
-                        <i class="fa-solid fa-circle-notch fa-spin mr-2"></i>AI 正在查找卡牌資料...
                     </div>
                 </div>
-                <div v-if="aiToolSteps.length" class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
-                    <div v-for="(step, sidx) in aiToolSteps.slice(0, 6)" :key="sidx" class="flex items-center gap-2">
-                        <i class="fa-solid fa-circle-notch fa-spin text-indigo-300"></i>
-                        <span class="truncate">[[ step.message ]]</span>
-                    </div>
+
+                <div v-else class="rounded bg-amber-950/40 border border-amber-800 px-3 py-2 text-xs text-amber-100">
+                    這副牌表的解析張數不完整，請確認是否仍要開啟目前已解析的卡片。
                 </div>
             </div>
-        </div>
-
-        <div class="border-t border-gray-700 bg-gray-800 p-3">
-            <div class="flex gap-2">
-                <textarea v-model="aiInput"
-                          @keydown.enter.exact.prevent="sendAIMessage"
-                          rows="2"
-                          class="flex-1 resize-none bg-gray-900 border border-gray-700 focus:border-indigo-400 outline-none rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500"
-                          placeholder="例如：有哪些寶可夢攻擊傷害是根據手牌數量計算？"></textarea>
-                <button @click="sendAIMessage"
-                        :disabled="aiLoading || !aiInput.trim()"
-                        class="w-11 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white flex items-center justify-center">
-                    <i class="fa-solid fa-paper-plane"></i>
+            <div class="px-4 py-3 border-t border-gray-700 bg-gray-800 flex justify-end gap-2">
+                <button @click="cancelAIDeckImport"
+                        class="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-sm">
+                    取消
+                </button>
+                <button @click="confirmAIDeckPartialImport"
+                        :disabled="!pendingAIDeckImport.expanded || !pendingAIDeckImport.expanded.length"
+                        class="px-3 py-2 rounded bg-emerald-700 hover:bg-emerald-600 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-bold">
+                    照樣導入其他卡牌
                 </button>
             </div>
         </div>
-    </aside>
-</transition>
+    </div>
+</section>

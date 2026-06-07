@@ -10,6 +10,7 @@ import psycopg2
 import psycopg2.extras
 import config
 from services.limitless_decks.schema import LIMITLESS_SCHEMA_SQL
+from services.ai_assistant.schema import ai_schema_sql
 
 SCHEMA_SQL = """
 BEGIN;
@@ -235,6 +236,7 @@ def main():
         cursor = conn.cursor()
         cursor.execute(SCHEMA_SQL)
         cursor.execute(LIMITLESS_SCHEMA_SQL)
+        cursor.execute(ai_schema_sql())
         conn.commit()
         cursor.close()
         conn.close()
