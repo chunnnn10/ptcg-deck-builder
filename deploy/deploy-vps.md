@@ -146,5 +146,5 @@ curl https://YOUR_DOMAIN/api/decks/japanese/list?page=1
 - Do not expose Postgres to the public internet.
 - Do not expose Flask port `5000` publicly unless it is bound to `127.0.0.1`.
 - Back up Postgres with `pg_dump -Fc`; do not rely only on copying `data/pgdata`.
-- `ENABLE_DECK_UPDATER` defaults to `false` in production compose to avoid duplicate crawler threads under Gunicorn. Turn it on only if this web container should run the old ptcgtw daily updater. Limitless admin updates still run from the admin endpoints.
+- `ENABLE_JP_DECK_AUTO_UPDATE` and `ENABLE_LIMITLESS_AUTO_UPDATE` default to `false` in production compose to avoid duplicate crawler threads. Turn them on only if this web container should run the daily deck-data jobs.
 - If upload time is tight, deploy code + database first, then sync `data/images` and `data/images_jp` in the background. Missing local images will still fall back where the app has remote image URLs.

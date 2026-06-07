@@ -113,6 +113,36 @@ function useAIAssistant(openCardModal, options = {}) {
         aiReferencedTabs.value = aiReferencedTabs.value.filter(item => item.id !== tabId);
     };
 
+    const normalizeReferenceText = (value) => String(value || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    const typedTabReferences = (text) => {
+        const tabs = getDeckTabs();
+        const refs = [];
+        const seen = new Set();
+        const matches = String(text || '').matchAll(/@tab:([^@\n\r]+)/g);
+        for (const match of matches) {
+            const mention = normalizeReferenceText(match[1]);
+            if (!mention) continue;
+            const tab = tabs.find(item => {
+                if (!item || !item.id) return false;
+                const title = normalizeReferenceText(item.title || '');
+                return title && (mention === title || mention.includes(title) || title.includes(mention));
+            });
+            if (!tab || seen.has(tab.id)) continue;
+            seen.add(tab.id);
+            refs.push({
+                id: tab.id,
+                title: tab.title || 'Untitled Deck',
+                source: tab.source || 'scratch',
+                count: Array.isArray(tab.deck) ? tab.deck.length : 0
+            });
+        }
+        return refs;
+    };
+
     const addAICardReference = (card) => {
         const compact = compactCard(card);
         if (!compact || !compact.name) return;
@@ -127,16 +157,23 @@ function useAIAssistant(openCardModal, options = {}) {
         aiReferencedCards.value = aiReferencedCards.value.filter(item => item.key !== key);
     };
 
-    const referencedTabPayloads = () => aiReferencedTabs.value.map(ref => {
-        const tab = getDeckTabs().find(item => item && item.id === ref.id);
-        return {
-            id: ref.id,
-            title: (tab && tab.title) || ref.title,
-            source: (tab && tab.source) || ref.source,
-            count: tab && Array.isArray(tab.deck) ? tab.deck.length : ref.count,
-            deck: compactDeck(tab && tab.deck)
-        };
-    });
+    const referencedTabPayloads = (text = '') => {
+        const refs = [...aiReferencedTabs.value, ...typedTabReferences(text)];
+        const seen = new Set();
+        return refs
+            .filter(ref => ref && ref.id && !seen.has(ref.id) && seen.add(ref.id))
+            .map(ref => {
+                const tab = getDeckTabs().find(item => item && item.id === ref.id);
+                return {
+                    id: ref.id,
+                    title: (tab && tab.title) || ref.title,
+                    source: (tab && tab.source) || ref.source,
+                    count: tab && Array.isArray(tab.deck) ? tab.deck.length : ref.count,
+                    deck: compactDeck(tab && tab.deck)
+                };
+            })
+            .filter(ref => ref.deck && ref.deck.length);
+    };
 
     const referencedCardPayloads = () => aiReferencedCards.value
         .map(item => item.card)
@@ -210,7 +247,7 @@ function useAIAssistant(openCardModal, options = {}) {
 
     const loadingSequence = () => aiDeepThink.value
         ? [
-            '正在拆解任務與牌組目標',
+            '正在讀取 @tab 牌表與理解玩法',
             '正在搜尋 H/I/J 標準卡池',
             '正在搜尋 Limitless Meta',
             '正在讀取具體上位牌表',
@@ -287,7 +324,7 @@ function useAIAssistant(openCardModal, options = {}) {
                 .map(m => ({ role: m.role, content: m.content }));
             const context = {
                 deck: getDeck(),
-                referenced_tabs: referencedTabPayloads(),
+                referenced_tabs: referencedTabPayloads(text),
                 referenced_cards: referencedCardPayloads(),
                 workspace_item_id: typeof options.getWorkspaceItemId === 'function' ? options.getWorkspaceItemId() : null,
                 language: typeof options.getLanguage === 'function' ? options.getLanguage() : 'tw',
@@ -302,7 +339,7 @@ function useAIAssistant(openCardModal, options = {}) {
             });
             const job = await res.json();
             if (!job.success || !job.job_id) throw new Error(job.error || 'AI job failed to start');
-            const data = await pollAIJob(job.job_id);
+            const data = await pollAIJob(job.job_id, aiDeepThink.value);
             aiToolSteps.value = data.steps || data.tool_trace || [];
             aiLastCards.value = data.cards || [];
             aiMessages.value.push(normalizeMessage(data));
@@ -317,8 +354,9 @@ function useAIAssistant(openCardModal, options = {}) {
         }
     };
 
-    const pollAIJob = (jobId) => new Promise((resolve, reject) => {
+    const pollAIJob = (jobId, deepThink = false) => new Promise((resolve, reject) => {
         const startedAt = Date.now();
+        const timeoutMs = deepThink ? 900000 : 240000;
         const poll = async () => {
             try {
                 const res = await fetch(`/api/ai/chat/jobs/${encodeURIComponent(jobId)}`);
@@ -340,7 +378,7 @@ function useAIAssistant(openCardModal, options = {}) {
                     reject(new Error(data.error || data.message || 'AI job failed'));
                     return;
                 }
-                if (Date.now() - startedAt > 240000) {
+                if (Date.now() - startedAt > timeoutMs) {
                     reject(new Error('AI job timeout'));
                     return;
                 }

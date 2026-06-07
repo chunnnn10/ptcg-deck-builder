@@ -28,7 +28,8 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       FLASK_DEBUG: "false"
-      ENABLE_DECK_UPDATER: ${ENABLE_DECK_UPDATER:-false}
+      ENABLE_JP_DECK_AUTO_UPDATE: ${ENABLE_JP_DECK_AUTO_UPDATE:-false}
+      ENABLE_LIMITLESS_AUTO_UPDATE: ${ENABLE_LIMITLESS_AUTO_UPDATE:-false}
       PYTHONUNBUFFERED: "1"
     depends_on:
       db:

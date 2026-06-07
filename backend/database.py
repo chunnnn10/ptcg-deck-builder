@@ -551,8 +551,13 @@ def init_db():
             deck_date VARCHAR,
             title VARCHAR,
             image_url TEXT,
-            tags TEXT
+            tags TEXT,
+            card_list TEXT DEFAULT '[]'
         )
+        """)
+        cursor.execute("""
+        ALTER TABLE imported_decks
+            ADD COLUMN IF NOT EXISTS card_list TEXT DEFAULT '[]'
         """)
         cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_imported_decks_deck_date_desc ON imported_decks(deck_date DESC)

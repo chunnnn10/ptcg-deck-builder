@@ -165,8 +165,11 @@ CREATE TABLE IF NOT EXISTS imported_decks (
     deck_date VARCHAR,
     title VARCHAR,
     image_url TEXT,
-    tags TEXT
+    tags TEXT,
+    card_list TEXT DEFAULT '[]'
 );
+ALTER TABLE imported_decks
+    ADD COLUMN IF NOT EXISTS card_list TEXT DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_imported_decks_deck_date_desc ON imported_decks(deck_date DESC);
 
 -- === 匯入牌組卡片關聯 ===

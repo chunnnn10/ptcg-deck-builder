@@ -65,7 +65,8 @@ class DeckImporter:
                 "deck_date": "TEXT",
                 "title": "TEXT",
                 "image_url": "TEXT",
-                "tags": "TEXT"
+                "tags": "TEXT",
+                "card_list": "TEXT DEFAULT '[]'"
             }
             
             for col_name, col_type in new_columns.items():

@@ -40,10 +40,15 @@
                      class="ml-1 bg-gray-900/70 border border-gray-800 rounded p-2 text-xs text-gray-400">
                 <summary class="cursor-pointer select-none text-gray-300 font-bold">Agent steps</summary>
                 <div class="mt-2 border-l border-gray-700 pl-3 space-y-1">
-                    <div v-for="(step, sidx) in message.steps.slice(0, 24)" :key="sidx" class="flex items-center gap-2">
-                        <i class="fa-solid"
-                           :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : (step.status === 'error' ? 'fa-triangle-exclamation text-amber-400' : 'fa-list-check text-gray-500'))"></i>
-                        <span class="truncate">[[ step.message ]]</span>
+                    <div v-for="(step, sidx) in message.steps.slice(0, 24)" :key="sidx" class="space-y-1">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid"
+                               :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : (step.status === 'error' ? 'fa-triangle-exclamation text-amber-400' : 'fa-list-check text-gray-500'))"></i>
+                            <span class="truncate">[[ step.message ]]</span>
+                        </div>
+                        <div v-if="step.detail" class="ml-5 rounded border border-gray-800 bg-gray-950/70 px-2 py-1.5 text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap">
+                            [[ step.detail ]]
+                        </div>
                     </div>
                 </div>
             </details>
@@ -181,10 +186,15 @@
                 <i class="fa-solid fa-circle-notch fa-spin mr-2"></i>[[ aiLoadingMessage || 'Agent is working...' ]]
             </div>
             <div v-if="aiToolSteps.length" class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
-                <div v-for="(step, sidx) in aiToolSteps.slice(-10)" :key="sidx" class="flex items-center gap-2">
-                    <i class="fa-solid"
-                       :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : 'fa-circle text-gray-600')"></i>
-                    <span class="truncate">[[ step.message ]]</span>
+                <div v-for="(step, sidx) in aiToolSteps.slice(-10)" :key="sidx" class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid"
+                           :class="step.status === 'done' ? 'fa-check text-emerald-400' : (step.status === 'running' ? 'fa-circle-notch fa-spin text-indigo-300' : 'fa-circle text-gray-600')"></i>
+                        <span class="truncate">[[ step.message ]]</span>
+                    </div>
+                    <div v-if="step.detail" class="ml-5 rounded border border-gray-800 bg-gray-950/70 px-2 py-1.5 text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap">
+                        [[ step.detail ]]
+                    </div>
                 </div>
             </div>
         </div>

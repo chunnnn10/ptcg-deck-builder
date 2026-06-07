@@ -103,6 +103,16 @@ _INDEX_PAGE_SIZE = 500
 _MAX_INDEX_PAGES_PER_REGION = 100
 
 
+def _positive_int(value, default: int | None = None) -> int | None:
+    if value in (None, ""):
+        return default
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 def _fetch_index_pages(
     client: LimitlessClient,
     path: str,
@@ -137,21 +147,53 @@ def _fetch_index_pages(
     return tournaments
 
 
-def _fetch_indexes(client: LimitlessClient, regions: list[str]) -> list[dict]:
+def _limit_region_tournaments(tournaments: list[dict], max_tournaments: int | None) -> list[dict]:
+    if not max_tournaments:
+        return tournaments
+    return tournaments[:max_tournaments]
+
+
+def _fetch_indexes(
+    client: LimitlessClient,
+    regions: list[str],
+    max_pages_per_region: int | None = None,
+    max_tournaments_per_region: int | None = None,
+) -> list[dict]:
     tournaments = []
+    max_pages = _positive_int(max_pages_per_region, _MAX_INDEX_PAGES_PER_REGION)
+    max_tournaments = _positive_int(max_tournaments_per_region)
     if "global" in regions:
-        tournaments.extend(_fetch_index_pages(client, "/tournaments", parser.parse_global_tournament_index))
+        region_tournaments = _fetch_index_pages(
+            client,
+            "/tournaments",
+            parser.parse_global_tournament_index,
+            max_pages=max_pages,
+        )
+        tournaments.extend(_limit_region_tournaments(region_tournaments, max_tournaments))
     if "jp" in regions:
-        tournaments.extend(_fetch_index_pages(client, "/tournaments/jp", parser.parse_jp_tournament_index))
+        region_tournaments = _fetch_index_pages(
+            client,
+            "/tournaments/jp",
+            parser.parse_jp_tournament_index,
+            max_pages=max_pages,
+        )
+        tournaments.extend(_limit_region_tournaments(region_tournaments, max_tournaments))
     return tournaments
 
 
 def refresh_indexes(regions: list[str] | None = None, max_tournaments: int | None = None,
-                    client: LimitlessClient | None = None) -> dict:
+                    client: LimitlessClient | None = None,
+                    max_pages_per_region: int | None = None,
+                    max_tournaments_per_region: int | None = None) -> dict:
     ensure_schema()
     client = client or LimitlessClient()
     regions = regions or ["global", "jp"]
-    tournaments = _fetch_indexes(client, regions)
+    tournaments = _fetch_indexes(
+        client,
+        regions,
+        max_pages_per_region=max_pages_per_region,
+        max_tournaments_per_region=max_tournaments_per_region,
+    )
     if max_tournaments:
         tournaments = tournaments[:int(max_tournaments)]
     conn = database.get_db_connection()
@@ -286,13 +328,22 @@ def _run_update(options: dict):
     regions = options.get("regions") or ["global", "jp"]
     stale_hours = int(options.get("stale_hours") or 24)
     max_tournaments = options.get("max_tournaments")
+    max_index_pages_per_region = options.get("max_index_pages_per_region")
+    max_tournaments_per_region = options.get("max_tournaments_per_region")
     max_decks = options.get("max_decks")
-    max_tournaments = int(max_tournaments) if max_tournaments else None
-    max_decks = int(max_decks) if max_decks else None
+    max_tournaments = _positive_int(max_tournaments)
+    max_index_pages_per_region = _positive_int(max_index_pages_per_region)
+    max_tournaments_per_region = _positive_int(max_tournaments_per_region)
+    max_decks = _positive_int(max_decks)
 
     try:
-        update_state.update(message="Fetching complete Limitless tournament indexes")
-        tournaments = _fetch_indexes(client, regions)
+        update_state.update(message="Fetching Limitless tournament indexes")
+        tournaments = _fetch_indexes(
+            client,
+            regions,
+            max_pages_per_region=max_index_pages_per_region,
+            max_tournaments_per_region=max_tournaments_per_region,
+        )
         if max_tournaments:
             tournaments = tournaments[:max_tournaments]
         update_state.update(
@@ -343,7 +394,7 @@ def start_update(options: dict | None = None) -> tuple[bool, str]:
         if update_state.running:
             return False, "Limitless update is already running"
         ensure_schema()
-        update_state.reset("daily")
+        update_state.reset(options.get("mode") or "daily")
         thread = threading.Thread(target=_run_update, args=(options,), daemon=True)
         thread.start()
     return True, "Limitless update started"

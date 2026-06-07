@@ -133,6 +133,16 @@ def ensure_card_list_column():
         conn.close()
 
 
+def _has_populated_card_list(value):
+    if not value:
+        return False
+    try:
+        cards = json.loads(value) if isinstance(value, str) else value
+    except Exception:
+        return False
+    return isinstance(cards, list) and len(cards) > 0
+
+
 def extract_deck_info_from_html(html_content):
     """解析牌組列表頁面"""
     decks = []
@@ -232,7 +242,7 @@ def resolve_and_write_deck_cards(cursor, deck_id, deck_cards_api):
 
 def crawl_and_process_page(page_num, today_str=None):
     """爬取一頁牌組列表並處理。
-    today_str: 若提供則只處理該日期的牌組（每日模式）。
+    today_str: 若提供則只處理該日期的牌組。
     """
     url = f"{DECK_LIST_URL}?page={page_num}"
     found, new, skipped, failed = 0, 0, 0, 0
@@ -256,17 +266,20 @@ def crawl_and_process_page(page_num, today_str=None):
 
             code = deck_info["code"]
 
-            # 檢查是否已存在
+            # 已完整匯入的牌組跳過；舊資料若缺 card_list 則補齊。
             conn = database.get_db_connection()
             if not conn:
                 failed += 1
                 continue
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT id FROM imported_decks WHERE deck_code = %s", (code,))
+                cursor.execute(
+                    "SELECT id, card_list FROM imported_decks WHERE deck_code = %s",
+                    (code,),
+                )
                 exists = cursor.fetchone()
                 conn.close()
-                if exists:
+                if exists and _has_populated_card_list(exists.get("card_list")):
                     skipped += 1
                     continue
             except Exception:
@@ -306,13 +319,16 @@ def crawl_and_process_page(page_num, today_str=None):
                 deck_id = row["id"]
                 conn.commit()
 
+                cursor.execute("DELETE FROM deck_cards WHERE deck_id = %s", (deck_id,))
+                cursor.execute("DELETE FROM deck_search_index WHERE deck_id = %s", (deck_id,))
+
                 # 解析卡片 → 寫入 deck_cards + 建立 card_list
                 card_list, matched, unmatched = resolve_and_write_deck_cards(
                     cursor, deck_id, deck_cards_api
                 )
                 cards_total += len(card_list)
 
-                                # 寫入 search index
+                # 寫入 search index
                 for item in card_list:
                     vid = item.get('id')
                     qty = item.get('c', 1)
@@ -358,20 +374,19 @@ def crawl_and_process_page(page_num, today_str=None):
 
 # ── 公開 API ──
 def run_daily_update(worker_count=3):
-    """每日更新：只匯入今日日期的牌組（掃描前 5 頁）"""
+    """每日更新：掃描最新幾頁，匯入新牌組並補齊缺 card_list 的舊資料"""
     if update_state.running:
         return False, "更新已在進行中"
 
     ensure_card_list_column()
 
-    today = date.today().strftime("%Y.%m.%d")
     pages = min(5, TOTAL_PAGES)
     update_state.reset("daily", pages)
-    update_state.update(message=f"每日更新：掃描前 {pages} 頁，日期={today}")
+    update_state.update(message=f"每日更新：掃描最新前 {pages} 頁")
 
     def _run():
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(crawl_and_process_page, p, today): p for p in range(1, pages + 1)}
+            futures = {executor.submit(crawl_and_process_page, p, None): p for p in range(1, pages + 1)}
             for f in as_completed(futures):
                 try:
                     f.result()
@@ -381,7 +396,7 @@ def run_daily_update(worker_count=3):
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    return True, f"每日更新已啟動（{worker_count} 機器人，日期={today}）"
+    return True, f"每日更新已啟動（{worker_count} workers，最新 {pages} 頁）"
 
 
 def run_full_update(worker_count=5):

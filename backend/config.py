@@ -5,6 +5,42 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.normpath(os.path.join(BASE_DIR, '..'))
 load_dotenv(os.path.join(ROOT_DIR, '.env'))
 
+
+def _env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).lower() in ['true', 'on', '1', 'yes']
+
+
+def _env_int(name, default):
+    value = os.environ.get(name)
+    if value in (None, ''):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_optional_int(name, default=None):
+    value = os.environ.get(name)
+    if value in (None, ''):
+        return default
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_csv(name, default):
+    value = os.environ.get(name)
+    if value in (None, ''):
+        return default
+    items = [item.strip() for item in str(value).split(',') if item.strip()]
+    return items or default
+
 # ── 前端資源 ──
 FRONTEND_DIR = os.path.normpath(os.path.join(BASE_DIR, '..', 'frontend'))
 TEMPLATE_DIR = os.path.join(FRONTEND_DIR, 'html')
@@ -25,23 +61,34 @@ DATABASE_URL = os.environ.get('DATABASE_URL',
 # ── Flask 安全 ──
 SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-this-in-prod-123456'
 SECURITY_PASSWORD_SALT = os.environ.get('SECURITY_PASSWORD_SALT') or 'my-precious-salt'
-FLASK_DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() in ['true', 'on', '1']
-SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() in ['true', 'on', '1']
+FLASK_DEBUG = _env_bool('FLASK_DEBUG', False)
+SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', False)
 SESSION_COOKIE_SAMESITE = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 PREFERRED_URL_SCHEME = os.environ.get('PREFERRED_URL_SCHEME', 'https')
 SERVER_NAME = os.environ.get('SERVER_NAME') or None
-ENABLE_DECK_UPDATER = os.environ.get('ENABLE_DECK_UPDATER', 'true').lower() in ['true', 'on', '1']
+ENABLE_JP_DECK_AUTO_UPDATE = _env_bool('ENABLE_JP_DECK_AUTO_UPDATE', True)
+JP_DECK_AUTO_UPDATE_INTERVAL_SECONDS = _env_int('JP_DECK_AUTO_UPDATE_INTERVAL_SECONDS', 86400)
+JP_DECK_AUTO_UPDATE_WORKERS = max(1, _env_int('JP_DECK_AUTO_UPDATE_WORKERS', 3))
+ENABLE_LIMITLESS_AUTO_UPDATE = _env_bool('ENABLE_LIMITLESS_AUTO_UPDATE', True)
+LIMITLESS_AUTO_UPDATE_INTERVAL_SECONDS = _env_int('LIMITLESS_AUTO_UPDATE_INTERVAL_SECONDS', 86400)
+LIMITLESS_AUTO_UPDATE_REGIONS = _env_csv('LIMITLESS_AUTO_UPDATE_REGIONS', ['global', 'jp'])
+LIMITLESS_AUTO_UPDATE_STALE_HOURS = _env_int('LIMITLESS_AUTO_UPDATE_STALE_HOURS', 20)
+LIMITLESS_AUTO_UPDATE_MAX_INDEX_PAGES_PER_REGION = _env_optional_int('LIMITLESS_AUTO_UPDATE_MAX_INDEX_PAGES_PER_REGION', 1)
+LIMITLESS_AUTO_UPDATE_MAX_TOURNAMENTS_PER_REGION = _env_optional_int('LIMITLESS_AUTO_UPDATE_MAX_TOURNAMENTS_PER_REGION', 20)
+LIMITLESS_AUTO_UPDATE_MAX_DECKS = _env_optional_int('LIMITLESS_AUTO_UPDATE_MAX_DECKS', None)
+LIMITLESS_AUTO_UPDATE_INCLUDE_BLING = _env_bool('LIMITLESS_AUTO_UPDATE_INCLUDE_BLING', False)
+DECK_AUTO_UPDATE_INITIAL_DELAY_SECONDS = _env_int('DECK_AUTO_UPDATE_INITIAL_DELAY_SECONDS', 30)
 AI_BASE_URL = os.environ.get('AI_BASE_URL') or 'https://api.openai.com/v1'
 AI_API_KEY = os.environ.get('AI_API_KEY') or ''
 AI_MODEL = os.environ.get('AI_MODEL') or ''
 AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL') or 'text-embedding-3-small'
 AI_EMBEDDING_DIMENSIONS = int(os.environ.get('AI_EMBEDDING_DIMENSIONS') or 1536)
-AI_TIMEOUT = int(os.environ.get('AI_TIMEOUT') or 45)
+AI_TIMEOUT = _env_int('AI_TIMEOUT', 45)
 
 # ── SMTP ──
 MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.gmail.com'
-MAIL_PORT = int(os.environ.get('MAIL_PORT') or 587)
-MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'true').lower() in ['true', 'on', '1']
+MAIL_PORT = _env_int('MAIL_PORT', 587)
+MAIL_USE_TLS = _env_bool('MAIL_USE_TLS', True)
 MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
 MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
 MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER')

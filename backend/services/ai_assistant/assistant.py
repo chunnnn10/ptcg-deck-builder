@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import uuid
+from collections import Counter
 from typing import Any
 
 from .client import AIClientError, AIConfigError, chat_completion, chat_message
@@ -39,7 +40,8 @@ Rules:
 - In DeepThink mode, compare multiple tool results and explain the practical deck-building conclusion without exposing hidden chain-of-thought.
 - Do not use your memory or general Pokemon TCG knowledge as evidence. If a card role, combo, matchup, or counter is not supported by tool results, say it is not verified instead of inventing it.
 - Do not include a full 60-card decklist or markdown decklist tables in answer text when decklists is populated. The frontend renders the decklist visually; answer should focus on why the deck is recommended, how it plays, and what to adjust.
-- When referenced_tabs or referenced_cards are provided, treat them as user-selected context. Inspect those decks/cards before giving tab comparison, upgrade, or import advice, and name which tabs/cards were considered in the concise answer."""
+- When referenced_tabs or referenced_cards are provided, treat them as user-selected context. Inspect those decks/cards before giving tab comparison, upgrade, or import advice, and name which tabs/cards were considered in the concise answer.
+- When referenced_tab_analysis or deck_play_analysis is provided, use that play-pattern analysis as the starting point for searches and recommendations. Do not contradict it unless later tool evidence clearly shows why."""
 
 
 FINAL_JSON_INSTRUCTIONS = """Return one JSON object only with this shape:
@@ -307,11 +309,314 @@ def _compact_referenced_tabs(value: Any, max_tabs: int = 6, max_cards_per_tab: i
     return tabs
 
 
+def _card_count(card: dict[str, Any]) -> int:
+    try:
+        return max(0, int(card.get("count") or 0))
+    except Exception:
+        return 0
+
+
+def _card_name(card: dict[str, Any]) -> str:
+    return str(card.get("name") or card.get("card_name") or card.get("jp_card_name") or "").strip()
+
+
+def _card_text(card: dict[str, Any]) -> str:
+    parts = [
+        str(card.get("name") or ""),
+        str(card.get("card_type") or ""),
+        str(card.get("sub_type") or ""),
+        str(card.get("description") or ""),
+    ]
+    for skill in card.get("skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        parts.extend([
+            str(skill.get("type") or ""),
+            str(skill.get("name") or ""),
+            " ".join(str(item) for item in (skill.get("cost") or []) if item),
+            str(skill.get("damage") or ""),
+            str(skill.get("effect") or skill.get("text") or skill.get("description") or ""),
+        ])
+    return " ".join(part for part in parts if part).strip()
+
+
+def _card_brief(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": _card_name(card),
+        "count": _card_count(card),
+        "card_type": card.get("card_type") or "",
+        "sub_type": card.get("sub_type") or "",
+        "set_code": card.get("set_code") or "",
+        "set_number": card.get("set_number") or "",
+        "regulation_mark": card.get("regulation_mark") or "",
+    }
+
+
+def _top_cards(cards: list[dict[str, Any]], section: str | None = None, limit: int = 6) -> list[dict[str, Any]]:
+    filtered = []
+    for card in cards:
+        if not isinstance(card, dict) or not _card_name(card):
+            continue
+        if section and str(card.get("section") or "").lower() != section:
+            continue
+        filtered.append(card)
+    filtered.sort(key=lambda card: (-_card_count(card), _card_name(card)))
+    return [_card_brief(card) for card in filtered[:limit]]
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    haystack = str(text or "").lower()
+    return any(keyword.lower() in haystack for keyword in keywords)
+
+
+ENERGY_PLAN_KEYWORDS = (
+    "能量",
+    "附加",
+    "貼附",
+    "附於",
+    "填能",
+    "特填",
+    "加速",
+    "棄牌區",
+    "從牌庫",
+    "從手牌",
+    "basic energy",
+    "attach",
+    "attached",
+    "energy acceleration",
+)
+
+SETUP_KEYWORDS = (
+    "牌庫",
+    "加入手牌",
+    "抽",
+    "搜尋",
+    "選擇",
+    "檢索",
+    "search your deck",
+    "draw",
+    "put into your hand",
+)
+
+
+def _enrich_cards_for_play_analysis(cards: list[dict[str, Any]], language: str) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    detail_budget = 30
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        item = dict(card)
+        needs_detail = not item.get("description") and not item.get("skills")
+        card_id = str(item.get("card_id") or item.get("id") or "").strip()
+        if needs_detail and card_id and detail_budget > 0:
+            detail = get_card_detail(card_id, language if language in ("tw", "jp") else "tw")
+            if detail:
+                count = item.get("count")
+                section = item.get("section")
+                item = {**item, **detail}
+                item["count"] = count
+                item["section"] = section or item.get("section")
+            detail_budget -= 1
+        enriched.append(item)
+    return enriched
+
+
+def _analysis_card_line(cards: list[dict[str, Any]], fallback: str = "未在牌表文字中明確辨識") -> str:
+    names = [f"{card.get('name')} x{card.get('count')}" for card in cards if card.get("name")]
+    return "、".join(names) if names else fallback
+
+
+def _analysis_query_terms(analysis: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    for key in ("key_pokemon", "likely_attackers", "energy_support_cards", "setup_cards"):
+        for card in analysis.get(key) or []:
+            name = str(card.get("name") or "").strip()
+            if name and name not in terms:
+                terms.append(name)
+    return terms[:10]
+
+
+def _analyze_deck_play_plan(source: dict[str, Any], source_type: str, language: str = "tw") -> dict[str, Any]:
+    raw_cards = source.get("cards") if isinstance(source.get("cards"), list) else []
+    cards = _normalize_decklist_cards(raw_cards)
+    cards = _enrich_cards_for_play_analysis(cards, language)
+    total = sum(_card_count(card) for card in cards)
+
+    section_counts: Counter[str] = Counter()
+    for card in cards:
+        section_counts[str(card.get("section") or "unknown").lower()] += _card_count(card)
+
+    pokemon = [card for card in cards if str(card.get("section") or "").lower() == "pokemon"]
+    trainers = [card for card in cards if str(card.get("section") or "").lower() == "trainer"]
+    energy_cards = [card for card in cards if str(card.get("section") or "").lower() == "energy"]
+    energy_support = [
+        card for card in cards
+        if str(card.get("section") or "").lower() != "energy"
+        and _contains_any(_card_text(card), ENERGY_PLAN_KEYWORDS)
+    ]
+    setup_cards = [
+        card for card in trainers
+        if _contains_any(_card_text(card), SETUP_KEYWORDS)
+    ]
+    likely_attackers = [
+        card for card in pokemon
+        if _card_count(card) >= 2
+        or "ex" in _card_name(card).lower()
+        or any(str(skill.get("damage") or "").strip() for skill in (card.get("skills") or []) if isinstance(skill, dict))
+    ]
+
+    likely_attackers.sort(key=lambda card: (-_card_count(card), "ex" not in _card_name(card).lower(), _card_name(card)))
+    energy_support.sort(key=lambda card: (-_card_count(card), _card_name(card)))
+    setup_cards.sort(key=lambda card: (-_card_count(card), _card_name(card)))
+
+    title = str(source.get("title") or source.get("name") or source.get("deck_id") or "Untitled Deck")
+    key_pokemon = _top_cards(cards, "pokemon", 6)
+    key_trainers = _top_cards(cards, "trainer", 8)
+    energy_briefs = [_card_brief(card) for card in sorted(energy_cards, key=lambda card: (-_card_count(card), _card_name(card)))[:8]]
+    energy_support_briefs = [_card_brief(card) for card in energy_support[:8]]
+    setup_briefs = [_card_brief(card) for card in setup_cards[:8]]
+    attacker_briefs = [_card_brief(card) for card in likely_attackers[:6]]
+
+    if attacker_briefs:
+        plan = f"初步判斷是以 {_analysis_card_line(attacker_briefs)} 作為主要進攻或場面核心。"
+    elif key_pokemon:
+        plan = f"初步判斷核心寶可夢是 {_analysis_card_line(key_pokemon)}。"
+    else:
+        plan = "目前傳入的牌表未能明確辨識主要寶可夢核心。"
+
+    if energy_support_briefs:
+        energy_summary = f"可確認的能量/填能相關牌有 {_analysis_card_line(energy_support_briefs)}。"
+    elif energy_briefs:
+        energy_summary = "目前只明確看到能量本身，未從已傳入卡文辨識到穩定的特填或加速來源。"
+    else:
+        energy_summary = "目前牌表中沒有明確能量線，後續會特別檢查是否需要補能量或特填手段。"
+
+    setup_summary = (
+        f"穩定性與展開可能依賴 {_analysis_card_line(setup_briefs)}。"
+        if setup_briefs else
+        "目前未從卡文中明確辨識到主要檢索/抽牌引擎。"
+    )
+    counts_summary = (
+        f"{total} 張，Pokémon {section_counts.get('pokemon', 0)} / "
+        f"Trainer {section_counts.get('trainer', 0)} / Energy {section_counts.get('energy', 0)}。"
+    )
+    visible_summary = "\n".join([
+        f"{title}：{counts_summary}",
+        plan,
+        energy_summary,
+        setup_summary,
+        "我現在會進行工具調用搜索，搜尋相近牌組以及 H/I/J 可用卡牌，以給出更準確的建議。",
+    ])
+
+    return {
+        "source_type": source_type,
+        "id": source.get("id") or source.get("deck_id"),
+        "title": title,
+        "total_count": total,
+        "section_counts": dict(section_counts),
+        "key_pokemon": key_pokemon,
+        "likely_attackers": attacker_briefs,
+        "key_trainers": key_trainers,
+        "energy_cards": energy_briefs,
+        "energy_support_cards": energy_support_briefs,
+        "setup_cards": setup_briefs,
+        "game_plan_summary": plan,
+        "energy_summary": energy_summary,
+        "setup_summary": setup_summary,
+        "user_visible_summary": visible_summary,
+        "search_query_terms": [],
+    }
+
+
+def _prefetch_query(user_text: str, context: dict[str, Any]) -> str:
+    terms: list[str] = []
+    for analysis in context.get("referenced_tab_analysis") or []:
+        if isinstance(analysis, dict):
+            terms.extend(_analysis_query_terms(analysis))
+    cleaned_terms = []
+    seen = set()
+    for term in terms:
+        text = str(term or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            cleaned_terms.append(text)
+    if not cleaned_terms:
+        return user_text
+    return f"{user_text}\n引用牌組核心：{'、'.join(cleaned_terms[:8])}"
+
+
+def _analyze_referenced_tabs(context: dict[str, Any]) -> list[dict[str, Any]]:
+    tabs = context.get("referenced_tabs") if isinstance(context.get("referenced_tabs"), list) else []
+    if not tabs:
+        context["referenced_tab_analysis"] = []
+        return []
+
+    job_id = context.get("job_id")
+    language = str(context.get("language") or "tw")
+    analyses: list[dict[str, Any]] = []
+    _append_job_step(job_id, {"status": "running", "message": "先讀取 @tab 牌表並分析玩法"})
+    for tab in tabs:
+        analysis = _analyze_deck_play_plan(tab, "referenced_tab", language)
+        analysis["search_query_terms"] = _analysis_query_terms(analysis)
+        analyses.append(analysis)
+        _append_job_step(
+            job_id,
+            {
+                "status": "running",
+                "message": f"已理解 @tab：{analysis.get('title')}",
+                "detail": analysis.get("user_visible_summary"),
+                "tool": "analyze_referenced_tabs",
+                "result_count": analysis.get("total_count"),
+            },
+        )
+    _append_job_step(
+        job_id,
+        {
+            "status": "running",
+            "message": "我現在會進行工具調用搜索，搜尋相近牌組以及可用卡牌",
+        },
+    )
+    context["referenced_tab_analysis"] = analyses
+    result = {"tabs": analyses, "tab_count": len(analyses)}
+    return [
+        {
+            "tool": "analyze_referenced_tabs",
+            "args": {"tab_count": len(analyses)},
+            "result": result,
+            "result_count": len(analyses),
+            "detail": "\n\n".join(analysis.get("user_visible_summary") or "" for analysis in analyses if analysis.get("user_visible_summary")),
+        }
+    ]
+
+
+def _collect_play_analysis_from_value(value: Any) -> list[dict[str, Any]]:
+    analyses: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        if value.get("game_plan_summary") and value.get("energy_summary"):
+            analyses.append(value)
+        for key in ("play_analysis", "tabs", "deck_analyses", "analyses"):
+            nested = value.get(key)
+            analyses.extend(_collect_play_analysis_from_value(nested))
+    elif isinstance(value, list):
+        for item in value:
+            analyses.extend(_collect_play_analysis_from_value(item))
+
+    compact: list[dict[str, Any]] = []
+    seen = set()
+    for analysis in analyses:
+        key = analysis.get("id") or analysis.get("title") or json.dumps(analysis, ensure_ascii=False, default=str)[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        compact.append(analysis)
+    return compact[:8]
+
+
 def _result_count(result: Any) -> int:
     if isinstance(result, list):
         return len(result)
     if isinstance(result, dict):
-        for key in ("cards", "sample_decks", "meta_references", "deck_actions"):
+        for key in ("cards", "sample_decks", "meta_references", "deck_actions", "tabs", "analyses", "deck_analyses"):
             if isinstance(result.get(key), list):
                 return len(result.get(key) or [])
         return 1 if result else 0
@@ -339,6 +644,10 @@ def _tool_step_message(item: dict[str, Any]) -> str:
         return f"產生牌組變更草案（{count}）"
     if tool == "get_card_detail":
         return f"讀取卡牌詳情：{args.get('card_id') or ''}"
+    if tool == "analyze_referenced_tabs":
+        return f"分析引用 tab 玩法（{count}）"
+    if tool == "analyze_meta_deck_play_plan":
+        return f"分析 Limitless 樣本玩法：{args.get('deck_id') or ''}"
     return f"{tool} returned {count} result(s)"
 
 
@@ -349,6 +658,7 @@ def _tool_step_status(item: dict[str, Any]) -> dict[str, Any]:
         "tool": item.get("tool"),
         "result_count": item.get("result_count"),
         "error": item.get("error"),
+        "detail": item.get("detail"),
     }
 
 
@@ -474,31 +784,32 @@ def _prefetch_context(user_text: str, context: dict[str, Any], deep_think: bool,
     if not should_prefetch:
         return tool_results
 
+    search_text = _prefetch_query(user_text, context)
     published_count = 0
     try:
         _append_job_step(context.get("job_id"), {"status": "running", "message": "搜尋 H/I/J 標準卡池"})
-        cards = semantic_search_cards(user_text, 12 if deep_think else 8, {"language": language, "standard_marks": list(STANDARD_MARKS)})
-        _append_tool_result(tool_results, "semantic_search_cards", {"query": user_text, "limit": 12 if deep_think else 8}, cards)
+        cards = semantic_search_cards(search_text, 12 if deep_think else 8, {"language": language, "standard_marks": list(STANDARD_MARKS)})
+        _append_tool_result(tool_results, "semantic_search_cards", {"query": search_text, "limit": 12 if deep_think else 8}, cards)
     except Exception as exc:
-        _append_tool_error(tool_results, "semantic_search_cards", {"query": user_text}, exc)
+        _append_tool_error(tool_results, "semantic_search_cards", {"query": search_text}, exc)
     published_count = _publish_new_steps(context, tool_results, published_count)
 
     try:
         _append_job_step(context.get("job_id"), {"status": "running", "message": "搜尋 Limitless Meta 牌組索引"})
-        meta = search_meta_decks(user_text, 6 if deep_think else 4)
-        _append_tool_result(tool_results, "search_meta_decks", {"archetype_or_query": user_text, "limit": 6 if deep_think else 4}, meta)
+        meta = search_meta_decks(search_text, 6 if deep_think else 4)
+        _append_tool_result(tool_results, "search_meta_decks", {"archetype_or_query": search_text, "limit": 6 if deep_think else 4}, meta)
     except Exception as exc:
         meta = []
-        _append_tool_error(tool_results, "search_meta_decks", {"archetype_or_query": user_text}, exc)
+        _append_tool_error(tool_results, "search_meta_decks", {"archetype_or_query": search_text}, exc)
     published_count = _publish_new_steps(context, tool_results, published_count)
 
     if deep_think:
         try:
             _append_job_step(context.get("job_id"), {"status": "running", "message": "整理 Meta 共通牌與樣本牌表"})
-            summary = summarize_meta_archetype(user_text)
-            _append_tool_result(tool_results, "summarize_meta_archetype", {"query": user_text}, summary)
+            summary = summarize_meta_archetype(search_text)
+            _append_tool_result(tool_results, "summarize_meta_archetype", {"query": search_text}, summary)
         except Exception as exc:
-            _append_tool_error(tool_results, "summarize_meta_archetype", {"query": user_text}, exc)
+            _append_tool_error(tool_results, "summarize_meta_archetype", {"query": search_text}, exc)
         published_count = _publish_new_steps(context, tool_results, published_count)
 
     deck_ids: list[str] = []
@@ -517,6 +828,17 @@ def _prefetch_context(user_text: str, context: dict[str, Any], deep_think: bool,
             _append_job_step(context.get("job_id"), {"status": "running", "message": f"讀取 Limitless 牌表 {deck_id}"})
             decklist = get_meta_deck_cards(deck_id, language, "normal")
             _append_tool_result(tool_results, "get_meta_deck_cards", {"deck_id": deck_id, "language": language, "mode": "normal"}, decklist)
+            if decklist.get("success") and decklist.get("cards"):
+                analysis = _analyze_deck_play_plan(decklist, "limitless_sample", language)
+                analysis["search_query_terms"] = _analysis_query_terms(analysis)
+                context.setdefault("meta_deck_analysis", []).append(analysis)
+                tool_results.append({
+                    "tool": "analyze_meta_deck_play_plan",
+                    "args": {"deck_id": deck_id},
+                    "result": analysis,
+                    "result_count": analysis.get("total_count") or 0,
+                    "detail": analysis.get("user_visible_summary"),
+                })
         except Exception as exc:
             _append_tool_error(tool_results, "get_meta_deck_cards", {"deck_id": deck_id, "language": language, "mode": "normal"}, exc)
         published_count = _publish_new_steps(context, tool_results, published_count)
@@ -928,6 +1250,7 @@ def _normalize_final(
                 "result_count": item.get("result_count"),
                 "error": item.get("error"),
                 "message": _tool_step_message(item),
+                "detail": item.get("detail"),
             }
             for item in tool_results
         ],
@@ -937,6 +1260,7 @@ def _normalize_final(
                 "message": _tool_step_message(item),
                 "tool": item.get("tool"),
                 "result_count": item.get("result_count"),
+                "detail": item.get("detail"),
             }
             for item in tool_results
         ],
@@ -1007,11 +1331,15 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
     context["standard_marks"] = [mark for mark in context.get("standard_marks") or list(STANDARD_MARKS) if mark in STANDARD_MARKS] or list(STANDARD_MARKS)
     deep_think = bool(context.get("deep_think"))
     is_deck_request = _is_deck_request(user_text)
-    tool_results: list[dict[str, Any]] = _prefetch_context(user_text, context, deep_think, is_deck_request)
+    tool_results: list[dict[str, Any]] = _analyze_referenced_tabs(context)
+    tool_results.extend(_prefetch_context(user_text, context, deep_think, is_deck_request))
     prefetched_context = {
         "cards": _collect_cards_from_value([item.get("result") for item in tool_results])[:16],
         "meta_references": _collect_meta_from_value([item.get("result") for item in tool_results])[:8],
         "decklists": _collect_decklists_from_value([item.get("result") for item in tool_results])[:2],
+        "deck_play_analysis": _collect_play_analysis_from_value([item.get("result") for item in tool_results])[:8],
+        "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
+        "meta_deck_analysis": context.get("meta_deck_analysis") or [],
         "referenced_tabs": context.get("referenced_tabs") or [],
         "referenced_cards": context.get("referenced_cards") or [],
     }
@@ -1032,12 +1360,14 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
                     "current_deck": context.get("deck") or [],
                     "referenced_tabs": context.get("referenced_tabs") or [],
                     "referenced_cards": context.get("referenced_cards") or [],
+                    "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
+                    "meta_deck_analysis": context.get("meta_deck_analysis") or [],
                     "standard_marks": context["standard_marks"],
                     "language": language,
                     "deep_think": deep_think,
                     "prefetched_context": prefetched_context,
                     "instruction": (
-                        "DeepThink mode: investigate broadly, compare meta decks, inspect concrete decklists, then provide a visual decklist/deck_actions. Tell the user which evidence was checked, but do not reveal hidden chain-of-thought."
+                        "DeepThink mode: start from referenced_tab_analysis/deck_play_analysis when present, then investigate broadly, compare meta decks, inspect concrete decklists, and provide a visual decklist/deck_actions. Tell the user which evidence was checked, but do not reveal hidden chain-of-thought."
                         if deep_think else
                         "Use prefetched context and tools as needed, then provide final structured JSON."
                     ),
@@ -1107,6 +1437,8 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
                             "current_deck": context.get("deck") or [],
                             "referenced_tabs": context.get("referenced_tabs") or [],
                             "referenced_cards": context.get("referenced_cards") or [],
+                            "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
+                            "meta_deck_analysis": context.get("meta_deck_analysis") or [],
                         },
                         18000,
                     )
