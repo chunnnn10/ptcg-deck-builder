@@ -1597,6 +1597,46 @@ def jp_crawler_status():
     return jsonify(jp_crawler.JP_UPDATE_STATE)
 
 
+@main_bp.route('/api/jp/auto-sync/status')
+def jp_card_auto_sync_status():
+    """取得日本牌庫自動同步狀態（每日偵測缺漏並補爬）"""
+    return jsonify(jp_crawler.get_auto_sync_status())
+
+
+@main_bp.route('/api/jp/auto-sync/run', methods=['POST'])
+@admin_required
+def jp_card_auto_sync_run():
+    """手動觸發一次牌庫自動同步（偵測 + 補爬缺漏卡牌）"""
+    if jp_crawler.JP_CARD_AUTO_SYNC_STATE['running']:
+        return jsonify({'ok': False, 'message': '同步進行中，請稍候'}), 409
+    if jp_crawler.JP_UPDATE_STATE['running']:
+        return jsonify({'ok': False, 'message': '手動爬蟲進行中，無法同步'}), 409
+
+    def _run():
+        jp_crawler.run_daily_card_sync(
+            num_workers=config.JP_CARD_AUTO_UPDATE_WORKERS,
+            skip_images=config.JP_CARD_AUTO_UPDATE_SKIP_IMAGES,
+            max_missing_per_run=config.JP_CARD_AUTO_UPDATE_MAX_MISSING_PER_RUN,
+        )
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True, 'message': '已啟動牌庫自動同步'})
+
+
+@main_bp.route('/api/jp/auto-sync/missing')
+@admin_required
+def jp_card_auto_sync_missing():
+    """僅偵測（不補爬）目前缺漏的卡牌，回傳缺漏 ID 與數量"""
+    result = jp_crawler.detect_missing_cards()
+    return jsonify({
+        'source': result['source'],
+        'db_count': result['db_count'],
+        'site_count': result['site_count'],
+        'missing_count': len(result['missing']),
+        'missing': result['missing'][:200],
+    })
+
+
 @main_bp.route('/api/jp/crawler/expansions')
 def jp_expansion_list():
     """取得 JP 擴充包列表 (從搜尋頁 JS 資料解析)"""

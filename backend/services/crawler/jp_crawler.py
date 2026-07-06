@@ -101,6 +101,34 @@ def jp_log(msg: str):
 
 
 # ==========================================
+# 牌庫自動同步狀態 (獨立於手動爬蟲狀態)
+# ==========================================
+JP_CARD_AUTO_SYNC_STATE = {
+    'running': False,
+    'enabled': True,
+    'progress': 0,
+    'total_tasks': 0,
+    'completed_tasks': 0,
+    'last_run': None,
+    'next_run': None,
+    'last_summary': None,
+    'last_missing_count': 0,
+    'last_crawled_count': 0,
+    'logs': [],
+}
+jp_auto_sync_lock = threading.Lock()
+
+
+def auto_sync_log(msg: str):
+    """寫入牌庫自動同步日誌"""
+    print(f"[JP Card AutoSync] {msg}")
+    with jp_auto_sync_lock:
+        JP_CARD_AUTO_SYNC_STATE['logs'].insert(0, msg)
+        if len(JP_CARD_AUTO_SYNC_STATE['logs']) > 200:
+            JP_CARD_AUTO_SYNC_STATE['logs'].pop()
+
+
+# ==========================================
 # Dataclass
 # ==========================================
 @dataclass
@@ -858,15 +886,27 @@ def crawl_by_expansions(expansion_codes: list[str], num_workers: int = 30,
 
 
 def _crawl_id_list(card_ids: list[int], num_workers: int = 30,
-                   skip_images: bool = False) -> dict:
-    """爬取指定 ID 列表（複用 crawl_card_range 的多線程邏輯但只爬指定 ID）"""
+                   skip_images: bool = False,
+                   state: dict = None, lock=None, log_fn=None) -> dict:
+    """
+    爬取指定 ID 列表（複用 crawl_card_range 的多線程邏輯但只爬指定 ID）。
+
+    state/lock/log_fn 可傳入自訂物件，供「牌庫自動同步」使用獨立狀態，
+    避免與手動爬蟲的 JP_UPDATE_STATE 互相干擾；不傳則沿用預設全域狀態。
+    """
     global JP_UPDATE_STATE
-    with jp_update_lock:
-        JP_UPDATE_STATE['running'] = True
-        JP_UPDATE_STATE['progress'] = 0
-        JP_UPDATE_STATE['completed_tasks'] = 0
-        JP_UPDATE_STATE['total_tasks'] = len(card_ids)
-        JP_UPDATE_STATE['logs'] = []
+    if state is None:
+        state = JP_UPDATE_STATE
+    if lock is None:
+        lock = jp_update_lock
+    if log_fn is None:
+        log_fn = jp_log
+    with lock:
+        state['running'] = True
+        state['progress'] = 0
+        state['completed_tasks'] = 0
+        state['total_tasks'] = len(card_ids)
+        state['logs'] = []
 
     os.makedirs(JP_IMAGE_DIR, exist_ok=True)
 
@@ -892,19 +932,19 @@ def _crawl_id_list(card_ids: list[int], num_workers: int = 30,
                         stats["parsed"] += 1
                         if stats["parsed"] % 50 == 0:
                             pct = stats["parsed"] / stats["total"] * 100 if stats["total"] else 0
-                            jp_log(f"[{pct:.1f}%] 已解析 {stats['parsed']}/{stats['total']} 張 (當前 ID: {card_id})")
+                            log_fn(f"[{pct:.1f}%] 已解析 {stats['parsed']}/{stats['total']} 張 (當前 ID: {card_id})")
                     else:
                         stats["skipped"] += 1
                 except Exception as e:
                     stats["errors"] += 1
                     if stats["errors"] <= 10:
-                        jp_log(f"Worker {worker_id} error at ID {card_id}: {e}")
+                        log_fn(f"Worker {worker_id} error at ID {card_id}: {e}")
 
-                with jp_update_lock:
-                    JP_UPDATE_STATE['completed_tasks'] += 1
-                    if JP_UPDATE_STATE['total_tasks'] > 0:
-                        JP_UPDATE_STATE['progress'] = int(
-                            JP_UPDATE_STATE['completed_tasks'] / JP_UPDATE_STATE['total_tasks'] * 100
+                with lock:
+                    state['completed_tasks'] += 1
+                    if state['total_tasks'] > 0:
+                        state['progress'] = int(
+                            state['completed_tasks'] / state['total_tasks'] * 100
                         )
                 if batch_count >= 50:
                     conn.commit()
@@ -925,13 +965,15 @@ def _crawl_id_list(card_ids: list[int], num_workers: int = 30,
     for cid in card_ids:
         task_queue.put(cid)
 
+    log_fn(f"開始爬取 {len(card_ids)} 個指定 ID，{num_workers} workers")
+
     task_queue.join()
 
-    with jp_update_lock:
-        JP_UPDATE_STATE['running'] = False
-        JP_UPDATE_STATE['progress'] = 100
+    with lock:
+        state['running'] = False
+        state['progress'] = 100
 
-    jp_log(f"🎉 爬取完成！解析: {stats['parsed']}, 跳過: {stats['skipped']}, 錯誤: {stats['errors']}")
+    log_fn(f"🎉 爬取完成！解析: {stats['parsed']}, 跳過: {stats['skipped']}, 錯誤: {stats['errors']}")
     return stats
 
 
@@ -959,3 +1001,184 @@ def detect_max_card_id(sample_step: int = 500) -> int:
         time.sleep(0.1)
     jp_log(f"估計最大 card ID: {low}")
     return low
+
+
+# ==========================================
+# 牌庫每日自動同步 (偵測缺漏卡牌並補爬)
+# ==========================================
+def _get_db_card_ids() -> set[int]:
+    """取得 jp_cards 表中已存在的 card ID（整數集合）。"""
+    ids: set[int] = set()
+    conn = database.get_db_connection()
+    if not conn:
+        auto_sync_log("無法取得 DB 連線")
+        return ids
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT card_id FROM jp_cards")
+        for row in cursor.fetchall():
+            # 相容 dict-row 與 tuple-row
+            cid = row['card_id'] if isinstance(row, dict) else row[0]
+            s = str(cid)
+            if s.startswith('jp'):
+                s = s[2:]
+            try:
+                ids.add(int(s))
+            except ValueError:
+                continue
+    except Exception as e:
+        auto_sync_log(f"讀取 DB card_id 失敗: {e}")
+    finally:
+        conn.close()
+    return ids
+
+
+def _collect_site_card_ids(max_expansions: int = None) -> set[int]:
+    """
+    從 JP 官網擴充包列表彙整所有已發行卡牌 ID（精準）。
+    回傳整數集合；若搜尋頁被擋無法取得擴充包則回傳空集合。
+    """
+    expansions = fetch_jp_expansion_meta()
+    if not expansions:
+        auto_sync_log("無法取得擴充包列表（搜尋頁可能被擋），將改用 ID 上限偵測")
+        return set()
+    auto_sync_log(f"共 {len(expansions)} 個擴充包，開始彙整卡牌 ID...")
+    site_ids: set[int] = set()
+    for idx, exp in enumerate(expansions, 1):
+        code = exp.get('code')
+        if not code:
+            continue
+        try:
+            ids = crawl_expansion_card_ids(code)
+            site_ids.update(ids)
+        except Exception as e:
+            auto_sync_log(f"擴充包 {code} ID 抓取失敗: {e}")
+        if max_expansions and idx >= max_expansions:
+            auto_sync_log(f"已達單次擴充包上限 {max_expansions}，其餘下次再補")
+            break
+        time.sleep(0.05)
+    auto_sync_log(f"官網共彙整 {len(site_ids)} 個不重複卡牌 ID")
+    return site_ids
+
+
+def detect_missing_cards(max_expansions: int = None) -> dict:
+    """
+    偵測 DB 缺漏的卡牌 ID。
+
+    優先用擴充包彙整（精準，能抓到所有缺口）；
+    若搜尋頁被擋則退回 detect_max_card_id 範圍偵測（只補 DB 最大 ID 之後的新卡）。
+
+    回傳:
+      {'missing': [int...], 'source': 'expansion'|'range',
+       'db_count': int, 'site_count': int|None}
+    """
+    db_ids = _get_db_card_ids()
+    auto_sync_log(f"DB 現有 {len(db_ids)} 張卡牌")
+
+    site_ids = _collect_site_card_ids(max_expansions=max_expansions)
+    if site_ids:
+        missing = sorted(site_ids - db_ids)
+        return {
+            'missing': missing,
+            'source': 'expansion',
+            'db_count': len(db_ids),
+            'site_count': len(site_ids),
+        }
+
+    # Fallback：只用 ID 上限偵測 DB 最大 ID 之後的新卡
+    auto_sync_log("擴充包彙整失敗，改用 ID 上限範圍偵測（僅補新卡）")
+    max_db = max(db_ids) if db_ids else 0
+    site_max = detect_max_card_id()
+    auto_sync_log(f"DB 最大 ID={max_db}，官網估計最大 ID={site_max}")
+    candidate = set(range(max_db + 1, site_max + 1))
+    missing = sorted(candidate - db_ids)
+    return {
+        'missing': missing,
+        'source': 'range',
+        'db_count': len(db_ids),
+        'site_count': None,
+    }
+
+
+def run_daily_card_sync(num_workers: int = 20, skip_images: bool = False,
+                        max_missing_per_run: int = 2000) -> dict:
+    """
+    每日牌庫自動同步：
+      1) 偵測 DB 缺漏的卡牌 ID
+      2) 補爬缺漏（單次上限 max_missing_per_run，超過則分批於後續每日消化）
+      3) 回傳摘要
+
+    與手動爬蟲互斥：若 JP_UPDATE_STATE['running']（手動爬蟲中）則跳過本次。
+    """
+    with jp_auto_sync_lock:
+        if JP_CARD_AUTO_SYNC_STATE['running']:
+            auto_sync_log("上次同步仍在執行中，跳過本次")
+            return {'status': 'skipped', 'reason': 'auto_sync_already_running'}
+        if JP_UPDATE_STATE['running']:
+            auto_sync_log("手動爬蟲進行中，跳過本次自動同步")
+            return {'status': 'skipped', 'reason': 'manual_crawl_running'}
+        JP_CARD_AUTO_SYNC_STATE['running'] = True
+        JP_CARD_AUTO_SYNC_STATE['progress'] = 0
+        JP_CARD_AUTO_SYNC_STATE['last_run'] = time.strftime('%Y-%m-%d %H:%M:%S')
+
+    try:
+        result = detect_missing_cards()
+        missing = result['missing']
+        JP_CARD_AUTO_SYNC_STATE['last_missing_count'] = len(missing)
+
+        if not missing:
+            auto_sync_log("✅ 牌庫已是最新，無缺漏卡牌")
+            summary = {
+                'status': 'up_to_date',
+                'source': result['source'],
+                'db_count': result['db_count'],
+                'site_count': result['site_count'],
+                'missing': 0,
+                'crawled': 0,
+                'remaining': 0,
+            }
+        else:
+            auto_sync_log(f"偵測到 {len(missing)} 張缺漏卡牌（來源: {result['source']}）")
+            batch = missing[:max_missing_per_run]
+            if len(missing) > max_missing_per_run:
+                auto_sync_log(
+                    f"缺漏數超過單次上限 {max_missing_per_run}，本次先補前 {len(batch)} 張，"
+                    f"其餘 {len(missing) - len(batch)} 張下次續補"
+                )
+            stats = _crawl_id_list(
+                batch,
+                num_workers=num_workers,
+                skip_images=skip_images,
+                state=JP_CARD_AUTO_SYNC_STATE,
+                lock=jp_auto_sync_lock,
+                log_fn=auto_sync_log,
+            )
+            summary = {
+                'status': 'crawled',
+                'source': result['source'],
+                'db_count': result['db_count'],
+                'site_count': result['site_count'],
+                'missing': len(missing),
+                'crawled': stats.get('parsed', 0),
+                'skipped': stats.get('skipped', 0),
+                'errors': stats.get('errors', 0),
+                'remaining': max(0, len(missing) - len(batch)),
+            }
+        auto_sync_log(f"同步完成: {summary}")
+        JP_CARD_AUTO_SYNC_STATE['last_summary'] = summary
+        JP_CARD_AUTO_SYNC_STATE['last_crawled_count'] = summary.get('crawled', 0)
+        return summary
+    except Exception as e:
+        auto_sync_log(f"❌ 牌庫自動同步失敗: {e}")
+        logger.exception("JP card auto sync failed")
+        return {'status': 'error', 'error': str(e)}
+    finally:
+        with jp_auto_sync_lock:
+            JP_CARD_AUTO_SYNC_STATE['running'] = False
+            JP_CARD_AUTO_SYNC_STATE['progress'] = 100
+
+
+def get_auto_sync_status() -> dict:
+    """供 API 讀取牌庫自動同步狀態（淺拷貍避免外部修改）。"""
+    with jp_auto_sync_lock:
+        return dict(JP_CARD_AUTO_SYNC_STATE)
