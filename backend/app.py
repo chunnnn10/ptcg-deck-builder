@@ -73,16 +73,34 @@ def run_jp_deck_auto_update_service():
 
     while True:
         try:
-            from services.deck_importer.deck_updater import get_update_status, run_daily_update
-
-            print(
-                f">>> [JP Deck Auto Update] {time.strftime('%Y-%m-%d %H:%M:%S')} starting daily sync",
-                flush=True,
+            from services.deck_importer.deck_updater import (
+                get_update_status, run_daily_update, run_gap_fill_update, save_run_meta,
             )
+
+            now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+            next_run_str = time.strftime(
+                '%Y-%m-%d %H:%M:%S',
+                time.localtime(time.time() + max(60, int(config.JP_DECK_AUTO_UPDATE_INTERVAL_SECONDS))),
+            )
+            print(f">>> [JP Deck Auto Update] {now_str} starting daily sync", flush=True)
+
+            # 1) 每日：掃描最新 5 頁，匯入新牌組
             success, message = run_daily_update(worker_count=config.JP_DECK_AUTO_UPDATE_WORKERS)
             print(f">>> [JP Deck Auto Update] {message}", flush=True)
             if success:
                 _wait_for_async_update(get_update_status, "JP Deck Auto Update", poll_seconds=15)
+            save_run_meta('daily', next_run_str)
+
+            # 2) 輪轉增量缺漏偵測：每日掃描 10 頁，~198 天覆蓋全部 1980 頁
+            if config.ENABLE_JP_DECK_GAP_FILL:
+                gsuccess, gmessage = run_gap_fill_update(
+                    worker_count=config.JP_DECK_AUTO_UPDATE_WORKERS,
+                    pages_per_run=config.JP_DECK_GAP_FILL_PAGES,
+                )
+                print(f">>> [JP Deck Auto Update] {gmessage}", flush=True)
+                if gsuccess:
+                    _wait_for_async_update(get_update_status, "JP Deck Auto Update", poll_seconds=15)
+                save_run_meta('gap_fill', next_run_str)
         except Exception as e:
             print(f">>> [JP Deck Auto Update] error: {e}", flush=True)
         _sleep_interval(config.JP_DECK_AUTO_UPDATE_INTERVAL_SECONDS)

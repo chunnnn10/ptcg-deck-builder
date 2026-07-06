@@ -774,6 +774,7 @@ function useAdminUpdate() {
         showDeckAdmin.value = true;
         deckAdminTab.value = 'jp';
         loadDbStats();
+        loadDeckUpdateStatus();
     };
 
     const openLimitlessAdmin = () => {
@@ -873,7 +874,10 @@ function useAdminUpdate() {
         message: '就緒',
         progress: 0,
         elapsed: '',
-        lastResult: null
+        lastResult: null,
+        last_run: null,
+        next_run: null,
+        gap_fill: {},
     });
     let dailyPollTimer = null;
 
@@ -915,6 +919,37 @@ function useAdminUpdate() {
         } catch (e) {
             dailyPollTimer = setTimeout(pollDailyUpdate, 3000);
         }
+    };
+
+    // 載入牌庫更新狀態（開啟面板時呼叫一次；進行中則接續輪詢）
+    const loadDeckUpdateStatus = async () => {
+        try {
+            const res = await fetch('/api/admin/deck-update/status');
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(dailyUpdateState, data.status);
+                if (data.status.running) pollDailyUpdate();
+            }
+        } catch (e) { console.error('deck update status load error:', e); }
+    };
+
+    // 手動觸發缺漏偵測（輪轉增量，預設掃 10 頁，補齊從未匯入的牌組）
+    const startGapFill = async () => {
+        if (dailyUpdateState.running) return;
+        try {
+            const res = await fetch('/api/admin/deck-update/gap-fill', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(dailyUpdateState, data.status);
+                pollDailyUpdate();
+            } else {
+                alert(data.message || '啟動失敗');
+            }
+        } catch (e) { alert('連線錯誤'); }
     };
 
     // === 完整牌組更新 ===
@@ -1143,6 +1178,8 @@ function useAdminUpdate() {
         dailyUpdateBotCount,
         dailyUpdateState,
         startDailyUpdate,
+        loadDeckUpdateStatus,
+        startGapFill,
         fullUpdateBotCount,
         fullUpdateState,
         startFullUpdate,

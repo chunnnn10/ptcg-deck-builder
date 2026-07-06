@@ -31,6 +31,9 @@ HEADERS = {
 
 DECK_API_URL = "https://ptcgtw.shop/index_function/api/23_01_load_deck_ptcgtw_api.php"
 
+# 持久化最新更新時間 / 缺漏偵測摘要（重啟後 admin 仍可顯示）
+DECK_UPDATE_META_FILE = os.path.join('data', 'deck_update_meta.json')
+
 
 # ── 狀態追蹤 ──
 class UpdateState:
@@ -424,5 +427,92 @@ def run_full_update(worker_count=5):
     return True, f"完整更新已啟動（{worker_count} 機器人，{TOTAL_PAGES} 頁）"
 
 
+def get_total_pages():
+    """動態偵測 ptcgtw 牌組列表總頁數（失敗回退 TOTAL_PAGES 常數）。"""
+    try:
+        import re
+        resp = requests.get(f"{DECK_LIST_URL}?page=1", headers=HEADERS, timeout=20)
+        if resp.status_code == 200:
+            nums = [int(m) for m in re.findall(r'page=(\d+)', resp.text)]
+            if nums:
+                return max(nums)
+    except Exception:
+        pass
+    return TOTAL_PAGES
+
+
+def run_gap_fill_update(worker_count=3, pages_per_run=10):
+    """輪轉增量缺漏偵測：每日掃描一個以日期為種子的移動窗口（預設 10 頁），
+    約 total/pages_per_run 天可覆蓋全部頁面，補齊從未匯入的牌組。
+    與每日/完整更新互斥（共用 update_state.running）。
+    """
+    if update_state.running:
+        return False, "更新已在進行中"
+
+    ensure_card_list_column()
+
+    total = get_total_pages()
+    pages_per_run = max(1, min(int(pages_per_run), total))
+    # 無狀態輪轉：以日期序數為起點，重啟不影響進度
+    day_ordinal = (date.today() - date(2024, 1, 1)).days
+    start = (day_ordinal * pages_per_run) % total
+    pages = [((start + i) % total) + 1 for i in range(pages_per_run)]
+
+    update_state.reset("gap_fill", pages_per_run)
+    update_state.update(
+        message=f"缺漏偵測：從第 {pages[0]} 頁起掃描 {pages_per_run} 頁（輪轉窗口）"
+    )
+
+    def _run():
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(crawl_and_process_page, p, None): p for p in pages}
+            for f in as_completed(futures):
+                try:
+                    f.result()
+                except Exception as e:
+                    print(f"[DeckUpdater] Gap-fill worker error: {e}")
+        update_state.finish()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return True, f"缺漏偵測已啟動（{worker_count} workers，從第 {pages[0]} 頁起 {pages_per_run} 頁）"
+
+
+# ── 最新更新時間 / 摘要持久化 ──
+def _load_meta():
+    try:
+        with open(DECK_UPDATE_META_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_meta(meta):
+    try:
+        os.makedirs(os.path.dirname(DECK_UPDATE_META_FILE), exist_ok=True)
+        with open(DECK_UPDATE_META_FILE, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[DeckUpdater] save meta failed: {e}")
+
+
+def save_run_meta(kind, next_run=None):
+    """在某次更新完成後呼叫：記錄 last_run + 當下 update_state 快照。
+    kind: 'daily' 或 'gap_fill'。"""
+    meta = _load_meta()
+    meta.setdefault(kind, {})['last_run'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    meta[kind]['summary'] = update_state.to_dict()
+    if next_run:
+        meta['next_run'] = next_run
+    _save_meta(meta)
+
+
 def get_update_status():
-    return update_state.to_dict()
+    status = update_state.to_dict()
+    meta = _load_meta()
+    daily = meta.get('daily', {})
+    status['last_run'] = daily.get('last_run')
+    status['last_summary'] = daily.get('summary')
+    status['next_run'] = meta.get('next_run')
+    status['gap_fill'] = meta.get('gap_fill', {})
+    return status

@@ -1972,6 +1972,18 @@ def get_deck_update_status():
     return jsonify({'success': True, 'status': get_update_status()})
 
 
+@main_bp.route('/api/admin/deck-update/gap-fill', methods=['POST'])
+@admin_required
+def start_deck_gap_fill():
+    """手動觸發輪轉增量缺漏偵測（預設掃 10 頁，補齊從未匯入的牌組）"""
+    from services.deck_importer.deck_updater import run_gap_fill_update, get_update_status
+    data = request.json or {}
+    bot_count = int(data.get('bot_count', config.JP_DECK_AUTO_UPDATE_WORKERS))
+    pages = int(data.get('pages', config.JP_DECK_GAP_FILL_PAGES))
+    success, message = run_gap_fill_update(worker_count=bot_count, pages_per_run=pages)
+    return jsonify({'success': success, 'message': message, 'status': get_update_status()})
+
+
 @main_bp.route('/api/admin/deck-update/clear', methods=['POST'])
 @admin_required
 def clear_all_imported_decks():
