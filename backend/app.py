@@ -122,34 +122,6 @@ def run_limitless_auto_update_service():
         _sleep_interval(config.LIMITLESS_AUTO_UPDATE_INTERVAL_SECONDS)
 
 
-def run_jp_card_auto_update_service():
-    print(">>> [JP Card Auto Update] background service enabled", flush=True)
-    _initial_delay(extra_seconds=30)
-
-    while True:
-        try:
-            from services.crawler import jp_crawler
-
-            print(
-                f">>> [JP Card Auto Update] {time.strftime('%Y-%m-%d %H:%M:%S')} starting daily card sync",
-                flush=True,
-            )
-            summary = jp_crawler.run_daily_card_sync(
-                num_workers=config.JP_CARD_AUTO_UPDATE_WORKERS,
-                skip_images=config.JP_CARD_AUTO_UPDATE_SKIP_IMAGES,
-                max_missing_per_run=config.JP_CARD_AUTO_UPDATE_MAX_MISSING_PER_RUN,
-            )
-            with jp_crawler.jp_auto_sync_lock:
-                jp_crawler.JP_CARD_AUTO_SYNC_STATE['next_run'] = time.strftime(
-                    '%Y-%m-%d %H:%M:%S',
-                    time.localtime(time.time() + max(60, int(config.JP_CARD_AUTO_UPDATE_INTERVAL_SECONDS))),
-                )
-            print(f">>> [JP Card Auto Update] {summary}", flush=True)
-        except Exception as e:
-            print(f">>> [JP Card Auto Update] error: {e}", flush=True)
-        _sleep_interval(config.JP_CARD_AUTO_UPDATE_INTERVAL_SECONDS)
-
-
 def start_background_update_threads():
     if not _should_start_background_workers():
         print(">>> [Auto Update] skipped in Flask reloader monitor process", flush=True)
@@ -159,11 +131,6 @@ def start_background_update_threads():
         threading.Thread(target=run_jp_deck_auto_update_service, daemon=True).start()
     else:
         print(">>> [JP Deck Auto Update] disabled by ENABLE_JP_DECK_AUTO_UPDATE", flush=True)
-
-    if config.ENABLE_JP_CARD_AUTO_UPDATE:
-        threading.Thread(target=run_jp_card_auto_update_service, daemon=True).start()
-    else:
-        print(">>> [JP Card Auto Update] disabled by ENABLE_JP_CARD_AUTO_UPDATE", flush=True)
 
     if config.ENABLE_LIMITLESS_AUTO_UPDATE:
         threading.Thread(target=run_limitless_auto_update_service, daemon=True).start()
