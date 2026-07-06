@@ -770,68 +770,10 @@ function useAdminUpdate() {
         } catch (e) { console.error('Stats error:', e); }
     };
 
-    // === 日本牌庫自動同步狀態 (jp_crawler 每日偵測缺漏 + 補爬) ===
-    const jpCardSyncState = reactive({
-        running: false,
-        progress: 0,
-        last_run: null,
-        next_run: null,
-        last_summary: null,
-        last_missing_count: null,
-        last_crawled_count: null,
-        logs: [],
-        triggering: false,
-    });
-    let jpCardSyncTimer = null;
-
-    // null/undefined 顯示為 '-'，但保留 0
-    const syncVal = (v) => (v === null || v === undefined) ? '-' : v;
-
-    const refreshJpCardSync = async () => {
-        if (jpCardSyncTimer) { clearTimeout(jpCardSyncTimer); jpCardSyncTimer = null; }
-        try {
-            const res = await fetch('/api/jp/auto-sync/status');
-            const data = await res.json();
-            jpCardSyncState.running = data.running;
-            jpCardSyncState.progress = data.progress || 0;
-            jpCardSyncState.last_run = data.last_run;
-            jpCardSyncState.next_run = data.next_run;
-            jpCardSyncState.last_summary = data.last_summary;
-            jpCardSyncState.last_missing_count = data.last_missing_count;
-            jpCardSyncState.last_crawled_count = data.last_crawled_count;
-            jpCardSyncState.logs = data.logs || [];
-            // 同步進行中則持續輪詢
-            if (data.running) {
-                jpCardSyncTimer = setTimeout(refreshJpCardSync, 2000);
-            }
-        } catch (e) {
-            console.error('JP card sync status error:', e);
-        }
-    };
-
-    const startJpCardSync = async () => {
-        if (jpCardSyncState.running || jpCardSyncState.triggering) return;
-        jpCardSyncState.triggering = true;
-        try {
-            const res = await fetch('/api/jp/auto-sync/run', { method: 'POST' });
-            const data = await res.json();
-            if (data.ok) {
-                refreshJpCardSync();
-            } else {
-                alert(data.message || '啟動失敗');
-            }
-        } catch (e) {
-            alert('連線錯誤');
-        } finally {
-            jpCardSyncState.triggering = false;
-        }
-    };
-
     const openDeckAdmin = () => {
         showDeckAdmin.value = true;
         deckAdminTab.value = 'jp';
         loadDbStats();
-        refreshJpCardSync();
     };
 
     const openLimitlessAdmin = () => {
@@ -1189,11 +1131,6 @@ function useAdminUpdate() {
         deckAdminTab,
         dbStats,
         loadDbStats,
-        // 日本牌庫自動同步
-        jpCardSyncState,
-        syncVal,
-        refreshJpCardSync,
-        startJpCardSync,
         clearAllDecks,
         mappingBotCount,
         mappingState,
