@@ -340,6 +340,206 @@
           "jp_source_span": "ダメカン6個を、相手のベンチポケモンに好きなようにのせる"
         }
       ]
+    },
+    {
+      "case_id": "boss_orders_sv4a_181",
+      "category": "switch",
+      "difficulty": "medium",
+      "jp_card": {
+        "card_id": "jpSV4a-181",
+        "name": "ボスの指令",
+        "set_code": "SV4a",
+        "set_number": "181",
+        "regulation_mark": "G"
+      },
+      "source_text": "相手のベンチポケモンを1匹選び、バトルポケモンと入れ替える。",
+      "gold_predicates": [
+        {
+          "type": "switch",
+          "target": "opponent_bench_pokemon",
+          "destination": "active",
+          "count": 1,
+          "jp_source_span": "相手のベンチポケモンを1匹選び、バトルポケモンと入れ替える"
+        }
+      ]
+    },
+    {
+      "case_id": "ultra_ball_mbd_011",
+      "category": "discard_search",
+      "difficulty": "medium",
+      "jp_card": {
+        "card_id": "jp_MBD_11",
+        "name": "ハイパーボール",
+        "set_code": "MBD",
+        "set_number": "11",
+        "regulation_mark": "I"
+      },
+      "source_text": "このカードは、自分の手札を2枚トラッシュしなければ使えない。 自分の山札からポケモンを1枚選び、相手に見せてから、手札に加える。そして山札を切る。",
+      "gold_predicates": [
+        {
+          "type": "discard",
+          "source": "hand",
+          "count": 2,
+          "scope": "cost",
+          "jp_source_span": "自分の手札を2枚トラッシュしなければ使えない"
+        },
+        {
+          "type": "search_deck",
+          "target": "pokemon",
+          "destination": "hand",
+          "count": 1,
+          "reveal_to_opponent": true,
+          "jp_source_span": "自分の山札からポケモンを1枚選び、相手に見せてから、手札に加える"
+        }
+      ]
+    },
+    {
+      "case_id": "rare_candy_sma_045",
+      "category": "evolve",
+      "difficulty": "hard",
+      "jp_card": {
+        "card_id": "jp033169",
+        "name": "ふしぎなアメ",
+        "set_code": "",
+        "set_number": "045",
+        "regulation_mark": "SMA"
+      },
+      "source_text": "自分の手札にある2進化ポケモンを1枚、そのポケモンへと進化する自分の場のたねポケモンにのせて進化させる。（最初の自分の番と、この番出したばかりのたねポケモンには使えない。）",
+      "gold_predicates": [
+        {
+          "type": "evolve",
+          "source": "hand",
+          "from_stage": "basic",
+          "to_stage": "stage2",
+          "skip_stages": 1,
+          "count": 1,
+          "jp_source_span": "自分の手札にある2進化ポケモンを1枚、そのポケモンへと進化する自分の場のたねポケモンにのせて進化させる"
+        }
+      ]
+    },
+    {
+      "case_id": "evolution_incense_s1w_052",
+      "category": "search_deck",
+      "difficulty": "medium",
+      "jp_card": {
+        "card_id": "jp_S1W_52",
+        "name": "しんかのおこう",
+        "set_code": "S1W",
+        "set_number": "52",
+        "regulation_mark": "D"
+      },
+      "source_text": "自分の山札から進化ポケモンを1枚選び、相手に見せて、手札に加える。そして山札を切る。",
+      "gold_predicates": [
+        {
+          "type": "search_deck",
+          "target": "evolution_pokemon",
+          "destination": "hand",
+          "count": 1,
+          "reveal_to_opponent": true,
+          "jp_source_span": "自分の山札から進化ポケモンを1枚選び、相手に見せて、手札に加える"
+        }
+      ]
+    },
+    {
+      "case_id": "super_rod_max_sv8a_142",
+      "category": "search_trash",
+      "difficulty": "medium",
+      "jp_card": {
+        "card_id": "jpSV8a-142",
+        "name": "つりざおMAX",
+        "set_code": "SV8a",
+        "set_number": "142",
+        "regulation_mark": "H"
+      },
+      "source_text": "自分のトラッシュからポケモンと基本エネルギーを合計5枚まで選び、相手に見せて、手札に加える。",
+      "gold_predicates": [
+        {
+          "type": "search_trash",
+          "target": "pokemon_or_basic_energy",
+          "destination": "hand",
+          "max_count": 5,
+          "reveal_to_opponent": true,
+          "jp_source_span": "自分のトラッシュからポケモンと基本エネルギーを合計5枚まで選び、相手に見せて、手札に加える"
+        }
+      ]
+    },
+    {
+      "case_id": "welder_sb_021",
+      "category": "attach_energy_draw",
+      "difficulty": "medium",
+      "jp_card": {
+        "card_id": "jp_SB_21",
+        "name": "溶接工",
+        "set_code": "SB",
+        "set_number": "21",
+        "regulation_mark": "C"
+      },
+      "source_text": "自分の手札にある[炎]エネルギーを2枚まで、自分のポケモン1匹につける。その後、自分の山札を3枚引く。",
+      "gold_predicates": [
+        {
+          "type": "attach_energy",
+          "source": "hand",
+          "element": "fire",
+          "target": "own_pokemon",
+          "max_count": 2,
+          "jp_source_span": "自分の手札にある[炎]エネルギーを2枚まで、自分のポケモン1匹につける"
+        },
+        {
+          "type": "draw",
+          "count": 3,
+          "jp_source_span": "自分の山札を3枚引く"
+        }
+      ]
+    },
+    {
+      "case_id": "full_heal_bw1_050",
+      "category": "heal",
+      "difficulty": "easy",
+      "jp_card": {
+        "card_id": "jp027205",
+        "name": "なんでもなおし",
+        "set_code": "",
+        "set_number": "050",
+        "regulation_mark": "BW1-Bw"
+      },
+      "source_text": "自分のバトルポケモンの特殊状態を、すべて回復する。",
+      "gold_predicates": [
+        {
+          "type": "heal",
+          "target": "own_active_pokemon_special_condition",
+          "scope": "all",
+          "jp_source_span": "自分のバトルポケモンの特殊状態を、すべて回復する"
+        }
+      ]
+    },
+    {
+      "case_id": "mistys_determination_sd_110",
+      "category": "discard_search",
+      "difficulty": "hard",
+      "jp_card": {
+        "card_id": "jp_SD_110",
+        "name": "カスミのやる気",
+        "set_code": "SD",
+        "set_number": "110",
+        "regulation_mark": "C"
+      },
+      "source_text": "自分の手札を1枚選び、トラッシュする。その後、自分の山札を上から8枚見て、その中から好きなカードを1枚選び、手札に加える。残りのカードは山札にもどし、山札を切る。",
+      "gold_predicates": [
+        {
+          "type": "discard",
+          "source": "hand",
+          "count": 1,
+          "jp_source_span": "自分の手札を1枚選び、トラッシュする"
+        },
+        {
+          "type": "search_deck",
+          "target": "top_cards",
+          "look_count": 8,
+          "choose_count": 1,
+          "destination": "hand",
+          "jp_source_span": "自分の山札を上から8枚見て、その中から好きなカードを1枚選び、手札に加える"
+        }
+      ]
     }
   ]
 }

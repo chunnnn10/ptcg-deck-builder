@@ -11,6 +11,7 @@ PredicateType = Literal[
     "draw",
     "discard",
     "search_deck",
+    "search_trash",
     "switch",
     "heal",
     "attach_energy",
@@ -51,6 +52,10 @@ class Predicate(TypedDict, total=False):
     condition: str
     reveal_to_opponent: bool
     distribution: str
+    element: str
+    from_stage: str
+    to_stage: str
+    skip_stages: int
 
 
 class ValidationError(TypedDict):

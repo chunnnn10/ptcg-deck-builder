@@ -30,7 +30,7 @@ Same anti-hallucination spirit as the existing `assistant._strip_unverified_exam
 
 `hp_threshold{op,value,applies_to}` · `count_threshold{op,value,dim}`
 (dim = prize|hand|bench|energy|damage_counters|deck) · `draw` · `discard` · `search_deck` · `switch`
-· `heal` · `attach_energy` · `place_damage_counters` · `evolve` · `condition`
+· `search_trash` · `heal` · `attach_energy` · `place_damage_counters` · `evolve` · `condition`
 
 One extraction feeds both gaps: `hp_threshold` kills the「以下」ambiguity (Gap A);
 `discard`/`draw`/`evolve` derive role axes for situational eval (Gap B).
@@ -85,6 +85,22 @@ computes, per category and difficulty:
 
 Ship the full backfill only after the golden gate passes.
 
+### Current Phase 1 gate status
+
+Phase 1 currently uses a deterministic, rule-based extractor rather than an LLM parser. Against the expanded
+17-card golden set (9 seed + 8 adversarial long-tail cases), `python3 backend/eval/runner.py --use-extractor`
+reports:
+
+- overall threshold-precision: `1.000`
+- overall op-accuracy: `1.000`
+- overall action-F1: `0.833`
+- overall hallucination-rate: `0.000`
+- overall span-grounding-rate: `1.000`
+
+Interpretation: the extractor is precise and safe for the Gap A threshold ambiguity, but it is not yet a
+complete action/effect extractor. Adversarial cases intentionally expose missing Gap B coverage: `switch`,
+`heal`, `attach_energy`, `evolve`, `search_trash`, discard costs, and broader deck-search patterns.
+
 ## Landing plan (phases)
 
 - **Phase 0** — schema + golden set + eval runner. Migration SQL (`golden_set` table;
@@ -94,9 +110,10 @@ Ship the full backfill only after the golden gate passes.
 - **Phase 1** — extractor `services/logic_extractor/` (`schema.py`/`extractor.py`/`verifier.py`). Core is
   a pure function `(card_text) -> list[predicate]`; DB read/write is a thin adapter. Dev against a local
   fixture (golden cards' JP text exported via read-only SELECT); dev writes nothing to the production DB.
-- **Phase 2** — deploy + backfill + ingest hook. Adapter reads `jp_cards` → extractor core → upsert
-  `processed_cards` (dedupe by normalized JP text first). Admin endpoint to trigger backfill. Hook into
-  `jp_crawler.save_card_to_db`.
+- **Phase 2** — deploy + Gap A-only backfill + ingest hook. Adapter reads `jp_cards` → extractor core →
+  writes only threshold/search-threshold predicates that are safe for the「以下」ambiguity. Store metadata/version
+  such as `gap_a_threshold_only` so downstream code does not treat missing action predicates as proof that a
+  card has no action effect. Admin endpoint to trigger backfill. Hook into `jp_crawler.save_card_to_db`.
 - **Phase 3 (Gap A payoff, MVP end)** — wire retrieval: `_fetch_card_docs` LEFT JOIN `processed_cards`;
   `_card_doc` appends normalized predicate string + metadata; `_card_payload` exposes predicates;
   `semantic_search_cards` gains `predicate_filter`; re-embed.

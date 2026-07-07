@@ -97,6 +97,10 @@ def action_key(predicate: dict[str, Any]) -> tuple[Any, ...]:
         predicate.get("condition"),
         predicate.get("distribution"),
         predicate.get("reveal_to_opponent"),
+        predicate.get("element"),
+        predicate.get("from_stage"),
+        predicate.get("to_stage"),
+        predicate.get("skip_stages"),
     )
 
 
