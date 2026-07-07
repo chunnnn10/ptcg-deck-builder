@@ -24,6 +24,8 @@ from services.tcgdex.bridge import find_chinese_card, find_japanese_card, get_br
 from services.tcgdex.client import API_BASE as TCGDEX_API_BASE, get_client as get_tcgdex_client
 from services.deck_importer.card_resolver import resolve_variant, card_row_to_payload
 from services.ai_assistant.assistant import get_assistant_job, run_assistant, start_assistant_job
+from services.logic_extractor.adapter import EXTRACTOR_VERSION as LOGIC_EXTRACTOR_VERSION
+from services.logic_extractor.adapter import backfill_gap_a_threshold_only
 
 main_bp = Blueprint('main', __name__)
 
@@ -148,6 +150,14 @@ def admin_required(f):
             return jsonify({'success': False, 'error': '權限不足，僅限管理員使用'}), 403
         return f(*args, **kwargs)
     return decorated_function
+
+
+def _request_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in ('true', '1', 'yes', 'on')
 
 # ==========================================
 # 郵件輔助函數
@@ -2698,6 +2708,106 @@ def admin_update_user(user_id):
     except Exception as e:
         print(f"Admin update user error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==========================================
+# 結構化邏輯抽取 API - 需要 Admin 權限
+# ==========================================
+
+@main_bp.route('/api/admin/logic-extractor/gap-a/status', methods=['GET'])
+@admin_required
+def get_gap_a_logic_status():
+    """讀取 Gap A threshold-only 抽取層狀態。"""
+    conn = database.get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': '資料庫連線失敗'}), 500
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'processed_cards'
+              AND column_name IN ('predicates', 'extractor_version', 'source_text_hash')
+        """)
+        columns = {row['column_name'] for row in cursor.fetchall()}
+        migration_ready = {'predicates', 'extractor_version', 'source_text_hash'}.issubset(columns)
+
+        processed_count = 0
+        if migration_ready:
+            cursor.execute(
+                "SELECT COUNT(*) AS count FROM processed_cards WHERE extractor_version = %s",
+                (LOGIC_EXTRACTOR_VERSION,)
+            )
+            row = cursor.fetchone()
+            processed_count = row['count'] if row else 0
+
+        return jsonify({
+            'success': True,
+            'extractor_version': LOGIC_EXTRACTOR_VERSION,
+            'scope': 'gap_a_threshold_only',
+            'migration_ready': migration_ready,
+            'available_columns': sorted(columns),
+            'processed_count': processed_count,
+            'note': 'Missing action predicates do not mean a card has no action effect.'
+        })
+    except Exception as e:
+        print(f"Gap A logic status error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@main_bp.route('/api/admin/logic-extractor/gap-a/backfill', methods=['POST'])
+@admin_required
+def run_gap_a_logic_backfill():
+    """執行 Gap A threshold-only 抽取回填。預設 dry-run，不寫 DB。"""
+    data = request.get_json(silent=True) or {}
+    dry_run = _request_bool(data.get('dry_run'), True)
+    confirm = _request_bool(data.get('confirm'), False)
+
+    if not dry_run and not confirm:
+        return jsonify({
+            'success': False,
+            'error': '實際寫入 processed_cards 需要 dry_run=false 且 confirm=true'
+        }), 400
+
+    try:
+        limit = data.get('limit')
+        offset = int(data.get('offset') or 0)
+        skip_empty = _request_bool(data.get('skip_empty'), True)
+        limit = int(limit) if limit not in (None, '') else None
+        if limit is not None and limit <= 0:
+            return jsonify({'success': False, 'error': 'limit 必須大於 0'}), 400
+        if offset < 0:
+            return jsonify({'success': False, 'error': 'offset 不能小於 0'}), 400
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'limit/offset 參數格式錯誤'}), 400
+
+    conn = database.get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': '資料庫連線失敗'}), 500
+
+    try:
+        summary = backfill_gap_a_threshold_only(
+            conn,
+            limit=limit,
+            offset=offset,
+            dry_run=dry_run,
+            skip_empty=skip_empty,
+        )
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        return jsonify({'success': True, 'summary': summary})
+    except Exception as e:
+        conn.rollback()
+        print(f"Gap A logic backfill error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
 
 # ==========================================
 # [新增] 推薦列表(公開牌組)管理 API - 需要 Admin 權限

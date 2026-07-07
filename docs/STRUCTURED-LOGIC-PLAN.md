@@ -115,7 +115,8 @@ complete action/effect extractor. Adversarial cases intentionally expose missing
   such as `gap_a_threshold_only` so downstream code does not treat missing action predicates as proof that a
   card has no action effect. Admin endpoint to trigger backfill. Hook into `jp_crawler.save_card_to_db`.
   Adapter entrypoint: `services.logic_extractor.adapter.backfill_gap_a_threshold_only(...)`; it defaults to
-  `dry_run=True` and requires `001_logic_layer.sql` before any write path is used.
+  `dry_run=True` and requires `001_logic_layer.sql` before any write path is used. Admin endpoints:
+  `GET /api/admin/logic-extractor/gap-a/status` and `POST /api/admin/logic-extractor/gap-a/backfill`.
 - **Phase 3 (Gap A payoff, MVP end)** — wire retrieval: `_fetch_card_docs` LEFT JOIN `processed_cards`;
   `_card_doc` appends normalized predicate string + metadata; `_card_payload` exposes predicates;
   `semantic_search_cards` gains `predicate_filter`; re-embed.
