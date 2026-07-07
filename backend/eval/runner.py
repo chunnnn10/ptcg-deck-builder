@@ -133,6 +133,14 @@ def f1(precision: float | None, recall: float | None) -> float | None:
     return 2 * precision * recall / (precision + recall)
 
 
+def action_f1(matches: int, predicted: int, gold: int) -> float | None:
+    if predicted == 0 and gold == 0:
+        return None
+    precision = matches / predicted if predicted else 0.0
+    recall = matches / gold if gold else 0.0
+    return f1(precision, recall)
+
+
 def span_is_grounded(source_text: str, predicate: dict[str, Any]) -> bool:
     span = predicate.get("jp_source_span")
     return isinstance(span, str) and bool(span) and span in source_text
@@ -182,8 +190,6 @@ def evaluate_cases(cases: Iterable[EvalCase], predictions: dict[str, list[dict[s
 
 def render_metrics(counts: dict[str, int]) -> dict[str, Any]:
     threshold_precision = safe_ratio(counts["threshold_matches"], counts["pred_thresholds"])
-    action_precision = safe_ratio(counts["action_matches"], counts["pred_actions"])
-    action_recall = safe_ratio(counts["action_matches"], counts["gold_actions"])
     span_grounding = safe_ratio(counts["grounded_spans"], counts["predicates"])
     op_accuracy = safe_ratio(counts["correct_ops"], counts["known_op_predictions"])
     hallucination_rate = None if span_grounding is None else 1 - span_grounding
@@ -192,7 +198,7 @@ def render_metrics(counts: dict[str, int]) -> dict[str, Any]:
         "cases": counts["cases"],
         "threshold_precision": threshold_precision,
         "op_accuracy": op_accuracy,
-        "action_f1": f1(action_precision, action_recall),
+        "action_f1": action_f1(counts["action_matches"], counts["pred_actions"], counts["gold_actions"]),
         "hallucination_rate": hallucination_rate,
         "span_grounding_rate": span_grounding,
         "counts": dict(counts),
