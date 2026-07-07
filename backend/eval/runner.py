@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any, Iterable
 
 
 DEFAULT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "golden_cards.json"
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 OPERATOR_TOKENS = {
     "以下": "<=",
@@ -49,9 +51,20 @@ def load_cases(path: Path) -> list[EvalCase]:
     return cases
 
 
-def load_predictions(path: Path | None, use_gold: bool, cases: Iterable[EvalCase]) -> dict[str, list[dict[str, Any]]]:
+def load_predictions(
+    path: Path | None,
+    use_gold: bool,
+    use_extractor: bool,
+    cases: Iterable[EvalCase],
+) -> dict[str, list[dict[str, Any]]]:
     if use_gold:
         return {case.case_id: list(case.gold_predicates) for case in cases}
+    if use_extractor:
+        if str(BACKEND_ROOT) not in sys.path:
+            sys.path.insert(0, str(BACKEND_ROOT))
+        from services.logic_extractor import extract_card_logic
+
+        return {case.case_id: extract_card_logic(case.source_text) for case in cases}
     if path is None:
         return {}
 
@@ -74,6 +87,16 @@ def action_key(predicate: dict[str, Any]) -> tuple[Any, ...]:
         predicate.get("target"),
         predicate.get("destination"),
         predicate.get("effect"),
+        predicate.get("source"),
+        predicate.get("scope"),
+        predicate.get("count"),
+        predicate.get("max_count"),
+        predicate.get("look_count"),
+        predicate.get("choose_count"),
+        predicate.get("value"),
+        predicate.get("condition"),
+        predicate.get("distribution"),
+        predicate.get("reveal_to_opponent"),
     )
 
 
@@ -204,11 +227,20 @@ def main() -> int:
         action="store_true",
         help="Use gold predicates as predictions for runner smoke tests",
     )
+    parser.add_argument(
+        "--use-extractor",
+        action="store_true",
+        help="Run the local pure extractor against each fixture source_text",
+    )
     parser.add_argument("--json", action="store_true", help="Print full JSON metrics")
     args = parser.parse_args()
 
     cases = load_cases(args.fixture)
-    predictions = load_predictions(args.predictions, args.gold_as_predictions, cases)
+    prediction_modes = [bool(args.predictions), args.gold_as_predictions, args.use_extractor]
+    if sum(prediction_modes) > 1:
+        parser.error("Choose only one prediction source: --predictions, --gold-as-predictions, or --use-extractor")
+
+    predictions = load_predictions(args.predictions, args.gold_as_predictions, args.use_extractor, cases)
     results = evaluate_cases(cases, predictions)
 
     if args.json:
