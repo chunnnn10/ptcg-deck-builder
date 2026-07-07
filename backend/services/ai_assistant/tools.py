@@ -11,6 +11,8 @@ import database
 
 from .embeddings import embed_texts, vector_literal
 from .indexer import STANDARD_MARKS, ensure_ai_schema, parse_skills
+from .predicates import parse_predicates, predicates_match_filter
+from services.logic_extractor.adapter import EXTRACTOR_VERSION as LOGIC_EXTRACTOR_VERSION
 
 
 CARD_LIMIT = 20
@@ -53,6 +55,7 @@ def _skill_payload(skills: list[dict[str, Any]], full: bool = True) -> list[dict
 
 def _card_payload(row: dict[str, Any], language: str, full_skills: bool = True) -> dict[str, Any]:
     skills = parse_skills(row.get("skills_json"))
+    predicates = parse_predicates(row.get("logic_predicates"))
     payload = {
         "card_id": row.get("card_id"),
         "id": row.get("card_id"),
@@ -76,6 +79,9 @@ def _card_payload(row: dict[str, Any], language: str, full_skills: bool = True) 
         "image_file": row.get("image_file"),
         "image_url": _image_url(row, language),
         "skills": _skill_payload(skills, full_skills),
+        "predicates": predicates,
+        "logic_extractor_version": row.get("logic_extractor_version"),
+        "logic_source_card_id": row.get("logic_source_card_id"),
     }
     if language == "tw" and row.get("japanese_name"):
         payload["japanese_name"] = row.get("japanese_name")
@@ -84,13 +90,74 @@ def _card_payload(row: dict[str, Any], language: str, full_skills: bool = True) 
     return payload
 
 
-def _select_columns(table: str) -> str:
+def _qualified(column: str, alias: str | None) -> str:
+    return f"{alias}.{column}" if alias else column
+
+
+def _select_columns(table: str, alias: str | None = None) -> str:
     extra_name = "japanese_name" if table == "cards" else "chinese_name"
-    return (
-        f"card_id, image_file, card_type, name, sub_type, hp, element_type, "
-        f"weakness_type, weakness_value, resistance_type, resistance_value, retreat_cost, rarity, "
-        f"{extra_name}, set_code, set_number, set_name, regulation_mark, skills_json, description"
+    columns = (
+        "card_id", "image_file", "card_type", "name", "sub_type", "hp", "element_type",
+        "weakness_type", "weakness_value", "resistance_type", "resistance_value", "retreat_cost", "rarity",
+        extra_name, "set_code", "set_number", "set_name", "regulation_mark", "skills_json", "description",
     )
+    return ", ".join(_qualified(column, alias) for column in columns)
+
+
+def _logic_columns_ready(cursor) -> bool:
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'processed_cards'
+          AND column_name IN ('predicates', 'extractor_version', 'source_card_id')
+        """
+    )
+    row = cursor.fetchone()
+    return int(row.get("count") or 0) == 3
+
+
+def _select_columns_with_logic(table: str, alias: str = "c") -> str:
+    return (
+        f"{_select_columns(table, alias)}, "
+        "pc.predicates AS logic_predicates, "
+        "pc.extractor_version AS logic_extractor_version, "
+        "pc.source_card_id AS logic_source_card_id"
+    )
+
+
+def _select_columns_without_logic(table: str, alias: str | None = None) -> str:
+    return (
+        f"{_select_columns(table, alias)}, "
+        "'[]'::jsonb AS logic_predicates, "
+        "NULL::text AS logic_extractor_version, "
+        "NULL::text AS logic_source_card_id"
+    )
+
+
+def _logic_join_sql(language: str, table_alias: str = "c") -> str:
+    if language == "jp":
+        return (
+            "LEFT JOIN processed_cards pc "
+            f"ON pc.card_id = {table_alias}.card_id "
+            "AND pc.extractor_version = %s"
+        )
+    return f"""
+        LEFT JOIN LATERAL (
+            SELECT jp.card_id
+            FROM jp_cards jp
+            WHERE {table_alias}.set_code = jp.set_code
+              AND split_part({table_alias}.set_number, '/', 1) ~ '^[0-9]+$'
+              AND split_part(jp.set_number, '/', 1) ~ '^[0-9]+$'
+              AND split_part({table_alias}.set_number, '/', 1)::int = split_part(jp.set_number, '/', 1)::int
+            ORDER BY jp.card_id
+            LIMIT 1
+        ) jp ON TRUE
+        LEFT JOIN processed_cards pc
+          ON pc.card_id = jp.card_id
+         AND pc.extractor_version = %s
+    """
 
 
 def _normalize_marks(filters: dict[str, Any] | None = None) -> list[str]:
@@ -109,6 +176,8 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
     table = "jp_cards" if language == "jp" else "cards"
     folder_lang = "jp" if language == "jp" else "tw"
     extra_name = "chinese_name" if language == "jp" else "japanese_name"
+    predicate_filter = (filters or {}).get("predicate_filter")
+    fetch_limit = min(limit * 4, 80) if predicate_filter else limit
     search = f"%{query}%"
 
     conn = database.get_db_connection()
@@ -116,26 +185,34 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
         return []
     try:
         cursor = conn.cursor()
+        logic_ready = _logic_columns_ready(cursor)
+        select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
+        logic_join = _logic_join_sql(language, "c") if logic_ready else ""
         cursor.execute(
             f"""
-            SELECT {_select_columns(table)}
-            FROM {table}
-            WHERE regulation_mark = ANY(%s)
+            SELECT {select_sql}
+            FROM {table} c
+            {logic_join}
+            WHERE c.regulation_mark = ANY(%s)
               AND (
-                name ILIKE %s OR card_id ILIKE %s OR set_code ILIKE %s OR set_number ILIKE %s
-                OR COALESCE({extra_name}, '') ILIKE %s
-                OR COALESCE(description, '') ILIKE %s
-                OR COALESCE(skills_json::text, '') ILIKE %s
+                c.name ILIKE %s OR c.card_id ILIKE %s OR c.set_code ILIKE %s OR c.set_number ILIKE %s
+                OR COALESCE(c.{extra_name}, '') ILIKE %s
+                OR COALESCE(c.description, '') ILIKE %s
+                OR COALESCE(c.skills_json::text, '') ILIKE %s
               )
             ORDER BY
-                CASE WHEN name = %s THEN 0 ELSE 1 END,
-                CASE WHEN name ILIKE %s THEN 0 ELSE 1 END,
-                card_id DESC
+                CASE WHEN c.name = %s THEN 0 ELSE 1 END,
+                CASE WHEN c.name ILIKE %s THEN 0 ELSE 1 END,
+                c.card_id DESC
             LIMIT %s
             """,
-            (marks, search, search, search, search, search, search, search, query, search, limit),
+            ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ())
+            + (marks, search, search, search, search, search, search, search, query, search, fetch_limit),
         )
-        return [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
+        cards = [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
+        if predicate_filter:
+            cards = [card for card in cards if predicates_match_filter(card.get("predicates") or [], predicate_filter)]
+        return cards[:limit]
     finally:
         conn.close()
 
@@ -200,6 +277,8 @@ def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str
         language = "tw"
     limit = max(1, min(int(limit or CARD_LIMIT), CARD_LIMIT))
     marks = _normalize_marks(filters)
+    predicate_filter = (filters or {}).get("predicate_filter")
+    fetch_limit = min(limit * 4, 80) if predicate_filter else limit
 
     conn = database.get_db_connection()
     if not conn:
@@ -218,7 +297,7 @@ def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
-            (vector_literal(vector), language, marks, vector_literal(vector), limit),
+            (vector_literal(vector), language, marks, vector_literal(vector), fetch_limit),
         )
         rows = cursor.fetchall()
         ids = [row["source_id"] for row in rows]
@@ -226,9 +305,17 @@ def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str
         if not ids:
             return _expanded_keyword_card_search(query, language, limit, filters)
         table = "jp_cards" if language == "jp" else "cards"
+        logic_ready = _logic_columns_ready(cursor)
+        select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
+        logic_join = _logic_join_sql(language, "c") if logic_ready else ""
         cursor.execute(
-            f"SELECT {_select_columns(table)} FROM {table} WHERE card_id = ANY(%s)",
-            (ids,),
+            f"""
+            SELECT {select_sql}
+            FROM {table} c
+            {logic_join}
+            WHERE c.card_id = ANY(%s)
+            """,
+            ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ()) + (ids,),
         )
         by_id = {row["card_id"]: row for row in cursor.fetchall()}
         cards = []
@@ -236,6 +323,8 @@ def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str
             row = by_id.get(cid)
             if row:
                 payload = _card_payload(row, language, len(cards) < 8)
+                if predicate_filter and not predicates_match_filter(payload.get("predicates") or [], predicate_filter):
+                    continue
                 payload["semantic_score"] = round(score_by_id.get(cid, 0), 4)
                 cards.append(payload)
         keyword_cards = _expanded_keyword_card_search(query, language, min(limit, 6), filters)
@@ -266,9 +355,18 @@ def get_card_detail(card_id: str, language: str = "tw") -> dict[str, Any] | None
         return None
     try:
         cursor = conn.cursor()
+        logic_ready = _logic_columns_ready(cursor)
+        select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
+        logic_join = _logic_join_sql(language, "c") if logic_ready else ""
         cursor.execute(
-            f"SELECT {_select_columns(table)} FROM {table} WHERE card_id = %s AND regulation_mark = ANY(%s) LIMIT 1",
-            (card_id, list(STANDARD_MARKS)),
+            f"""
+            SELECT {select_sql}
+            FROM {table} c
+            {logic_join}
+            WHERE c.card_id = %s AND c.regulation_mark = ANY(%s)
+            LIMIT 1
+            """,
+            ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ()) + (card_id, list(STANDARD_MARKS)),
         )
         row = cursor.fetchone()
         return _card_payload(row, language, True) if row else None
@@ -757,16 +855,21 @@ def _keyword_card_search_any_mark(query: str, language: str = "tw", limit: int =
         return []
     try:
         cursor = conn.cursor()
+        logic_ready = _logic_columns_ready(cursor)
+        select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
+        logic_join = _logic_join_sql(language, "c") if logic_ready else ""
         cursor.execute(
             f"""
-            SELECT {_select_columns(table)}
-            FROM {table}
-            WHERE (name ILIKE %s OR COALESCE(description, '') ILIKE %s)
-              AND card_type = 'Energy'
-            ORDER BY CASE WHEN name = %s THEN 0 ELSE 1 END, card_id DESC
+            SELECT {select_sql}
+            FROM {table} c
+            {logic_join}
+            WHERE (c.name ILIKE %s OR COALESCE(c.description, '') ILIKE %s)
+              AND c.card_type = 'Energy'
+            ORDER BY CASE WHEN c.name = %s THEN 0 ELSE 1 END, c.card_id DESC
             LIMIT %s
             """,
-            (search, search, query, max(1, min(int(limit or 5), 10))),
+            ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ())
+            + (search, search, query, max(1, min(int(limit or 5), 10))),
         )
         return [_card_payload(row, folder_lang, True) for row in cursor.fetchall()]
     finally:

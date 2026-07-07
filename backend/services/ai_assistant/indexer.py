@@ -11,7 +11,9 @@ import config
 import database
 
 from .embeddings import content_hash, embed_texts, vector_literal
+from .predicates import parse_predicates, predicate_lines
 from .schema import ai_schema_sql
+from services.logic_extractor.adapter import EXTRACTOR_VERSION as LOGIC_EXTRACTOR_VERSION
 
 
 STANDARD_MARKS = ("H", "I", "J")
@@ -79,6 +81,8 @@ def _skill_lines(skills: list[dict[str, Any]]) -> list[str]:
 def _card_doc(row: dict[str, Any], language: str) -> dict[str, Any]:
     skills = parse_skills(row.get("skills_json"))
     skill_text = "\n".join(_skill_lines(skills))
+    predicates = parse_predicates(row.get("logic_predicates"))
+    predicate_text = "\n".join(predicate_lines(predicates))
     title = str(row.get("name") or "").strip()
     content = "\n".join(part for part in (
         f"Card: {title}",
@@ -91,6 +95,7 @@ def _card_doc(row: dict[str, Any], language: str) -> dict[str, Any]:
         f"Japanese name: {row.get('japanese_name') or ''}" if language == "tw" else f"Chinese name: {row.get('chinese_name') or ''}",
         f"Description: {row.get('description') or ''}",
         f"Skills:\n{skill_text}" if skill_text else "",
+        f"Verified predicates:\n{predicate_text}" if predicate_text else "",
     ) if str(part).strip())
     source_id = str(row.get("card_id") or "")
     return {
@@ -111,24 +116,94 @@ def _card_doc(row: dict[str, Any], language: str) -> dict[str, Any]:
             "set_number": row.get("set_number"),
             "set_name": row.get("set_name"),
             "regulation_mark": row.get("regulation_mark"),
+            "predicates": predicates,
+            "logic_extractor_version": row.get("logic_extractor_version"),
+            "logic_source_card_id": row.get("logic_source_card_id"),
         },
     }
+
+
+def _logic_columns_ready(cursor) -> bool:
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'processed_cards'
+          AND column_name IN ('predicates', 'extractor_version', 'source_card_id')
+        """
+    )
+    row = cursor.fetchone()
+    return int(row.get("count") or 0) == 3
 
 
 def _fetch_card_docs(cursor, language: str, limit: int, offset: int) -> list[dict[str, Any]]:
     table = "jp_cards" if language == "jp" else "cards"
     extra = "chinese_name" if language == "jp" else "japanese_name"
-    cursor.execute(
-        f"""
-        SELECT card_id, name, card_type, sub_type, hp, element_type, skills_json, description,
-               set_code, set_number, set_name, regulation_mark, {extra}
-        FROM {table}
-        WHERE regulation_mark = ANY(%s)
-        ORDER BY card_id
-        LIMIT %s OFFSET %s
-        """,
-        (list(STANDARD_MARKS), limit, offset),
-    )
+    if _logic_columns_ready(cursor):
+        if language == "jp":
+            cursor.execute(
+                f"""
+                SELECT c.card_id, c.name, c.card_type, c.sub_type, c.hp, c.element_type,
+                       c.skills_json, c.description, c.set_code, c.set_number, c.set_name,
+                       c.regulation_mark, c.{extra},
+                       pc.predicates AS logic_predicates,
+                       pc.extractor_version AS logic_extractor_version,
+                       pc.source_card_id AS logic_source_card_id
+                FROM {table} c
+                LEFT JOIN processed_cards pc
+                  ON pc.card_id = c.card_id
+                 AND pc.extractor_version = %s
+                WHERE c.regulation_mark = ANY(%s)
+                ORDER BY c.card_id
+                LIMIT %s OFFSET %s
+                """,
+                (LOGIC_EXTRACTOR_VERSION, list(STANDARD_MARKS), limit, offset),
+            )
+        else:
+            cursor.execute(
+                f"""
+                SELECT c.card_id, c.name, c.card_type, c.sub_type, c.hp, c.element_type,
+                       c.skills_json, c.description, c.set_code, c.set_number, c.set_name,
+                       c.regulation_mark, c.{extra},
+                       pc.predicates AS logic_predicates,
+                       pc.extractor_version AS logic_extractor_version,
+                       pc.source_card_id AS logic_source_card_id
+                FROM {table} c
+                LEFT JOIN LATERAL (
+                    SELECT jp.card_id
+                    FROM jp_cards jp
+                    WHERE c.set_code = jp.set_code
+                      AND split_part(c.set_number, '/', 1) ~ '^[0-9]+$'
+                      AND split_part(jp.set_number, '/', 1) ~ '^[0-9]+$'
+                      AND split_part(c.set_number, '/', 1)::int = split_part(jp.set_number, '/', 1)::int
+                    ORDER BY jp.card_id
+                    LIMIT 1
+                ) jp ON TRUE
+                LEFT JOIN processed_cards pc
+                  ON pc.card_id = jp.card_id
+                 AND pc.extractor_version = %s
+                WHERE c.regulation_mark = ANY(%s)
+                ORDER BY c.card_id
+                LIMIT %s OFFSET %s
+                """,
+                (LOGIC_EXTRACTOR_VERSION, list(STANDARD_MARKS), limit, offset),
+            )
+    else:
+        cursor.execute(
+            f"""
+            SELECT card_id, name, card_type, sub_type, hp, element_type, skills_json, description,
+                   set_code, set_number, set_name, regulation_mark, {extra},
+                   '[]'::jsonb AS logic_predicates,
+                   NULL::text AS logic_extractor_version,
+                   NULL::text AS logic_source_card_id
+            FROM {table}
+            WHERE regulation_mark = ANY(%s)
+            ORDER BY card_id
+            LIMIT %s OFFSET %s
+            """,
+            (list(STANDARD_MARKS), limit, offset),
+        )
     return [_card_doc(row, language) for row in cursor.fetchall()]
 
 

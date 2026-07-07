@@ -79,6 +79,22 @@ TOOL_SCHEMAS = [
                         "properties": {
                             "language": {"type": "string", "enum": ["tw", "jp"]},
                             "standard_marks": {"type": "array", "items": {"type": "string"}},
+                            "predicate_filter": {
+                                "type": "object",
+                                "description": "Optional verified structured predicate filter, for example {'type':'hp_threshold','op':'<=','value':90}. Only Gap A threshold predicates are currently reliable.",
+                                "properties": {
+                                    "type": {"type": "string"},
+                                    "types": {"type": "array", "items": {"type": "string"}},
+                                    "op": {"type": "string", "enum": ["<=", "<", ">=", ">", "=="]},
+                                    "value": {"type": "integer"},
+                                    "min_value": {"type": "integer"},
+                                    "max_value": {"type": "integer"},
+                                    "applies_to": {"type": "string"},
+                                    "dim": {"type": "string"},
+                                    "target": {"type": "string"},
+                                    "destination": {"type": "string"},
+                                },
+                            },
                         },
                     },
                 },
