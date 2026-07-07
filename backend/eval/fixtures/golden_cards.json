@@ -1,0 +1,345 @@
+{
+  "schema_version": "logic-golden-v1",
+  "source": {
+    "database": "ptcg_db",
+    "exported_from": "live readonly SELECT",
+    "exported_at": "2026-07-07",
+    "join_key": "cards.set_code + numeric prefix of set_number = jp_cards.set_code + numeric prefix of set_number",
+    "notes": [
+      "Rows were manually filtered against expected JP canonical names because some product rows join to unrelated JP cards with the same set number.",
+      "Gold predicates are human-authored from JP canonical text. The extractor must not infer predicates that are not grounded in jp_source_span."
+    ]
+  },
+  "operator_tokens": {
+    "以下": "<=",
+    "未満": "<",
+    "以上": ">=",
+    "超過": ">",
+    "ちょうど": "=="
+  },
+  "cards": [
+    {
+      "case_id": "friend_poffin_sv5k_063",
+      "category": "search_deck",
+      "difficulty": "easy",
+      "tw_card": {
+        "card_id": "9762",
+        "name": "好友寶芬",
+        "set_code": "SV5K",
+        "set_number": "063/071",
+        "regulation_mark": "H"
+      },
+      "jp_card": {
+        "card_id": "jp_SV5K_63",
+        "name": "なかよしポフィン"
+      },
+      "source_text": "自分の山札から、HPが「70」以下のたねポケモンを2枚まで選び、ベンチに出す。そして山札を切る。",
+      "gold_predicates": [
+        {
+          "type": "hp_threshold",
+          "op": "<=",
+          "value": 70,
+          "applies_to": "basic_pokemon",
+          "raw_token": "以下",
+          "raw_value": "70",
+          "jp_source_span": "HPが「70」以下のたねポケモン"
+        },
+        {
+          "type": "search_deck",
+          "target": "basic_pokemon",
+          "destination": "bench",
+          "max_count": 2,
+          "jp_source_span": "自分の山札から、HPが「70」以下のたねポケモンを2枚まで選び、ベンチに出す"
+        }
+      ]
+    },
+    {
+      "case_id": "level_ball_svf_022",
+      "category": "search_deck",
+      "difficulty": "easy",
+      "tw_card": {
+        "card_id": "8646",
+        "name": "等級球",
+        "set_code": "SVF",
+        "set_number": "022/038",
+        "regulation_mark": "E"
+      },
+      "jp_card": {
+        "card_id": "jp_SVF_22",
+        "name": "レベルボール"
+      },
+      "source_text": "自分の山札から、HPが「90」以下のポケモンを1枚選び、相手に見せてから、手札に加える。そして山札を切る。",
+      "gold_predicates": [
+        {
+          "type": "hp_threshold",
+          "op": "<=",
+          "value": 90,
+          "applies_to": "pokemon",
+          "raw_token": "以下",
+          "raw_value": "90",
+          "jp_source_span": "HPが「90」以下のポケモン"
+        },
+        {
+          "type": "search_deck",
+          "target": "pokemon",
+          "destination": "hand",
+          "count": 1,
+          "reveal_to_opponent": true,
+          "jp_source_span": "自分の山札から、HPが「90」以下のポケモンを1枚選び、相手に見せてから、手札に加える"
+        }
+      ]
+    },
+    {
+      "case_id": "taro_sv7_098",
+      "category": "draw",
+      "difficulty": "medium",
+      "tw_card": {
+        "card_id": "10993",
+        "name": "紫竽",
+        "set_code": "SV7",
+        "set_number": "098/102",
+        "regulation_mark": "H"
+      },
+      "jp_card": {
+        "card_id": "jp_SV7_98",
+        "name": "タロ"
+      },
+      "source_text": "自分の手札をすべて山札にもどして切る。その後、山札を4枚引く。相手のサイドの残り枚数が3枚以下なら、引く枚数は8枚になる。",
+      "gold_predicates": [
+        {
+          "type": "condition",
+          "effect": "shuffle_hand_into_deck",
+          "jp_source_span": "自分の手札をすべて山札にもどして切る"
+        },
+        {
+          "type": "draw",
+          "count": 4,
+          "jp_source_span": "山札を4枚引く"
+        },
+        {
+          "type": "count_threshold",
+          "op": "<=",
+          "value": 3,
+          "dim": "opponent_prizes_remaining",
+          "raw_token": "以下",
+          "raw_value": "3",
+          "jp_source_span": "相手のサイドの残り枚数が3枚以下"
+        },
+        {
+          "type": "draw",
+          "count": 8,
+          "condition": "opponent_prizes_remaining <= 3",
+          "jp_source_span": "引く枚数は8枚になる"
+        }
+      ]
+    },
+    {
+      "case_id": "professors_research_svf_030",
+      "category": "discard_draw",
+      "difficulty": "easy",
+      "tw_card": {
+        "card_id": "8654",
+        "name": "博士的研究",
+        "set_code": "SVF",
+        "set_number": "030/038",
+        "regulation_mark": "G"
+      },
+      "jp_card": {
+        "card_id": "jp_SVF_30",
+        "name": "博士の研究"
+      },
+      "source_text": "自分の手札をすべてトラッシュし、山札を7枚引く。",
+      "gold_predicates": [
+        {
+          "type": "discard",
+          "source": "hand",
+          "scope": "all",
+          "jp_source_span": "自分の手札をすべてトラッシュ"
+        },
+        {
+          "type": "draw",
+          "count": 7,
+          "jp_source_span": "山札を7枚引く"
+        }
+      ]
+    },
+    {
+      "case_id": "dudunsparce_sv5k_057",
+      "category": "ability_draw",
+      "difficulty": "medium",
+      "tw_card": {
+        "card_id": "9827",
+        "name": "土龍節節",
+        "set_code": "SV5K",
+        "set_number": "057/071",
+        "regulation_mark": "H"
+      },
+      "jp_card": {
+        "card_id": "jp_SV5K_57",
+        "name": "ノココッチ"
+      },
+      "source_text": "自分の番に1回使える。自分の山札を3枚引く。その後、このポケモンと、ついているすべてのカードを、山札にもどして切る。",
+      "gold_predicates": [
+        {
+          "type": "condition",
+          "effect": "once_during_own_turn",
+          "jp_source_span": "自分の番に1回使える"
+        },
+        {
+          "type": "draw",
+          "count": 3,
+          "jp_source_span": "自分の山札を3枚引く"
+        },
+        {
+          "type": "condition",
+          "effect": "shuffle_self_and_attached_cards_into_deck",
+          "jp_source_span": "このポケモンと、ついているすべてのカードを、山札にもどして切る"
+        }
+      ]
+    },
+    {
+      "case_id": "emergency_board_sv5k_064",
+      "category": "hp_threshold",
+      "difficulty": "medium",
+      "tw_card": {
+        "card_id": "9763",
+        "name": "緊急滑板",
+        "set_code": "SV5K",
+        "set_number": "064/071",
+        "regulation_mark": "H"
+      },
+      "jp_card": {
+        "card_id": "jp_SV5K_64",
+        "name": "緊急ボード"
+      },
+      "source_text": "このカードをつけているポケモンは、にげるためのエネルギーが1個ぶん少なくなる。そのポケモンの残りHPが「30」以下なら、にげるためのエネルギーは、すべてなくなる。",
+      "gold_predicates": [
+        {
+          "type": "condition",
+          "effect": "retreat_cost_reduced",
+          "value": 1,
+          "jp_source_span": "にげるためのエネルギーが1個ぶん少なくなる"
+        },
+        {
+          "type": "hp_threshold",
+          "op": "<=",
+          "value": 30,
+          "applies_to": "attached_pokemon_remaining_hp",
+          "raw_token": "以下",
+          "raw_value": "30",
+          "jp_source_span": "そのポケモンの残りHPが「30」以下"
+        },
+        {
+          "type": "condition",
+          "effect": "retreat_cost_becomes_zero",
+          "condition": "attached_pokemon_remaining_hp <= 30",
+          "jp_source_span": "にげるためのエネルギーは、すべてなくなる"
+        }
+      ]
+    },
+    {
+      "case_id": "lillies_determination_m1l_062",
+      "category": "draw",
+      "difficulty": "medium",
+      "tw_card": {
+        "card_id": "14019",
+        "name": "莉莉艾的決意",
+        "set_code": "M1L",
+        "set_number": "062/063",
+        "regulation_mark": "I"
+      },
+      "jp_card": {
+        "card_id": "jp_M1L_62",
+        "name": "リーリエの決心"
+      },
+      "source_text": "自分の手札をすべて山札にもどして切る。その後、山札を6枚引く。自分のサイドの残り枚数が6枚なら、引く枚数は8枚になる。",
+      "gold_predicates": [
+        {
+          "type": "condition",
+          "effect": "shuffle_hand_into_deck",
+          "jp_source_span": "自分の手札をすべて山札にもどして切る"
+        },
+        {
+          "type": "draw",
+          "count": 6,
+          "jp_source_span": "山札を6枚引く"
+        },
+        {
+          "type": "condition",
+          "effect": "own_prizes_remaining_equals",
+          "value": 6,
+          "jp_source_span": "自分のサイドの残り枚数が6枚なら"
+        },
+        {
+          "type": "draw",
+          "count": 8,
+          "condition": "own_prizes_remaining == 6",
+          "jp_source_span": "引く枚数は8枚になる"
+        }
+      ]
+    },
+    {
+      "case_id": "drakloak_sv6_080",
+      "category": "ability_search",
+      "difficulty": "hard",
+      "tw_card": {
+        "card_id": "10494",
+        "name": "多龍奇",
+        "set_code": "SV6",
+        "set_number": "080/101",
+        "regulation_mark": "H"
+      },
+      "jp_card": {
+        "card_id": "jp_SV6_80",
+        "name": "ドロンチ"
+      },
+      "source_text": "自分の番に1回使える。自分の山札を上から2枚見て、どちらか1枚を選び、手札に加える。残りのカードは、山札の下にもどす。",
+      "gold_predicates": [
+        {
+          "type": "condition",
+          "effect": "once_during_own_turn",
+          "jp_source_span": "自分の番に1回使える"
+        },
+        {
+          "type": "search_deck",
+          "target": "top_cards",
+          "look_count": 2,
+          "choose_count": 1,
+          "destination": "hand",
+          "jp_source_span": "自分の山札を上から2枚見て、どちらか1枚を選び、手札に加える"
+        },
+        {
+          "type": "condition",
+          "effect": "put_remaining_cards_on_bottom_of_deck",
+          "jp_source_span": "残りのカードは、山札の下にもどす"
+        }
+      ]
+    },
+    {
+      "case_id": "dragapult_ex_sv6_081",
+      "category": "damage_counters",
+      "difficulty": "hard",
+      "tw_card": {
+        "card_id": "10495",
+        "name": "多龍巴魯托ex",
+        "set_code": "SV6",
+        "set_number": "081/101",
+        "regulation_mark": "H"
+      },
+      "jp_card": {
+        "card_id": "jp_SV6_81",
+        "name": "ドラパルトex"
+      },
+      "source_text": "ダメカン6個を、相手のベンチポケモンに好きなようにのせる。",
+      "gold_predicates": [
+        {
+          "type": "place_damage_counters",
+          "count": 6,
+          "target": "opponent_bench_pokemon",
+          "distribution": "as_you_like",
+          "jp_source_span": "ダメカン6個を、相手のベンチポケモンに好きなようにのせる"
+        }
+      ]
+    }
+  ]
+}

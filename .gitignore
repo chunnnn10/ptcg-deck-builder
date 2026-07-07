@@ -33,6 +33,7 @@ data/
 # 資料庫備份、Dump 與部署備份
 # =========================================================
 *.sql
+!backend/migrations/*.sql
 *.dump
 *.backup
 deploy/backups/
