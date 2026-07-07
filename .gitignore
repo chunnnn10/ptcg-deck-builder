@@ -6,6 +6,9 @@
 !.env.example
 .reasonix/
 
+# 內部交接文件（含運維路徑/部署資訊，勿進 public repo；sanitized 版見 docs/STRUCTURED-LOGIC-PLAN.md）
+docs/HANDOFF-STRUCTURED-LOGIC.md
+
 # =========================================================
 # Python 系統檔、快取與虛擬環境
 # =========================================================
