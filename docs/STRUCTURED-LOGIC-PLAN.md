@@ -117,6 +117,9 @@ complete action/effect extractor. Adversarial cases intentionally expose missing
   Adapter entrypoint: `services.logic_extractor.adapter.backfill_gap_a_threshold_only(...)`; it defaults to
   `dry_run=True` and requires `001_logic_layer.sql` before any write path is used. Admin endpoints:
   `GET /api/admin/logic-extractor/gap-a/status` and `POST /api/admin/logic-extractor/gap-a/backfill`.
+  Ingest hook: `jp_crawler.save_card_to_db` calls `upsert_gap_a_for_jp_card(...)` after JP card upsert, and
+  no-ops safely until the Phase 0 migration columns exist. Runtime deck export reads `processed_cards` via
+  `database.get_card_logic()` instead of `cards.ai_logic_json`; `update_pokemon.py` remains a legacy SQLite tool.
 - **Phase 3 (Gap A payoff, MVP end)** — wire retrieval: `_fetch_card_docs` LEFT JOIN `processed_cards`;
   `_card_doc` appends normalized predicate string + metadata; `_card_payload` exposes predicates;
   `semantic_search_cards` gains `predicate_filter`; re-embed.

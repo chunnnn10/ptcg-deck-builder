@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup, Tag
 
 import config
 import database
+from services.logic_extractor.adapter import upsert_gap_a_for_jp_card
 
 logger = logging.getLogger(__name__)
 
@@ -633,6 +634,18 @@ def save_card_to_db(card: JPCardData, skip_images: bool = False, conn=None) -> b
             card.flavor_text, card.pokedex_number, card.pokedex_category,
             card.height, card.weight
         ))
+        try:
+            upsert_gap_a_for_jp_card(
+                conn,
+                {
+                    "card_id": card_id_str,
+                    "name": card.name,
+                    "description": card.description,
+                    "skills_json": skills_json,
+                },
+            )
+        except Exception as e:
+            jp_log(f"Logic extractor hook skipped for card {card_id_str}: {e}")
         if own_conn:
             conn.commit()
         return True

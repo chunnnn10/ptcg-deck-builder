@@ -193,6 +193,73 @@ def upsert_processed_card(
     )
 
 
+def logic_schema_ready(conn: Any) -> bool:
+    """Return whether ``processed_cards`` has the Phase 0 logic columns."""
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'processed_cards'
+          AND column_name IN ('predicates', 'extractor_version', 'source_text_hash')
+        """
+    )
+    row = cursor.fetchone()
+    return int(row.get("count") or 0) == 3
+
+
+def upsert_gap_a_for_jp_card(
+    conn: Any,
+    row: dict[str, Any],
+    *,
+    skip_empty: bool = True,
+) -> dict[str, int | bool | str]:
+    """Extract and upsert Gap A predicates for one JP card row.
+
+    This is intended for crawler ingest hooks. It no-ops before
+    ``001_logic_layer.sql`` has been applied, so code deployment can safely
+    precede the DB migration.
+    """
+
+    summary = {
+        "schema_ready": False,
+        "extractor_version": EXTRACTOR_VERSION,
+        "scanned": 0,
+        "with_gap_a_predicates": 0,
+        "skipped_empty": 0,
+        "written": 0,
+    }
+    if not logic_schema_ready(conn):
+        return summary
+
+    summary["schema_ready"] = True
+    summary["scanned"] = 1
+    source_text = build_jp_source_text(row)
+    if not source_text:
+        summary["skipped_empty"] = 1
+        return summary
+
+    predicates = extract_gap_a_predicates(source_text)
+    if predicates:
+        summary["with_gap_a_predicates"] = 1
+    elif skip_empty:
+        summary["skipped_empty"] = 1
+        return summary
+
+    upsert_processed_card(
+        conn,
+        card_id=str(row.get("card_id") or ""),
+        card_name=str(row.get("name") or ""),
+        source_text=source_text,
+        predicates=predicates,
+        source_card_id=str(row.get("card_id") or ""),
+    )
+    summary["written"] = 1
+    return summary
+
+
 def fetch_jp_card_sources(conn: Any, *, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
     """Read JP card source rows. SELECT-only."""
 

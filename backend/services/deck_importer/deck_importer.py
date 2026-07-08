@@ -383,10 +383,9 @@ class DeckImporter:
                 for _ in range(quantity):
                     try: skills_obj = json.loads(card_data['skills_json'])
                     except: skills_obj = []
-                    try: logic_obj = json.loads(card_data['ai_logic_json']) if card_data['ai_logic_json'] else None
-                    except: logic_obj = None
+                    logic_obj = database.get_card_logic(card_data['card_id'])
                     card_obj = {
-                        "ai_logic_json": card_data['ai_logic_json'],
+                        "ai_logic_json": json.dumps(logic_obj, ensure_ascii=False) if logic_obj else None,
                         "card_id": card_data['card_id'],
                         "card_type": card_data['card_type'],
                         "element_type": card_data['element_type'],
