@@ -122,7 +122,8 @@ complete action/effect extractor. Adversarial cases intentionally expose missing
   `semantic_search_cards` gains `predicate_filter`; re-embed.
   Retrieval wiring should tolerate pre-migration deployments by returning empty predicates when the logic columns
   are not present yet. Current reliable filter scope is `gap_a_threshold_only`, especially `hp_threshold` and
-  threshold-backed `search_deck` predicates.
+  threshold-backed `search_deck` predicates. Legacy `logic` payload readers should prefer `processed_cards.predicates`
+  and fall back to the historical `logic_json` text payload.
 - **Phase 6** — admin annotation GUI (golden-set authoring + review queue), writes DB live.
 - **Phase 4 (Gap B)** — derive role axes (discard_cost/needs_evolution/burst_vs_steady/per_turn_limit)
   from predicates; rewrite `_analyze_deck_play_plan`.

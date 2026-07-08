@@ -29,9 +29,86 @@ def get_card_logic(card_id):
         return None
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT logic_json FROM processed_cards WHERE card_id = %s", (card_id,))
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'processed_cards'
+              AND column_name IN (
+                  'logic_json', 'predicates', 'extractor_version', 'source_language',
+                  'source_card_id', 'source_text_hash', 'validation_errors'
+              )
+            """
+        )
+        columns = {row['column_name'] for row in cursor.fetchall()}
+        select_fields = [("logic_json", "pc.logic_json" if "logic_json" in columns else "NULL::text")]
+        for column in (
+            "predicates",
+            "extractor_version",
+            "source_language",
+            "source_card_id",
+            "source_text_hash",
+            "validation_errors",
+        ):
+            if column in columns:
+                select_fields.append((column, f"pc.{column}"))
+            elif column in ("predicates", "validation_errors"):
+                select_fields.append((column, "'[]'::jsonb"))
+            else:
+                select_fields.append((column, "NULL::text"))
+        cte_select = ", ".join(f"{expr} AS {name}" for name, expr in select_fields)
+        final_select = ", ".join(name for name, _ in select_fields)
+        lookup_ids = [str(card_id)]
+        base_id = str(card_id).rsplit('.', 1)[0] if '.' in str(card_id) else ''
+        if base_id and base_id not in lookup_ids:
+            lookup_ids.append(base_id)
+        cursor.execute(
+            f"""
+            WITH candidate_logic AS (
+                SELECT 0 AS priority, {cte_select}
+                FROM processed_cards pc
+                WHERE pc.card_id = ANY(%s)
+                UNION ALL
+                SELECT 1 AS priority, {cte_select}
+                FROM cards c
+                JOIN jp_cards j
+                  ON c.set_code = j.set_code
+                 AND split_part(c.set_number, '/', 1) ~ '^[0-9]+$'
+                 AND split_part(j.set_number, '/', 1) ~ '^[0-9]+$'
+                 AND split_part(c.set_number, '/', 1)::int = split_part(j.set_number, '/', 1)::int
+                JOIN processed_cards pc ON pc.card_id = j.card_id
+                WHERE c.card_id = ANY(%s)
+            )
+            SELECT {final_select}
+            FROM candidate_logic
+            ORDER BY priority
+            LIMIT 1
+            """,
+            (lookup_ids, lookup_ids),
+        )
         row = cursor.fetchone()
-        if row and row['logic_json']:
+        if not row:
+            return None
+
+        predicates = row.get('predicates') or []
+        if isinstance(predicates, str):
+            try:
+                predicates = json.loads(predicates)
+            except Exception:
+                predicates = []
+        if predicates:
+            return {
+                "version": row.get('extractor_version'),
+                "scope": row.get('extractor_version'),
+                "source_language": row.get('source_language'),
+                "source_card_id": row.get('source_card_id'),
+                "source_text_hash": row.get('source_text_hash'),
+                "predicates": predicates,
+                "validation_errors": row.get('validation_errors') or [],
+            }
+
+        if row.get('logic_json'):
             try:
                 return json.loads(row['logic_json'])
             except Exception:

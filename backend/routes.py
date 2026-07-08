@@ -317,10 +317,11 @@ def slim_card_payload_from_row(row, folder_prefix, language='tw'):
     return payload
 
 
-def batch_logic_payloads(cursor, card_ids):
+def batch_logic_payloads(cursor, card_rows_or_ids):
     lookup_ids = []
     seen = set()
-    for raw_id in card_ids:
+    for item in card_rows_or_ids:
+        raw_id = item.get('card_id') if isinstance(item, dict) else item
         cid = str(raw_id or "").strip()
         if not cid:
             continue
@@ -330,16 +331,83 @@ def batch_logic_payloads(cursor, card_ids):
                 lookup_ids.append(candidate)
     if not lookup_ids:
         return {}
-    placeholders = ','.join(['%s'] * len(lookup_ids))
     cursor.execute(
-        f"SELECT card_id, logic_json FROM processed_cards WHERE card_id IN ({placeholders})",
-        lookup_ids,
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'processed_cards'
+          AND column_name IN (
+              'logic_json', 'predicates', 'extractor_version', 'source_language',
+              'source_card_id', 'source_text_hash', 'validation_errors'
+          )
+        """
+    )
+    columns = {row['column_name'] for row in cursor.fetchall()}
+    select_fields = [("logic_json", "pc.logic_json" if "logic_json" in columns else "NULL::text")]
+    for column in (
+        "predicates",
+        "extractor_version",
+        "source_language",
+        "source_card_id",
+        "source_text_hash",
+        "validation_errors",
+    ):
+        if column in columns:
+            select_fields.append((column, f"pc.{column}"))
+        elif column in ("predicates", "validation_errors"):
+            select_fields.append((column, "'[]'::jsonb"))
+        else:
+            select_fields.append((column, "NULL::text"))
+    cte_select = ", ".join(f"{expr} AS {name}" for name, expr in select_fields)
+    final_select = ", ".join(name for name, _ in select_fields)
+    cursor.execute(
+        f"""
+        WITH candidate_logic AS (
+            SELECT pc.card_id AS lookup_id, pc.card_id AS processed_card_id, 0 AS priority, {cte_select}
+            FROM processed_cards pc
+            WHERE pc.card_id = ANY(%s)
+            UNION ALL
+            SELECT c.card_id AS lookup_id, pc.card_id AS processed_card_id, 1 AS priority, {cte_select}
+            FROM cards c
+            JOIN jp_cards j
+              ON c.set_code = j.set_code
+             AND split_part(c.set_number, '/', 1) ~ '^[0-9]+$'
+             AND split_part(j.set_number, '/', 1) ~ '^[0-9]+$'
+             AND split_part(c.set_number, '/', 1)::int = split_part(j.set_number, '/', 1)::int
+            JOIN processed_cards pc ON pc.card_id = j.card_id
+            WHERE c.card_id = ANY(%s)
+        )
+        SELECT lookup_id, processed_card_id, {final_select}
+        FROM candidate_logic
+        ORDER BY priority, lookup_id, processed_card_id
+        """,
+        (lookup_ids, lookup_ids),
     )
     logic_by_id = {}
     for row in cursor.fetchall():
-        if row.get('logic_json'):
+        lookup_id = str(row.get('lookup_id') or row.get('processed_card_id') or '')
+        if not lookup_id or lookup_id in logic_by_id:
+            continue
+        predicates = row.get('predicates') or []
+        if isinstance(predicates, str):
             try:
-                logic_by_id[str(row['card_id'])] = json.loads(row['logic_json'])
+                predicates = json.loads(predicates)
+            except Exception:
+                predicates = []
+        if predicates:
+            logic_by_id[lookup_id] = {
+                "version": row.get('extractor_version'),
+                "scope": row.get('extractor_version'),
+                "source_language": row.get('source_language'),
+                "source_card_id": row.get('source_card_id') or row.get('processed_card_id'),
+                "source_text_hash": row.get('source_text_hash'),
+                "predicates": predicates,
+                "validation_errors": row.get('validation_errors') or [],
+            }
+        elif row.get('logic_json'):
+            try:
+                logic_by_id[lookup_id] = json.loads(row['logic_json'])
             except Exception:
                 pass
     return logic_by_id
@@ -1085,8 +1153,7 @@ def get_cards_batch():
                 cursor.execute(sql, unique_ids)
                 rows = cursor.fetchall()
              except: pass
-        row_ids = [row.get('card_id') for row in rows]
-        logic_by_id = batch_logic_payloads(cursor, row_ids)
+        logic_by_id = batch_logic_payloads(cursor, rows)
         for row in rows:
             card_data = card_payload_from_row(row, 'images')
             c_id = card_data.get('card_id') or card_data.get('id')
