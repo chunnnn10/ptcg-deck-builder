@@ -11,6 +11,7 @@ from functools import wraps  # [新增] 用於裝飾器
 from email.mime.text import MIMEText
 from bs4 import BeautifulSoup
 from flask import Blueprint, render_template, request, jsonify, send_from_directory, url_for
+import security
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.utils import secure_filename
 from datetime import datetime
@@ -150,6 +151,53 @@ def admin_required(f):
             return jsonify({'success': False, 'error': '權限不足，僅限管理員使用'}), 403
         return f(*args, **kwargs)
     return decorated_function
+
+
+def ai_access_required(f):
+    """
+    裝飾器：檢查使用者是否有 AI 助手使用權限
+    需先登入，且為 Admin 或在 admin 面板被開放 AI 使用權
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify({'success': False, 'error': '請先登入以使用 AI 助手'}), 401
+        if not (current_user.is_admin or getattr(current_user, 'ai_enabled', False)):
+            return jsonify({'success': False, 'error': '您沒有 AI 助手使用權限，請聯絡管理員開通。'}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# 未登錄查詢配額：列入的端點每日最多 ANON_QUERY_DAILY_LIMIT 次（依 IP）
+_ANON_QUOTA_ENDPOINTS = {
+    'search_cards', 'get_cards_batch', 'search_jp_cards', 'get_jp_cards_batch',
+    'get_card_variants', 'get_public_decks', 'get_deck',
+    'get_japanese_decks', 'get_japanese_deck_content',
+    'get_limitless_tournaments', 'get_limitless_tournament_decks',
+    'get_limitless_decks', 'get_limitless_deck', 'get_limitless_deck_cards',
+    'limitless_jp_sets',
+}
+
+
+@main_bp.before_request
+def enforce_anon_query_quota():
+    """未登錄用戶查詢公開資料端點時計數，超過每日配額要求登入。"""
+    if current_user.is_authenticated:
+        return None
+    # blueprint 路由的 endpoint 帶前綴（如 main.search_cards），取最後一段比對
+    endpoint = (request.endpoint or '').rsplit('.', 1)[-1]
+    if endpoint not in _ANON_QUOTA_ENDPOINTS:
+        return None
+    if security.check_anon_quota(security.client_ip()):
+        resp = jsonify({
+            'success': False,
+            'error': '未登錄每日查詢次數已用完，請登入或註冊後繼續使用。',
+            'need_login': True,
+        })
+        resp.status_code = 429
+        resp.headers['X-Need-Login'] = '1'
+        return resp
+    return None
 
 
 def _request_bool(value, default=False):
@@ -663,13 +711,19 @@ def register():
         
         if not username or not email or not password:
             return jsonify({'success': False, 'error': '請填寫完整資訊 (帳號、Email、密碼)'}), 400
-            
+
+        ip = security.client_ip()
+        if security.is_rate_limited('register', ip):
+            return jsonify({'success': False, 'error': '註冊嘗試次數過多，請稍後再試。'}), 429
+
         # 嘗試建立使用者
         user = User.create(username, password, email)
-        
+
         # User.create 回傳 None 表示使用者已存在或其他資料庫錯誤
         if not user:
-            return jsonify({'success': False, 'error': '使用者名稱或 Email 已存在，或資料庫錯誤'}), 400
+            # 不揭露用戶名/Email 是否存在，避免用戶枚舉
+            security.record_failure('register', ip)
+            return jsonify({'success': False, 'error': '註冊失敗，請稍後再試。'}), 400
         
         # 發送驗證信
         token = user.get_verification_token()
@@ -721,23 +775,30 @@ def login():
         if not identifier or not password:
             return jsonify({'success': False, 'error': '請輸入帳號/Email與密碼'}), 400
 
+        ip = security.client_ip()
+        if security.is_rate_limited('login', ip):
+            return jsonify({'success': False, 'error': '登入嘗試次數過多，請稍後再試。'}), 429
+
         user = User.find_by_username_or_email(identifier)
-        
+
         if user and user.verify_password(password):
+            security.clear_failures('login', ip)
             if not user.is_verified:
                 return jsonify({'success': False, 'error': '帳號尚未驗證，請檢查您的 Email。'}), 401
-                
+
             login_user(user)
             return jsonify({
-                'success': True, 
+                'success': True,
                 'user': {
-                    'id': user.id, 
-                    'username': user.username, 
+                    'id': user.id,
+                    'username': user.username,
                     'role': user.role,
-                    'is_admin': user.is_admin  # [新增] 回傳 is_admin
+                    'is_admin': user.is_admin,  # [新增] 回傳 is_admin
+                    'ai_enabled': user.ai_enabled
                 }
             })
-        
+
+        security.record_failure('login', ip)
         return jsonify({'success': False, 'error': '帳號或密碼錯誤'}), 401
     except Exception as e:
         print(f"Login Error: {e}")
@@ -778,9 +839,14 @@ def forgot_password():
         if not email:
             return jsonify({'success': False, 'error': '請輸入 Email'}), 400
 
+        ip = security.client_ip()
+        if security.is_rate_limited('forgot', ip):
+            return jsonify({'success': False, 'error': '請求次數過多，請稍後再試。'}), 429
+
         user = User.find_by_email(email)
         if not user:
             # 不揭露用戶是否存在，統一回傳成功訊息
+            security.record_failure('forgot', ip)
             return jsonify({'success': True, 'message': '如果此 Email 已註冊，您將會收到重設密碼的郵件。'})
 
         token = user.get_password_reset_token()
@@ -897,6 +963,7 @@ def reset_password():
 # ==========================================
 
 @main_bp.route('/api/ai/chat', methods=['POST'])
+@ai_access_required
 def ai_chat():
     try:
         data = request.get_json(silent=True) or {}
@@ -939,6 +1006,7 @@ def ai_chat():
 
 
 @main_bp.route('/api/ai/chat/jobs', methods=['POST'])
+@ai_access_required
 def ai_chat_job_start():
     try:
         data = request.get_json(silent=True) or {}
@@ -960,6 +1028,7 @@ def ai_chat_job_start():
 
 
 @main_bp.route('/api/ai/chat/jobs/<job_id>', methods=['GET'])
+@ai_access_required
 def ai_chat_job_status(job_id):
     result = get_assistant_job(job_id)
     status = 200 if result.get('success') else 404
@@ -1432,6 +1501,7 @@ def get_card_variants(card_id):
 
 
 @main_bp.route('/api/card/refresh/<card_id>', methods=['POST'])
+@login_required
 def refresh_card_detail(card_id):
     """Refresh one Traditional Chinese card detail from the official page."""
     card_id = str(card_id or '').strip()
@@ -1728,6 +1798,7 @@ def start_jp_update():
 from services.crawler import limitless_jp_crawler as ljp
 
 @main_bp.route('/api/limitless-jp/test', methods=['POST'])
+@login_required
 def limitless_jp_test():
     """測試單卡解析"""
     data = request.json or {}
@@ -1783,20 +1854,34 @@ def limitless_jp_start():
     delay = float(data.get('delay', 0.3))
     card_count = int(data.get('card_count', 999))
     card_counts = data.get('card_counts', {})
-    
-    def _run():
-        if target == 'all':
-            ljp.crawl_all(workers=workers, delay=delay)
-        elif targets:
-            for code in targets:
-                cnt = card_counts.get(code, 999) if isinstance(card_counts, dict) else 999
-                ljp.crawl_set(code, cnt, num_workers=workers, delay=delay, save=True)
-        else:
-            ljp.crawl_set(target, card_count, num_workers=workers, delay=delay, save=True)
-    
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    
+
+    # 檢查並原子佔用爬蟲狀態鎖，避免同時啟動多個爬取任務
+    if not ljp.state_lock.acquire(blocking=False):
+        return jsonify({"status": "error", "msg": "JP 卡牌爬取已在進行中"}), 409
+    try:
+        if ljp.UPDATE_STATE['running']:
+            return jsonify({"status": "error", "msg": "JP 卡牌爬取已在進行中"}), 409
+        ljp.UPDATE_STATE['running'] = True
+
+        def _run():
+            try:
+                if target == 'all':
+                    ljp.crawl_all(workers=workers, delay=delay)
+                elif targets:
+                    for code in targets:
+                        cnt = card_counts.get(code, 999) if isinstance(card_counts, dict) else 999
+                        ljp.crawl_set(code, cnt, num_workers=workers, delay=delay, save=True)
+                else:
+                    ljp.crawl_set(target, card_count, num_workers=workers, delay=delay, save=True)
+            finally:
+                with ljp.state_lock:
+                    ljp.UPDATE_STATE['running'] = False
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+    finally:
+        ljp.state_lock.release()
+
     desc = target if not targets else f"{len(targets)} 個系列 ({targets[0]}...)"
     return jsonify({"status": "success", "msg": f"任務已啟動: {desc}"})
 
@@ -2156,6 +2241,7 @@ def get_limitless_deck_cards(deck_id):
 
 
 @main_bp.route('/api/limitless-decks/<path:deck_id>/import', methods=['POST'])
+@login_required
 def import_limitless_deck(deck_id):
     from services.limitless_decks.repository import import_deck
 
@@ -2639,10 +2725,10 @@ def get_all_users():
     try:
         conn = User._get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, email, role, is_verified, created_at FROM users ORDER BY created_at DESC")
+        cursor.execute("SELECT id, username, email, role, is_verified, ai_enabled, created_at FROM users ORDER BY created_at DESC")
         rows = cursor.fetchall()
         conn.close()
-        
+
         users = []
         for row in rows:
             users.append({
@@ -2651,6 +2737,7 @@ def get_all_users():
                 'email': row['email'],
                 'role': row['role'],
                 'is_verified': bool(row['is_verified']),
+                'ai_enabled': bool(row.get('ai_enabled', 0)),
                 'created_at': row['created_at']
             })
         
@@ -2765,6 +2852,8 @@ def admin_update_user(user_id):
             kwargs['email'] = data['email'].strip()
         if 'password' in data and data['password']:
             kwargs['password'] = data['password'].strip()
+        if 'ai_enabled' in data:
+            kwargs['ai_enabled'] = bool(data['ai_enabled'])
 
         success, message = User.update_profile(user_id, **kwargs)
         if success:

@@ -1,6 +1,18 @@
 // /Pokemon/public/js/app.js
 const { createApp, onMounted, onUnmounted, ref, computed, watch } = Vue;
 
+// 攔截 429 + X-Need-Login 回應（未登錄查詢配額用盡）→ 觸發登入彈窗
+(function () {
+    const originalFetch = window.fetch;
+    window.fetch = async function (...args) {
+        const response = await originalFetch.apply(this, args);
+        if (response.status === 429 && response.headers && response.headers.get('X-Need-Login') === '1') {
+            window.dispatchEvent(new CustomEvent('ptcg:need-login'));
+        }
+        return response;
+    };
+})();
+
 const WorkspaceTreeNode = {
     name: "WorkspaceTreeNode",
     template: "#workspace-tree-node-template",

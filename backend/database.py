@@ -523,9 +523,12 @@ def init_db():
             password_hash VARCHAR NOT NULL,
             role VARCHAR DEFAULT 'user',
             is_verified INTEGER DEFAULT 0,
+            ai_enabled INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        # 兼容舊庫：欄位可能不存在
+        cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_enabled INTEGER DEFAULT 0")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_workspace (

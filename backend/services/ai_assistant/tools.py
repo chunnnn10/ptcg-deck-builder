@@ -775,7 +775,9 @@ def summarize_meta_archetype(query: str) -> dict[str, Any]:
     decks = search_meta_decks(query, 10)
     card_counter = Counter()
     for deck in decks:
-        for card in deck.get("cards") or []:
+        # embedding 路徑回傳 cards、關鍵字路徑回傳 matched_cards，
+        # 兩者都讀，修復關鍵字路徑恆空的問題。
+        for card in deck.get("matched_cards") or deck.get("cards") or []:
             name = str(card.get("name") or card.get("card_name") or "").strip()
             if name:
                 card_counter[name] += 1

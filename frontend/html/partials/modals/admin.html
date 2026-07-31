@@ -292,12 +292,19 @@
                                         <i class="fa-solid fa-pen-to-square"></i>
                                     </button>
                                     <!-- 切換角色 -->
-                                    <button v-if="u.id !== user.id" 
-                                            @click="toggleUserRole(u)" 
+                                    <button v-if="u.id !== user.id"
+                                            @click="toggleUserRole(u)"
                                             class="p-2 rounded hover:bg-gray-700 transition"
                                             :class="u.role === 'admin' ? 'text-yellow-400' : 'text-gray-400'"
                                             :title="u.role === 'admin' ? '降級為普通用戶' : '升級為管理員'">
                                         <i class="fa-solid fa-crown"></i>
+                                    </button>
+                                    <!-- AI 使用權 -->
+                                    <button @click="toggleAiAccess(u)"
+                                            class="p-2 rounded hover:bg-gray-700 transition"
+                                            :class="u.ai_enabled || u.role === 'admin' ? 'text-green-400' : 'text-gray-600'"
+                                            :title="u.ai_enabled ? '停用 AI 助手使用權' : '開放 AI 助手使用權'">
+                                        <i class="fa-solid fa-robot"></i>
                                     </button>
                                     <!-- 手動驗證 -->
                                     <button v-if="!u.is_verified" 

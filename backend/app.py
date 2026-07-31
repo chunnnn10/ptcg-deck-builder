@@ -24,6 +24,37 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'main.index'
 
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    """API 請求回傳 401 JSON，瀏覽器頁面請求才重導向登入頁。"""
+    from flask import request as flask_request, jsonify
+    if flask_request.path.startswith('/api/'):
+        return jsonify({'success': False, 'error': '請先登入'}), 401
+    return '請先登入', 401
+
+# ── 安全響應頭：CSP + 基本防護 ──
+_CSP = (
+    "default-src 'self'; "
+    # 'unsafe-eval'：Vue 全域版（含 runtime compiler）編譯內聯模板必需
+    "script-src 'self' 'unsafe-eval' https://unpkg.com https://cdnjs.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com; "
+    "font-src 'self' data: https://cdnjs.cloudflare.com; "
+    "img-src 'self' data: blob: https:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+@app.after_request
+def apply_security_headers(resp):
+    resp.headers.setdefault('Content-Security-Policy', _CSP)
+    resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    resp.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    return resp
+
 # 將 backend/ 加入 sys.path 以便所有其他模組可用
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 if backend_dir not in sys.path:

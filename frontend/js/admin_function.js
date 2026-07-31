@@ -386,6 +386,29 @@ function useAdminUpdate() {
         }
     };
 
+    const toggleAiAccess = async (targetUser) => {
+        const next = !targetUser.ai_enabled;
+        const action = next ? '開放 AI 助手使用權' : '停用 AI 助手使用權';
+        if (!confirm(`確定要對 "${targetUser.username}" ${action}？`)) return;
+
+        try {
+            const res = await fetch(`/api/admin/users/${targetUser.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ai_enabled: next })
+            });
+            const data = await res.json();
+            if (data.success) {
+                targetUser.ai_enabled = next;
+                alert(`已成功對 "${targetUser.username}" ${action}`);
+            } else {
+                alert("操作失敗: " + data.error);
+            }
+        } catch (e) {
+            alert("連線錯誤");
+        }
+    };
+
     const verifyUser = async (targetUser) => {
         if (!confirm(`確定要手動驗證 "${targetUser.username}" 的帳號？`)) return;
         

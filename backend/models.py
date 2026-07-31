@@ -7,13 +7,14 @@ from itsdangerous import URLSafeTimedSerializer
 import config
 
 class User(UserMixin):
-    def __init__(self, id, username, password_hash, role='user', email=None, is_verified=0):
+    def __init__(self, id, username, password_hash, role='user', email=None, is_verified=0, ai_enabled=0):
         self.id = id
         self.username = username
         self.password_hash = password_hash
         self.role = role
         self.email = email
         self.is_verified = bool(is_verified)
+        self.ai_enabled = bool(ai_enabled)
 
     @property
     def is_admin(self):
@@ -47,7 +48,8 @@ class User(UserMixin):
             password_hash=user_data['password_hash'],
             role=user_data['role'],
             email=user_data['email'],
-            is_verified=user_data['is_verified']
+            is_verified=user_data['is_verified'],
+            ai_enabled=user_data.get('ai_enabled', 0)
         )
 
     @staticmethod
@@ -65,7 +67,8 @@ class User(UserMixin):
             password_hash=user_data['password_hash'],
             role=user_data['role'],
             email=user_data['email'],
-            is_verified=user_data['is_verified']
+            is_verified=user_data['is_verified'],
+            ai_enabled=user_data.get('ai_enabled', 0)
         )
 
     @staticmethod
@@ -86,11 +89,11 @@ class User(UserMixin):
 
         try:
             cursor.execute(
-                "INSERT INTO users (id, username, email, password_hash, role, is_verified) VALUES (%s, %s, %s, %s, %s, 0)",
+                "INSERT INTO users (id, username, email, password_hash, role, is_verified, ai_enabled) VALUES (%s, %s, %s, %s, %s, 0, 0)",
                 (new_id, username, email, hashed_password, role)
             )
             conn.commit()
-            return User(new_id, username, hashed_password, role, email, 0)
+            return User(new_id, username, hashed_password, role, email, 0, 0)
         except Exception as e:
             conn.rollback()
             print(f"Create User Error: {e}")
@@ -141,7 +144,8 @@ class User(UserMixin):
             password_hash=user_data['password_hash'],
             role=user_data['role'],
             email=user_data['email'],
-            is_verified=user_data['is_verified']
+            is_verified=user_data['is_verified'],
+            ai_enabled=user_data.get('ai_enabled', 0)
         )
 
     @staticmethod
@@ -202,6 +206,10 @@ class User(UserMixin):
             if 'password' in kwargs and kwargs['password']:
                 updates.append("password_hash = %s")
                 values.append(generate_password_hash(kwargs['password']))
+
+            if 'ai_enabled' in kwargs:
+                updates.append("ai_enabled = %s")
+                values.append(1 if kwargs['ai_enabled'] else 0)
 
             if not updates:
                 conn.close()

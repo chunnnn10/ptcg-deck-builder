@@ -28,6 +28,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       FLASK_DEBUG: "false"
+      # 強制要求密鑰存在，缺漏時 compose 直接失敗（fail-closed）
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env.production}
+      SECURITY_PASSWORD_SALT: ${SECURITY_PASSWORD_SALT:?set SECURITY_PASSWORD_SALT in .env.production}
       ENABLE_JP_DECK_AUTO_UPDATE: ${ENABLE_JP_DECK_AUTO_UPDATE:-false}
       ENABLE_LIMITLESS_AUTO_UPDATE: ${ENABLE_LIMITLESS_AUTO_UPDATE:-false}
       PYTHONUNBUFFERED: "1"

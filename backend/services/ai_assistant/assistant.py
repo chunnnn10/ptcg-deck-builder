@@ -1423,7 +1423,12 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
     ]
 
     default_steps = 12 if deep_think else 6
-    max_steps = int(context.get("max_agent_steps") or default_steps)
+    # clamp 用戶輸入，防止 max_agent_steps 被濫用造成無限 LLM 呼叫
+    try:
+        max_steps = int(context.get("max_agent_steps") or default_steps)
+    except (TypeError, ValueError):
+        max_steps = default_steps
+    max_steps = min(max(1, max_steps), 30)
     try:
         for _ in range(max_steps):
             _append_job_step(context.get("job_id"), {"status": "running", "message": "呼叫 AI 模型決定下一步工具"})

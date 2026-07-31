@@ -59,8 +59,18 @@ DATABASE_URL = os.environ.get('DATABASE_URL',
     'postgresql://ptcg:ptcg_secret@localhost:5432/ptcg_db')
 
 # ── Flask 安全 ──
-SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-this-in-prod-123456'
-SECURITY_PASSWORD_SALT = os.environ.get('SECURITY_PASSWORD_SALT') or 'my-precious-salt'
+# 不再提供開發默認值：未設置或仍為佔位符時直接拒絕啟動，
+# 避免生產環境意外使用可預測密鑰簽發 session cookie。
+def _require_secret(name: str, forbidden: tuple) -> str:
+    value = os.environ.get(name) or ''
+    if not value or any(token in value for token in forbidden):
+        raise RuntimeError(
+            f'{name} 未設置或仍為開發佔位值。請在 .env 設置一組隨機密鑰後再啟動。'
+        )
+    return value
+
+SECRET_KEY = _require_secret('SECRET_KEY', ('change-this', 'dev-secret-key'))
+SECURITY_PASSWORD_SALT = _require_secret('SECURITY_PASSWORD_SALT', ('change-this', 'my-precious-salt'))
 FLASK_DEBUG = _env_bool('FLASK_DEBUG', False)
 SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', False)
 SESSION_COOKIE_SAMESITE = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')

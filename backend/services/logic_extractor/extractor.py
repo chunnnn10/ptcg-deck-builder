@@ -178,7 +178,8 @@ def _extract_discard(card_text: str, predicates: list[dict[str, Any]]) -> None:
 
 
 def _extract_draw(card_text: str, predicates: list[dict[str, Any]]) -> None:
-    for match in re.finditer(r"((?:自分の)?山札を(\d+)枚引く)", card_text):
+    # 負向 lookbehind 排除「相手の山札を…引く」（那是對手抽牌，不是自己的 draw）
+    for match in re.finditer(r"((?<!相手の)(?:自分の)?山札を(\d+)枚引く)", card_text):
         predicates.append(
             {
                 "type": "draw",

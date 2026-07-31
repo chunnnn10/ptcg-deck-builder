@@ -10,6 +10,10 @@
                 <button @click="showAuthModal = false" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
             </div>
 
+            <div v-if="authNotice" class="mb-4 px-4 py-3 bg-yellow-900/40 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
+                [[ authNotice ]]
+            </div>
+
             <div class="space-y-4">
                 <div>
                     <label class="block text-gray-400 text-sm font-bold mb-1">

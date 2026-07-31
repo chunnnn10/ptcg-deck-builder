@@ -435,9 +435,12 @@ class DeckImporter:
                     return True
                 else:
                     storage_cursor.execute('''
-                        INSERT INTO imported_decks (deck_code, name, deck_date, title, image_url, tags) VALUES (%s, %s, %s, %s, %s, %s)
+                        INSERT INTO imported_decks (deck_code, name, deck_date, title, image_url, tags)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING id
                     ''', (deck_code, deck_info['title'], deck_info['date'], deck_info['title'], deck_info['image'], deck_info['tags']))
-                    new_deck_id = storage_cursor.lastrowid
+                    # psycopg2 的 lastrowid 在 PostgreSQL 上恆為 0，改用 RETURNING id
+                    new_deck_id = storage_cursor.fetchone()['id']
                     storage_conn.commit()
             
             # 下載卡片

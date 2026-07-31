@@ -8,6 +8,7 @@ function useAuth() {
     const showAuthModal = ref(false);
     const showUserMenu = ref(false); // [新增] 用戶選單開關
     const authMode = ref('login'); // 'login' 或 'register'
+    const authNotice = ref(''); // 彈窗內的提示訊息（如未登錄配額用盡）
     const authForm = reactive({ username: '', email: '', password: '' });
     const isLoading = ref(false);
 
@@ -111,8 +112,15 @@ function useAuth() {
         authForm.username = '';
         authForm.email = '';
         authForm.password = '';
+        authNotice.value = '';
         showAuthModal.value = true;
     };
+
+    // 未登錄查詢配額用盡時，由 app.js 的 fetch 攔截觸發此事件
+    window.addEventListener('ptcg:need-login', () => {
+        openAuthModal('login');
+        authNotice.value = '未登錄每日查詢次數已用完，請登入或註冊後繼續使用。';
+    });
 
     // === 忘記密碼方法 ===
     const openForgotModal = () => {
@@ -220,7 +228,7 @@ function useAuth() {
     });
 
     return {
-        user, isAuthenticated, showAuthModal, showUserMenu, authMode, authForm, isLoading,
+        user, isAuthenticated, showAuthModal, showUserMenu, authMode, authForm, authNotice, isLoading,
         checkAuth, login, register, logout, openAuthModal,
         // 忘記密碼
         showForgotModal, forgotStep, forgotEmail, forgotToken,

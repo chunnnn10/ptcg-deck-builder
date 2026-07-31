@@ -70,14 +70,18 @@ UPDATE_STATE = {
     'total_sets': 0,
 }
 
+# 保護 UPDATE_STATE 的鎖：路由層用於檢查並佔用「爬取進行中」狀態
+state_lock = threading.Lock()
+
 
 def _jp_log(msg: str):
     """寫入爬蟲日誌"""
     print(f"[Limitless JP] {msg}")
-    UPDATE_STATE['message'] = msg
-    UPDATE_STATE['logs'].insert(0, f"[{__import__('time').strftime('%H:%M:%S')}] {msg}")
-    if len(UPDATE_STATE['logs']) > 200:
-        UPDATE_STATE['logs'].pop()
+    with state_lock:
+        UPDATE_STATE['message'] = msg
+        UPDATE_STATE['logs'].insert(0, f"[{__import__('time').strftime('%H:%M:%S')}] {msg}")
+        if len(UPDATE_STATE['logs']) > 200:
+            UPDATE_STATE['logs'].pop()
 
 
 # ==========================================

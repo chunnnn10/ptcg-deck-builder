@@ -650,8 +650,13 @@ def save_card_to_db(card: JPCardData, skip_images: bool = False, conn=None) -> b
             conn.commit()
         return True
     except Exception as e:
-        if own_conn:
+        # 共享連線也必須 rollback：交易已進入 aborted 狀態，
+        # 不 rollback 會讓後續所有寫入靜默失敗，最終 worker 線程直接死亡。
+        # 代價是放棄本批次尚未 commit 的卡片（最多 50 張），下次爬取會補回。
+        try:
             conn.rollback()
+        except Exception:
+            pass
         jp_log(f"DB write error for card {card_id_str}: {e}")
         return False
     finally:

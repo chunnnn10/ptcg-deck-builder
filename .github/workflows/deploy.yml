@@ -19,6 +19,7 @@ jobs:
       VPS_PORT: ${{ secrets.VPS_PORT }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_PATH: ${{ secrets.VPS_PATH }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
 
     steps:
       - name: Checkout
@@ -29,14 +30,16 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          # 密鑰從 env 讀取，避免直接內插進腳本字串
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+          # -H 以 hash 形式寫入 known_hosts；accept-new 作為兜底嚴格檢查
+          ssh-keyscan -H -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
 
       - name: Prepare remote directory
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_PATH'"
+          ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_PATH'"
 
       - name: Sync code
         run: |
@@ -65,13 +68,13 @@ jobs:
             --exclude='*.7z' \
             --exclude='*.tar' \
             --exclude='*.tar.gz' \
-            -e "ssh -i ~/.ssh/deploy_key -p $VPS_PORT" \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key -p $VPS_PORT" \
             ./ "$VPS_USER@$VPS_HOST:$VPS_PATH/"
 
       - name: Rebuild and verify
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "
+          ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "
             set -e
             cd '$VPS_PATH'
             docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.prod.local.yml up -d --build db ptcg-web
