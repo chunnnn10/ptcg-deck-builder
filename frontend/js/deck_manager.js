@@ -353,7 +353,7 @@ function useDeckManager() {
         const text = `${cardType} ${subType}`;
 
         if (text.includes('energy')) return 'Energy';
-        if (text.includes('pokemon') || text.includes('pokémon') || text.includes('pok矇mon')) return 'Pokemon';
+        if (text.includes('pokemon') || text.includes('pokémon')) return 'Pokemon';
         if (text.includes('supporter') || text.includes('支援者')) return '支援者';
         if (text.includes('item') || text.includes('物品')) return '物品';
         if (text.includes('tool') || text.includes('道具')) return '道具';
@@ -512,16 +512,25 @@ function useDeckManager() {
                 }
                 break;
             case 'addOne':
-                deck.value.splice(index + 1, 0, cloneCard(card));
-                noteDeckMutation(`加入 ${card.name || '卡片'}`);
+                // 統一走 addToDeck 入口（恢復 60 張 / 同名 4 張限制），成功後移到原插入位置
+                if (addToDeck(card)) {
+                    const added = deck.value.pop();
+                    if (added) deck.value.splice(index + 1, 0, added);
+                }
                 break;
             case 'addMultiple': {
                 const countStr = prompt(`要新增幾張 ${card.name || '卡片'}？`, '3');
                 const count = parseInt(countStr);
                 if (!isNaN(count) && count > 0) {
-                    const newCards = Array(count).fill().map(() => cloneCard(card));
-                    deck.value.splice(index + 1, 0, ...newCards);
-                    noteDeckMutation(`加入 ${count} 張 ${card.name || '卡片'}`);
+                    let addedCount = 0;
+                    for (let i = 0; i < count; i++) {
+                        if (!addToDeck(card)) break;  // 達上限時 addToDeck 會 alert
+                        addedCount++;
+                    }
+                    if (addedCount > 0) {
+                        const added = deck.value.splice(deck.value.length - addedCount, addedCount);
+                        deck.value.splice(index + 1, 0, ...added);
+                    }
                 }
                 break;
             }

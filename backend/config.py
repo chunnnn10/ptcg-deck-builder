@@ -98,6 +98,9 @@ JP_DECK_DETAIL_REFRESH_DAYS = _env_int('JP_DECK_DETAIL_REFRESH_DAYS', 30)
 JP_DECK_DETAIL_FETCH_CAP = _env_int('JP_DECK_DETAIL_FETCH_CAP', 500)
 # 自動更新服務等待背景任務完成的整體超時（秒）；逾時不再等，避免循環卡死
 AUTO_UPDATE_MAX_WAIT_SECONDS = _env_int('AUTO_UPDATE_MAX_WAIT_SECONDS', 7200)
+
+# ── 每日備份（僅用戶資料，容器內排程，UTC 04:17）──
+ENABLE_USER_BACKUP = _env_bool('ENABLE_USER_BACKUP', True)
 AI_BASE_URL = os.environ.get('AI_BASE_URL') or 'https://api.openai.com/v1'
 AI_API_KEY = os.environ.get('AI_API_KEY') or ''
 AI_MODEL = os.environ.get('AI_MODEL') or ''

@@ -202,6 +202,12 @@ def start_background_update_threads():
     else:
         print(">>> [Limitless Auto Update] disabled by ENABLE_LIMITLESS_AUTO_UPDATE", flush=True)
 
+    if config.ENABLE_USER_BACKUP:
+        from services.user_backup import start_backup_scheduler
+        threading.Thread(target=start_backup_scheduler, daemon=True).start()
+    else:
+        print(">>> [User Backup] disabled by ENABLE_USER_BACKUP", flush=True)
+
 database.init_db()
 app.register_blueprint(main_bp)
 start_background_update_threads()

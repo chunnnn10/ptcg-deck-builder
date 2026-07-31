@@ -155,15 +155,16 @@ def admin_required(f):
 
 def ai_access_required(f):
     """
-    裝飾器：檢查使用者是否有 AI 助手使用權限
-    需先登入，且為 Admin 或在 admin 面板被開放 AI 使用權
+    裝飾器：檢查使用者是否有 AI 助手使用權
+    所有已登入用戶預設可用（users.ai_enabled 預設 1）；
+    僅被 admin 個別停用（ai_enabled=0）的非 admin 用戶回 403。
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
             return jsonify({'success': False, 'error': '請先登入以使用 AI 助手'}), 401
-        if not (current_user.is_admin or getattr(current_user, 'ai_enabled', False)):
-            return jsonify({'success': False, 'error': '您沒有 AI 助手使用權限，請聯絡管理員開通。'}), 403
+        if not current_user.is_admin and not getattr(current_user, 'ai_enabled', True):
+            return jsonify({'success': False, 'error': 'AI 助手使用權已停用，請聯絡管理員。'}), 403
         return f(*args, **kwargs)
     return decorated_function
 

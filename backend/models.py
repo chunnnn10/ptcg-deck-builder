@@ -88,12 +88,13 @@ class User(UserMixin):
         hashed_password = generate_password_hash(password)
 
         try:
+            # ai_enabled 預設 1：所有新用戶預設可使用 AI（admin 可個別停用設 0）
             cursor.execute(
-                "INSERT INTO users (id, username, email, password_hash, role, is_verified, ai_enabled) VALUES (%s, %s, %s, %s, %s, 0, 0)",
+                "INSERT INTO users (id, username, email, password_hash, role, is_verified, ai_enabled) VALUES (%s, %s, %s, %s, %s, 0, 1)",
                 (new_id, username, email, hashed_password, role)
             )
             conn.commit()
-            return User(new_id, username, hashed_password, role, email, 0, 0)
+            return User(new_id, username, hashed_password, role, email, 0, 1)
         except Exception as e:
             conn.rollback()
             print(f"Create User Error: {e}")

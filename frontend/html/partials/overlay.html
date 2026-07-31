@@ -50,7 +50,7 @@
                             <span class="block text-gray-400 text-xs font-bold mb-1">Type</span>
                             <select v-model="newCardData.type"
                                     class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white focus:border-green-500 outline-none">
-                                <option value="Pok矇mon">Pokemon</option>
+                                <option value="Pokémon">Pokémon</option>
                                 <option value="Trainer">Trainer</option>
                                 <option value="Energy">Energy</option>
                             </select>
@@ -64,7 +64,7 @@
                         </label>
                     </div>
 
-                    <div v-if="newCardData.type === 'Pok矇mon'" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div v-if="newCardData.type === 'Pokémon'" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <label class="block">
                             <span class="block text-gray-400 text-xs font-bold mb-1">HP</span>
                             <input v-model="newCardData.hp"
