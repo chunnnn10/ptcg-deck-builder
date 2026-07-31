@@ -2146,6 +2146,38 @@ def start_deck_gap_fill():
     return jsonify({'success': success, 'message': message, 'status': get_update_status()})
 
 
+@main_bp.route('/api/admin/deck-update/detail-backfill', methods=['POST'])
+@admin_required
+def start_deck_detail_backfill():
+    """手動觸發詳情補齊：對 DB 中卡片資料缺失或超過 stale_days 天未更新的
+    牌組抓詳情（增量策略，上限 max_decks，避免打爆來源站）"""
+    from services.deck_importer.deck_updater import run_detail_backfill, get_update_status
+    data = request.json or {}
+    bot_count = max(1, int(data.get('bot_count', 3)))
+    max_decks = data.get('max_decks')
+    stale_days = data.get('stale_days')
+    success, message = run_detail_backfill(
+        worker_count=bot_count,
+        max_decks=int(max_decks) if max_decks else None,
+        stale_days=int(stale_days) if stale_days else None,
+    )
+    return jsonify({'success': success, 'message': message, 'status': get_update_status()})
+
+
+@main_bp.route('/api/admin/auto-update/runs', methods=['GET'])
+@admin_required
+def get_auto_update_runs():
+    """查詢自動更新執行歷史（JP 牌組 / Limitless 的每次執行結果）"""
+    from services.auto_update_runs import list_runs
+    service = request.args.get('service')
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+    except (TypeError, ValueError):
+        limit = 50
+    runs = list_runs(service=service, limit=limit)
+    return jsonify({'success': True, 'runs': runs, 'note': '時間為 UTC'})
+
+
 @main_bp.route('/api/admin/deck-update/clear', methods=['POST'])
 @admin_required
 def clear_all_imported_decks():

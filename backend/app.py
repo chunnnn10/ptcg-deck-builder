@@ -82,7 +82,12 @@ def _initial_delay(extra_seconds=0):
         time.sleep(delay)
 
 
-def _wait_for_async_update(get_status, service_name, poll_seconds=15):
+def _wait_for_async_update(get_status, service_name, poll_seconds=15, max_wait_seconds=None):
+    """等待背景更新完成，含整體超時——避免更新卡死時服務循環永遠阻塞。
+    逾時只放棄等待（任務仍在背景執行），並記錄警示。"""
+    if max_wait_seconds is None:
+        max_wait_seconds = max(60, int(config.AUTO_UPDATE_MAX_WAIT_SECONDS))
+    deadline = time.time() + max_wait_seconds
     while True:
         try:
             status = get_status()
@@ -94,6 +99,13 @@ def _wait_for_async_update(get_status, service_name, poll_seconds=15):
                 return
         except Exception as exc:
             print(f">>> [{service_name}] status check failed: {exc}", flush=True)
+            return
+        if time.time() >= deadline:
+            print(
+                f">>> [{service_name}] WARNING: update still running after "
+                f"{max_wait_seconds}s, skipping wait (task continues in background)",
+                flush=True,
+            )
             return
         time.sleep(poll_seconds)
 
@@ -122,7 +134,7 @@ def run_jp_deck_auto_update_service():
                 _wait_for_async_update(get_update_status, "JP Deck Auto Update", poll_seconds=15)
             save_run_meta('daily', next_run_str)
 
-            # 2) 輪轉增量缺漏偵測：每日掃描 10 頁，~198 天覆蓋全部 1980 頁
+            # 2) 輪轉增量缺漏偵測：每日掃描 10 頁，~198 天覆蓋全部 2060 頁
             if config.ENABLE_JP_DECK_GAP_FILL:
                 gsuccess, gmessage = run_gap_fill_update(
                     worker_count=config.JP_DECK_AUTO_UPDATE_WORKERS,
@@ -133,7 +145,9 @@ def run_jp_deck_auto_update_service():
                     _wait_for_async_update(get_update_status, "JP Deck Auto Update", poll_seconds=15)
                 save_run_meta('gap_fill', next_run_str)
         except Exception as e:
+            import traceback
             print(f">>> [JP Deck Auto Update] error: {e}", flush=True)
+            traceback.print_exc()
         _sleep_interval(config.JP_DECK_AUTO_UPDATE_INTERVAL_SECONDS)
 
 
@@ -167,7 +181,9 @@ def run_limitless_auto_update_service():
                 if status.get('running'):
                     _wait_for_async_update(get_status, "Limitless Auto Update", poll_seconds=30)
         except Exception as e:
+            import traceback
             print(f">>> [Limitless Auto Update] error: {e}", flush=True)
+            traceback.print_exc()
         _sleep_interval(config.LIMITLESS_AUTO_UPDATE_INTERVAL_SECONDS)
 
 

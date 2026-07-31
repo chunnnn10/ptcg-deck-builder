@@ -639,8 +639,19 @@ def init_db():
         ALTER TABLE imported_decks
             ADD COLUMN IF NOT EXISTS card_list TEXT DEFAULT '[]'
         """)
+        # ptcgtw.shop 新結構欄位（列表頁完整欄位 + 詳情更新時間）
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'jp'")
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS source_url TEXT")
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS deck_name TEXT")
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS event_name TEXT")
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS report_text TEXT")
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS images_json TEXT")
+        cursor.execute("ALTER TABLE imported_decks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_imported_decks_deck_date_desc ON imported_decks(deck_date DESC)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_imported_decks_updated_at ON imported_decks(updated_at)
         """)
 
         cursor.execute("""
@@ -711,6 +722,24 @@ def init_db():
         """)
         cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_dsi_deck_card_name ON deck_search_index(deck_id, card_name)
+        """)
+
+        # 自動更新執行歷史（JP 牌組 / Limitless 每日更新的每次執行結果）
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auto_update_runs (
+            id SERIAL PRIMARY KEY,
+            service VARCHAR(32) NOT NULL,
+            kind VARCHAR(32) DEFAULT '',
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP,
+            success BOOLEAN,
+            message TEXT,
+            stats_json TEXT,
+            failure_count INTEGER DEFAULT 0
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_auto_update_runs_started ON auto_update_runs(started_at DESC)
         """)
 
         cursor.execute("""

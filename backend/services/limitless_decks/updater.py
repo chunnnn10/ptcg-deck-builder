@@ -322,6 +322,25 @@ def update_deck(deck_id: str, include_bling: bool = False, client: LimitlessClie
         conn.close()
 
 
+def _record_run(options: dict, success: bool):
+    """執行結果寫入 auto_update_runs（時間為 UTC）"""
+    try:
+        from services.auto_update_runs import record_run
+        state = update_state.to_dict()
+        record_run(
+            service='limitless',
+            kind=options.get('mode') or 'daily',
+            success=success,
+            message=state.get('message') or '',
+            stats=state,
+            failure_count=state.get('decks_failed', 0),
+            started_at=update_state.started_at,
+            finished_at=update_state.finished_at,
+        )
+    except Exception:
+        log_event("error", "limitless-update", "record run failed", traceback.format_exc())
+
+
 def _run_update(options: dict):
     client = LimitlessClient()
     include_bling = bool(options.get("include_bling", False))
@@ -383,9 +402,11 @@ def _run_update(options: dict):
                 log_event("error", tournament["tournament_id"], "Tournament update failed", traceback.format_exc())
                 update_state.increment(tournaments_done=1, decks_failed=1)
         update_state.finish("Limitless update finished")
+        _record_run(options, success=True)
     except Exception:
         log_event("error", "limitless-update", "Update failed", traceback.format_exc())
         update_state.finish("Limitless update failed")
+        _record_run(options, success=False)
 
 
 def start_update(options: dict | None = None) -> tuple[bool, str]:
