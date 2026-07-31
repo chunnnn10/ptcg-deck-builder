@@ -521,10 +521,12 @@ def resolve_and_write_deck_cards(cursor, deck_id, deck_cards_api):
     try:
         for card in deck_cards_api:
             vid = card.get("variant_id")
+            # 部分牌組會混入圖片 URL 等非數值 variant_id，直接跳過
+            if vid is None or not str(vid).isdigit():
+                unmatched += 1
+                continue
             # 「張數」（繁中）與「張数」（舊日文 key）兼容
             qty = int(card.get("張數", card.get("張数", 1)))
-            if not vid:
-                continue
 
             card_list.append({"id": vid, "c": qty})
             resolved = resolve_variant(cursor, vid, session=session, write_mapping=True)
