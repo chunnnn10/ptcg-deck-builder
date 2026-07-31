@@ -15,6 +15,7 @@ import sys
 import time
 import threading
 import requests
+import psycopg2
 from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
@@ -440,71 +441,82 @@ def deck_needs_detail_refresh(cursor, deck_id):
 
 def process_deck_detail(deck_code):
     """抓取一份牌組詳情並寫入 deck_cards / card_list / search index。
-    回傳 'new' / 'failed'。"""
+    回傳 'new' / 'failed'。
+    並行 worker 對 id_mapping 做 INSERT..ON CONFLICT 時可能死鎖（40P01），
+    以一致鎖序（variant 排序）降低發生率，殘留情況重試整個交易。"""
     deck_cards_api = fetch_deck_from_api(deck_code)
     if not deck_cards_api:
         update_state.increment(details_failed=1)
         update_state.update(message=f"詳情失敗：{deck_code}")
         return 'failed'
 
-    conn = database.get_db_connection()
-    if not conn:
-        update_state.increment(details_failed=1)
-        return 'failed'
-    try:
-        cursor = conn.cursor()
-        # 確保列表列存在（若詳情先於列表處理）
-        cursor.execute(
-            "INSERT INTO imported_decks (deck_code) VALUES (%s) ON CONFLICT (deck_code) DO NOTHING",
-            (deck_code,),
-        )
-        cursor.execute("SELECT id FROM imported_decks WHERE deck_code = %s", (deck_code,))
-        row = cursor.fetchone()
-        if not row:
+    for attempt in range(1, 4):
+        conn = database.get_db_connection()
+        if not conn:
             update_state.increment(details_failed=1)
             return 'failed'
-        deck_id = row['id']
-
-        cursor.execute("DELETE FROM deck_cards WHERE deck_id = %s", (deck_id,))
-        cursor.execute("DELETE FROM deck_search_index WHERE deck_id = %s", (deck_id,))
-
-        card_list, matched, unmatched = resolve_and_write_deck_cards(
-            cursor, deck_id, deck_cards_api
-        )
-
-        # 重建搜尋索引（deck_search_index）：card_list → id_mapping → cards.name
-        for item in card_list:
-            vid = item.get('id')
-            qty = item.get('c', 1)
+        try:
+            cursor = conn.cursor()
+            # 確保列表列存在（若詳情先於列表處理）
             cursor.execute(
-                "SELECT local_card_id FROM id_mapping WHERE external_variant_id = %s", (vid,)
+                "INSERT INTO imported_decks (deck_code) VALUES (%s) ON CONFLICT (deck_code) DO NOTHING",
+                (deck_code,),
             )
-            mr = cursor.fetchone()
-            if not mr or not mr.get('local_card_id'):
-                continue
-            cursor.execute("SELECT name FROM cards WHERE card_id = %s", (mr['local_card_id'],))
-            cr = cursor.fetchone()
-            if cr and cr.get('name'):
-                cursor.execute(
-                    "INSERT INTO deck_search_index (deck_id, card_name, count) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    (deck_id, cr['name'], qty)
-                )
+            cursor.execute("SELECT id FROM imported_decks WHERE deck_code = %s", (deck_code,))
+            row = cursor.fetchone()
+            if not row:
+                update_state.increment(details_failed=1)
+                return 'failed'
+            deck_id = row['id']
 
-        card_list_json = json.dumps(card_list, ensure_ascii=False)
-        cursor.execute(
-            "UPDATE imported_decks SET card_list = %s, updated_at = (now() AT TIME ZONE 'UTC') WHERE id = %s",
-            (card_list_json, deck_id),
-        )
-        conn.commit()
-        update_state.increment(details_done=1, cards_total=len(card_list))
-        return 'new'
-    except Exception as e:
-        conn.rollback()
-        update_state.increment(details_failed=1)
-        print(f"[DeckUpdater] detail DB error for {deck_code}: {e}", flush=True)
-        return 'failed'
-    finally:
-        conn.close()
+            cursor.execute("DELETE FROM deck_cards WHERE deck_id = %s", (deck_id,))
+            cursor.execute("DELETE FROM deck_search_index WHERE deck_id = %s", (deck_id,))
+
+            card_list, matched, unmatched = resolve_and_write_deck_cards(
+                cursor, deck_id, deck_cards_api
+            )
+
+            # 重建搜尋索引（deck_search_index）：card_list → id_mapping → cards.name
+            for item in card_list:
+                vid = item.get('id')
+                qty = item.get('c', 1)
+                cursor.execute(
+                    "SELECT local_card_id FROM id_mapping WHERE external_variant_id = %s", (vid,)
+                )
+                mr = cursor.fetchone()
+                if not mr or not mr.get('local_card_id'):
+                    continue
+                cursor.execute("SELECT name FROM cards WHERE card_id = %s", (mr['local_card_id'],))
+                cr = cursor.fetchone()
+                if cr and cr.get('name'):
+                    cursor.execute(
+                        "INSERT INTO deck_search_index (deck_id, card_name, count) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        (deck_id, cr['name'], qty)
+                    )
+
+            card_list_json = json.dumps(card_list, ensure_ascii=False)
+            cursor.execute(
+                "UPDATE imported_decks SET card_list = %s, updated_at = (now() AT TIME ZONE 'UTC') WHERE id = %s",
+                (card_list_json, deck_id),
+            )
+            conn.commit()
+            update_state.increment(details_done=1, cards_total=len(card_list))
+            return 'new'
+        except Exception as e:
+            conn.rollback()
+            # 死鎖（40P01）：短暫等待後重試整個交易
+            if getattr(e, 'pgcode', None) == '40P01' and attempt < 3:
+                print(f"[DeckUpdater] deadlock for {deck_code}, retry {attempt}", flush=True)
+                time.sleep(attempt * 1.5)
+                continue
+            update_state.increment(details_failed=1)
+            print(f"[DeckUpdater] detail DB error for {deck_code}: {e}", flush=True)
+            return 'failed'
+        finally:
+            conn.close()
+
+    update_state.increment(details_failed=1)
+    return 'failed'
 
 
 def resolve_and_write_deck_cards(cursor, deck_id, deck_cards_api):
@@ -519,7 +531,9 @@ def resolve_and_write_deck_cards(cursor, deck_id, deck_cards_api):
     session.headers.update(HEADERS)
 
     try:
-        for card in deck_cards_api:
+        # 依 variant_id 排序處理：所有 worker 以一致順序鎖定 id_mapping，
+        # 避免並行 upsert 因鎖序相反造成死鎖
+        for card in sorted(deck_cards_api, key=lambda c: str(c.get("variant_id") or "")):
             vid = card.get("variant_id")
             # 部分牌組會混入圖片 URL 等非數值 variant_id，直接跳過
             if vid is None or not str(vid).isdigit():
