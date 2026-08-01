@@ -1,5 +1,5 @@
 <!-- 推薦牌組 -->
-<transition name="fade">
+
     <div v-if="showDeckLibrary" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-6">
         <div class="bg-gray-900 rounded-xl w-full max-w-6xl h-full flex flex-col border border-gray-700 shadow-2xl relative overflow-hidden">
             <div class="p-6 border-b border-gray-700 flex justify-between items-center bg-gray-800 gap-4">
@@ -36,10 +36,10 @@
             </div>
         </div>
     </div>
-</transition>
+
 
 <!-- 儲存牌組 -->
-<transition name="fade">
+
     <div v-if="showSaveModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4">
         <div class="bg-gray-800 rounded-xl p-6 w-full max-w-md border border-gray-700">
             <h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-floppy-disk mr-2"></i>儲存牌組</h2>
@@ -62,11 +62,11 @@
             </div>
         </div>
     </div>
-</transition>
 
 
 
-<transition name="fade">
+
+
     <div v-if="showLimitlessDeckLibrary" class="fixed inset-0 z-[65] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
         <div class="bg-gray-900 rounded-xl w-full max-w-7xl h-full flex flex-col border border-gray-700 shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-gray-700 bg-gray-800 flex flex-col lg:flex-row gap-3 lg:items-center">
@@ -185,9 +185,9 @@
             <div class="p-3 border-t border-gray-700 bg-gray-800 flex justify-center items-center gap-4"><button @click="prevLimitlessPage" :disabled="limitlessTournamentPage <= 1" class="px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 hover:bg-gray-600">上一頁</button><span class="text-gray-300 text-sm">比賽第 [[ limitlessTournamentPage ]] / [[ limitlessTournamentTotalPages ]] 頁</span><button @click="nextLimitlessPage" :disabled="limitlessTournamentPage >= limitlessTournamentTotalPages" class="px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 hover:bg-gray-600">下一頁</button></div>
         </div>
     </div>
-</transition>
 
-<transition name="fade">
+
+
     <div v-if="showJpDeckLibrary" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-6">
         <div class="bg-gray-900 rounded-xl w-full max-w-6xl h-full flex flex-col border border-gray-700 shadow-2xl relative overflow-hidden">
             <div class="p-6 border-b border-gray-700 flex justify-between items-center bg-gray-800 gap-4">
@@ -299,9 +299,9 @@
             </div>
         </div>
     </div>
-</transition>
 
-<transition name="fade">
+
+
     <div v-if="showJpPreviewModal"
          class="fixed inset-0 z-[100] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4"
          @click="showJpPreviewModal = false">
@@ -314,9 +314,9 @@
             </button>
         </div>
     </div>
-</transition>
 
-<transition name="fade">
+
+
     <div v-if="showLiveModal" class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4">
         <div class="bg-gray-800 rounded-xl p-6 w-full max-w-2xl border border-gray-700 flex flex-col max-h-[90vh]">
             <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
@@ -361,16 +361,16 @@
             </div>
         </div>
     </div>
-</transition>
+
 
 <!-- 打印 -->
-<transition name="fade"><div v-if="showPrintModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-md border border-gray-700"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-print mr-2"></i>打印/合成牌組圖片</h2><p class="text-gray-400 text-sm mb-6">請選擇輸出格式。系統將自動分頁並保持圖片原始解析度（無損）。</p><div class="space-y-3"><button @click="generateDeckImage('A4')" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex justify-between px-4 items-center"><span><i class="fa-regular fa-file mr-2"></i>A4 格式 (9張/頁)</span><span class="text-xs opacity-70 bg-blue-800 px-2 py-1 rounded">3 x 3 排列</span></button><button @click="generateDeckImage('A3')" class="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-lg font-bold flex justify-between px-4 items-center"><span><i class="fa-regular fa-file-lines mr-2"></i>A3 格式 (18張/頁)</span><span class="text-xs opacity-70 bg-purple-800 px-2 py-1 rounded">6 x 3 排列</span></button></div><div v-if="generating" class="mt-4 text-center text-yellow-400 text-sm animate-pulse"><i class="fa-solid fa-gear fa-spin mr-1"></i> 正在下載圖片並繪製 (第 [[ currentGenPage ]] / [[ totalGenPages ]] 頁)...</div><button v-if="!generating" @click="showPrintModal = false" class="mt-6 w-full text-gray-400 hover:text-white text-sm">取消</button></div></div></transition>
+<div v-if="showPrintModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-md border border-gray-700"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-print mr-2"></i>打印/合成牌組圖片</h2><p class="text-gray-400 text-sm mb-6">請選擇輸出格式。系統將自動分頁並保持圖片原始解析度（無損）。</p><div class="space-y-3"><button @click="generateDeckImage('A4')" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex justify-between px-4 items-center"><span><i class="fa-regular fa-file mr-2"></i>A4 格式 (9張/頁)</span><span class="text-xs opacity-70 bg-blue-800 px-2 py-1 rounded">3 x 3 排列</span></button><button @click="generateDeckImage('A3')" class="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-lg font-bold flex justify-between px-4 items-center"><span><i class="fa-regular fa-file-lines mr-2"></i>A3 格式 (18張/頁)</span><span class="text-xs opacity-70 bg-purple-800 px-2 py-1 rounded">6 x 3 排列</span></button></div><div v-if="generating" class="mt-4 text-center text-yellow-400 text-sm animate-pulse"><i class="fa-solid fa-gear fa-spin mr-1"></i> 正在下載圖片並繪製 (第 [[ currentGenPage ]] / [[ totalGenPages ]] 頁)...</div><button v-if="!generating" @click="showPrintModal = false" class="mt-6 w-full text-gray-400 hover:text-white text-sm">取消</button></div></div>
 
 <!-- 分享 -->
-<transition name="fade"><div v-if="showShareModal" class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 text-center"><div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl text-white shadow-lg shadow-green-500/50"><i class="fa-solid fa-check"></i></div><h2 class="text-2xl font-bold text-white mb-2">儲存成功！</h2><p class="text-gray-400 text-sm mb-6">您的牌組已儲存，可以透過以下連結分享或日後訪問。</p><div class="bg-gray-900 p-4 rounded-lg border border-gray-700 mb-6 text-left"><div class="text-xs text-gray-500 mb-1">唯一識別碼</div><div class="text-xl font-mono text-yellow-400 font-bold mb-3 tracking-widest">[[ savedDeckId ]]</div><div class="text-xs text-gray-500 mb-1">分享連結</div><div class="flex space-x-2"><input readonly :value="shareUrl" class="flex-1 bg-gray-800 text-gray-300 text-sm px-3 py-2 rounded border border-gray-600 focus:outline-none select-all" @click="$event.target.select()"><button @click="copyShareLink" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-bold whitespace-nowrap"><i class="fa-regular fa-copy mr-1"></i> 複製</button></div></div><button @click="showShareModal = false" class="bg-gray-700 hover:bg-gray-600 text-white px-8 py-2 rounded-lg font-bold">關閉</button></div></div></transition>
+<div v-if="showShareModal" class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 text-center"><div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl text-white shadow-lg shadow-green-500/50"><i class="fa-solid fa-check"></i></div><h2 class="text-2xl font-bold text-white mb-2">儲存成功！</h2><p class="text-gray-400 text-sm mb-6">您的牌組已儲存，可以透過以下連結分享或日後訪問。</p><div class="bg-gray-900 p-4 rounded-lg border border-gray-700 mb-6 text-left"><div class="text-xs text-gray-500 mb-1">唯一識別碼</div><div class="text-xl font-mono text-yellow-400 font-bold mb-3 tracking-widest">[[ savedDeckId ]]</div><div class="text-xs text-gray-500 mb-1">分享連結</div><div class="flex space-x-2"><input readonly :value="shareUrl" class="flex-1 bg-gray-800 text-gray-300 text-sm px-3 py-2 rounded border border-gray-600 focus:outline-none select-all" @click="$event.target.select()"><button @click="copyShareLink" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-bold whitespace-nowrap"><i class="fa-regular fa-copy mr-1"></i> 複製</button></div></div><button @click="showShareModal = false" class="bg-gray-700 hover:bg-gray-600 text-white px-8 py-2 rounded-lg font-bold">關閉</button></div></div>
 
 <!-- 導入缺卡提示 -->
-<transition name="fade">
+
     <div v-if="importMissingNotice" class="fixed inset-0 z-[95] flex items-center justify-center bg-black bg-opacity-85 backdrop-blur p-4">
         <div class="bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-700 shadow-2xl overflow-hidden">
             <div class="px-5 py-4 border-b border-gray-700 bg-gray-800 flex items-start justify-between gap-4">
@@ -429,10 +429,10 @@
             </div>
         </div>
     </div>
-</transition>
+
 
 <!-- 導入 -->
-<transition name="fade">
+
     <div v-if="showImportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4">
         <div class="bg-gray-800 rounded-xl p-6 w-full max-w-2xl border border-gray-700 max-h-[90vh] flex flex-col overflow-hidden">
             <div v-if="conflictQueue.length === 0" class="flex flex-col h-full overflow-hidden">
@@ -496,7 +496,7 @@
             </div>
         </div>
     </div>
-</transition>
+
 
 <!-- 導出 -->
-<transition name="fade"><div v-if="showExportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 flex flex-col"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-file-export mr-2"></i>導出文字列表</h2><div class="mb-4"><label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" v-model="exportWithId" @change="regenerateExportText" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-600 focus:ring-blue-500"><span class="text-sm text-gray-300">包含卡片 ID (便於分享給他人精確版本)</span></label></div><textarea readonly v-model="exportTextContent" class="w-full bg-gray-900 text-gray-200 p-3 rounded border border-gray-600 text-sm font-mono h-64 mb-4 custom-scroll outline-none focus:border-blue-500" @click="$event.target.select()"></textarea><div class="flex justify-end space-x-2"><button @click="showExportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">關閉</button><button @click="copyExportText" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded font-bold transition"><i class="fa-regular fa-copy mr-2"></i>複製到剪貼簿</button></div></div></div></transition>
+<div v-if="showExportModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-90 backdrop-blur p-4"><div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg border border-gray-700 flex flex-col"><h2 class="text-xl font-bold text-white mb-4"><i class="fa-solid fa-file-export mr-2"></i>導出文字列表</h2><div class="mb-4"><label class="flex items-center space-x-2 cursor-pointer"><input type="checkbox" v-model="exportWithId" @change="regenerateExportText" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-600 focus:ring-blue-500"><span class="text-sm text-gray-300">包含卡片 ID (便於分享給他人精確版本)</span></label></div><textarea readonly v-model="exportTextContent" class="w-full bg-gray-900 text-gray-200 p-3 rounded border border-gray-600 text-sm font-mono h-64 mb-4 custom-scroll outline-none focus:border-blue-500" @click="$event.target.select()"></textarea><div class="flex justify-end space-x-2"><button @click="showExportModal = false" class="px-4 py-2 text-gray-400 hover:text-white text-sm">關閉</button><button @click="copyExportText" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded font-bold transition"><i class="fa-regular fa-copy mr-2"></i>複製到剪貼簿</button></div></div></div>
