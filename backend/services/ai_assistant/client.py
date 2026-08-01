@@ -5,6 +5,8 @@ from typing import Any
 
 import requests
 
+import ai_settings
+
 
 class AIConfigError(RuntimeError):
     pass
@@ -15,6 +17,10 @@ class AIClientError(RuntimeError):
 
 
 def _env(name: str, default: str = "") -> str:
+    # 動態設定（admin 面板可編輯，存於 DB）優先，其次環境變量，最後 default
+    db_val = ai_settings.get_ai_setting(name, "")
+    if db_val:
+        return str(db_val).strip()
     return str(os.environ.get(name) or default).strip()
 
 

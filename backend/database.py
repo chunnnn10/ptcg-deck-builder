@@ -707,6 +707,15 @@ def init_db():
         )
         """)
 
+        # 動態 AI 設定（admin 面板可編輯 LLM/Agent 配置，覆蓋環境變量）
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ai_settings (
+            key VARCHAR PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS deck_search_index (
             deck_id INTEGER REFERENCES imported_decks(id) ON DELETE CASCADE,

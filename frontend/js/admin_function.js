@@ -884,6 +884,101 @@ function useAdminUpdate() {
         }
     };
 
+    // === AI 設定（LLM/Agent 配置，admin 可編輯） ===
+    const aiSettingsForm = reactive({
+        AI_BASE_URL: '', AI_API_KEY: '', AI_MODEL: '',
+        AI_EMBEDDING_BASE_URL: '', AI_EMBEDDING_API_KEY: '', AI_EMBEDDING_MODEL: '',
+        AI_EMBEDDING_DIMENSIONS: '', AI_TIMEOUT: '',
+        AI_THINKING_ENABLED: 'true', AI_REASONING_EFFORT: 'high',
+    });
+    const aiSettingsLoading = ref(false);
+    const aiSettingsSaving = ref(false);
+    const aiSettingsMessage = ref('');
+
+    const loadAiSettings = async () => {
+        aiSettingsLoading.value = true;
+        try {
+            const res = await fetch('/api/admin/ai-settings');
+            const data = await res.json();
+            if (data.success) {
+                const s = data.settings || {};
+                aiSettingsForm.AI_BASE_URL = s.AI_BASE_URL || '';
+                aiSettingsForm.AI_API_KEY = '';  // key 只顯示佔位（尾 4 碼）
+                aiSettingsForm.AI_API_KEY_MASK = s.AI_API_KEY || '';
+                aiSettingsForm.AI_MODEL = s.AI_MODEL || '';
+                aiSettingsForm.AI_EMBEDDING_BASE_URL = s.AI_EMBEDDING_BASE_URL || '';
+                aiSettingsForm.AI_EMBEDDING_API_KEY = '';
+                aiSettingsForm.AI_EMBEDDING_API_KEY_MASK = s.AI_EMBEDDING_API_KEY || '';
+                aiSettingsForm.AI_EMBEDDING_MODEL = s.AI_EMBEDDING_MODEL || '';
+                aiSettingsForm.AI_EMBEDDING_DIMENSIONS = s.AI_EMBEDDING_DIMENSIONS || '';
+                aiSettingsForm.AI_TIMEOUT = s.AI_TIMEOUT || '45';
+                aiSettingsForm.AI_THINKING_ENABLED = s.AI_THINKING_ENABLED ? 'true' : 'false';
+                aiSettingsForm.AI_REASONING_EFFORT = s.AI_REASONING_EFFORT || 'high';
+            }
+        } catch (e) {
+            console.error('AI settings load error:', e);
+        } finally {
+            aiSettingsLoading.value = false;
+        }
+    };
+
+    const saveAiSettings = async () => {
+        aiSettingsSaving.value = true;
+        aiSettingsMessage.value = '';
+        try {
+            const body = {
+                AI_BASE_URL: aiSettingsForm.AI_BASE_URL,
+                AI_API_KEY: aiSettingsForm.AI_API_KEY,  // 空 = 不修改
+                AI_MODEL: aiSettingsForm.AI_MODEL,
+                AI_EMBEDDING_BASE_URL: aiSettingsForm.AI_EMBEDDING_BASE_URL,
+                AI_EMBEDDING_API_KEY: aiSettingsForm.AI_EMBEDDING_API_KEY,
+                AI_EMBEDDING_MODEL: aiSettingsForm.AI_EMBEDDING_MODEL,
+                AI_EMBEDDING_DIMENSIONS: aiSettingsForm.AI_EMBEDDING_DIMENSIONS,
+                AI_TIMEOUT: aiSettingsForm.AI_TIMEOUT,
+                AI_THINKING_ENABLED: aiSettingsForm.AI_THINKING_ENABLED,
+                AI_REASONING_EFFORT: aiSettingsForm.AI_REASONING_EFFORT,
+            };
+            const res = await fetch('/api/admin/ai-settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (data.success) {
+                aiSettingsMessage.value = `已儲存設定（${(data.updated || []).length} 項），立即生效。`;
+                aiSettingsForm.AI_API_KEY = '';
+                aiSettingsForm.AI_EMBEDDING_API_KEY = '';
+                await loadAiSettings();
+            } else {
+                aiSettingsMessage.value = '儲存失敗: ' + (data.error || '未知錯誤');
+            }
+        } catch (e) {
+            aiSettingsMessage.value = '儲存失敗: ' + e.message;
+        } finally {
+            aiSettingsSaving.value = false;
+        }
+    };
+
+    const clearAiSettings = async () => {
+        if (!confirm('確定要清除所有 AI 自訂設定（回到 .env 的環境變量）？')) return;
+        aiSettingsSaving.value = true;
+        try {
+            const res = await fetch('/api/admin/ai-settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    AI_BASE_URL: '', AI_MODEL: '', AI_EMBEDDING_BASE_URL: '', AI_EMBEDDING_MODEL: '',
+                    AI_EMBEDDING_DIMENSIONS: '', AI_TIMEOUT: '', AI_THINKING_ENABLED: '', AI_REASONING_EFFORT: ''
+                })
+            });
+            const data = await res.json();
+            aiSettingsMessage.value = data.success ? '已清除自訂設定，回到環境變量。' : '清除失敗';
+            await loadAiSettings();
+        } finally {
+            aiSettingsSaving.value = false;
+        }
+    };
+
     // === 效果角色標籤 ===
     const cardRoleState = reactive({
         running: false, progress: 0, message: '就緒', logs: [],
@@ -911,6 +1006,7 @@ function useAdminUpdate() {
         deckAdminTab.value = 'roles';
         loadCardRoleStatus();
         loadCardRoleList();
+        loadAiSettings();
     };
 
     const loadCardRoleStatus = async () => {
@@ -1437,6 +1533,9 @@ function useAdminUpdate() {
         openCardRolesTab,
         loadCardRoleStatus,
         startCardRoleLabeling,
+        // AI 設定
+        aiSettingsForm, aiSettingsLoading, aiSettingsSaving, aiSettingsMessage,
+        loadAiSettings, saveAiSettings, clearAiSettings,
         pollCardRoleStatus,
         loadCardRoleList,
         toggleCardRoleSelect,

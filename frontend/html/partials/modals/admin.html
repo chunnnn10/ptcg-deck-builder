@@ -966,6 +966,70 @@
                 <!-- ========== 效果角色標籤 ========== -->
                 <div v-if="deckAdminTab === 'roles'" class="space-y-6">
 
+                    <!-- AI 設定（LLM/Agent 共用，儲存後立即生效） -->
+                    <div class="bg-gray-800 rounded-xl border border-cyan-900/40 p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-bold text-gray-400"><i class="fa-solid fa-microchip mr-2 text-cyan-400"></i>AI 設定（Agent + 標註共用）</h3>
+                            <button @click="loadAiSettings" class="text-xs text-blue-400 hover:text-white"><i class="fa-solid fa-refresh mr-1"></i>重新載入</button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">API Base URL</label>
+                                <input v-model="aiSettingsForm.AI_BASE_URL" type="text" placeholder="https://api.openai.com/v1"
+                                       class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-cyan-500 outline-none text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">API Key（留空 = 不修改）</label>
+                                <input v-model="aiSettingsForm.AI_API_KEY" type="password" :placeholder="aiSettingsForm.AI_API_KEY_MASK ? ('目前: ' + aiSettingsForm.AI_API_KEY_MASK) : '未設定'"
+                                       class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-cyan-500 outline-none text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">模型（如 deepseek-chat / gpt-4o）</label>
+                                <input v-model="aiSettingsForm.AI_MODEL" type="text" placeholder="deepseek-chat"
+                                       class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-cyan-500 outline-none text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">思考等級（Reasoning Effort）</label>
+                                <select v-model="aiSettingsForm.AI_REASONING_EFFORT" class="w-full bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 text-xs">
+                                    <option value="low">低（low）— 快速回應</option>
+                                    <option value="medium">中（medium）</option>
+                                    <option value="high">高（high）— 深度思考</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">深度思考開關（Deep Think）</label>
+                                <select v-model="aiSettingsForm.AI_THINKING_ENABLED" class="w-full bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 text-xs">
+                                    <option value="true">啟用</option>
+                                    <option value="false">停用</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">逾時秒數（Timeout）</label>
+                                <input v-model="aiSettingsForm.AI_TIMEOUT" type="number" min="5" max="300"
+                                       class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-cyan-500 outline-none text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">Embedding 模型</label>
+                                <input v-model="aiSettingsForm.AI_EMBEDDING_MODEL" type="text" placeholder="text-embedding-3-small"
+                                       class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-cyan-500 outline-none text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-gray-500 text-xs mb-1">Embedding API Key（留空 = 不修改）</label>
+                                <input v-model="aiSettingsForm.AI_EMBEDDING_API_KEY" type="password" :placeholder="aiSettingsForm.AI_EMBEDDING_API_KEY_MASK ? ('目前: ' + aiSettingsForm.AI_EMBEDDING_API_KEY_MASK) : '未設定'"
+                                       class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:border-cyan-500 outline-none text-xs">
+                            </div>
+                        </div>
+                        <div class="mt-4 flex items-center gap-3">
+                            <button @click="saveAiSettings" :disabled="aiSettingsSaving"
+                                    class="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg font-bold text-sm">
+                                <i v-if="aiSettingsSaving" class="fa-solid fa-circle-notch fa-spin mr-1"></i>儲存設定（立即生效）
+                            </button>
+                            <button @click="clearAiSettings" :disabled="aiSettingsSaving"
+                                    class="text-gray-500 hover:text-red-400 text-xs underline">清除自訂設定（回到 .env）</button>
+                            <span v-if="aiSettingsMessage" class="text-xs" :class="aiSettingsMessage.includes('失敗') ? 'text-red-400' : 'text-green-400'">[[ aiSettingsMessage ]]</span>
+                        </div>
+                    </div>
+
                     <!-- 佇列統計 -->
                     <div class="bg-gray-800 rounded-xl border border-purple-900/40 p-4">
                         <div class="flex items-center justify-between mb-3">

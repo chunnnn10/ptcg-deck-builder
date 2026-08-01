@@ -12,6 +12,7 @@ from email.mime.text import MIMEText
 from bs4 import BeautifulSoup
 from flask import Blueprint, render_template, request, jsonify, send_from_directory, url_for
 import security
+import ai_settings
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.utils import secure_filename
 from datetime import datetime
@@ -3087,6 +3088,52 @@ def admin_update_user(user_id):
     except Exception as e:
         print(f"Admin update user error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==========================================
+# AI 設定 API（admin 可編輯 LLM/Agent 配置，存於 ai_settings 表）
+# ==========================================
+
+_AI_SETTING_KEYS = [
+    'AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL',
+    'AI_EMBEDDING_BASE_URL', 'AI_EMBEDDING_API_KEY', 'AI_EMBEDDING_MODEL',
+    'AI_EMBEDDING_DIMENSIONS', 'AI_TIMEOUT',
+    'AI_THINKING_ENABLED', 'AI_REASONING_EFFORT',
+]
+
+@main_bp.route('/api/admin/ai-settings', methods=['GET'])
+@admin_required
+def get_ai_settings():
+    """回傳目前生效的 AI 設定（API key 只顯示尾 4 碼）"""
+    import os as _os
+    result = {}
+    for key in _AI_SETTING_KEYS:
+        value = ai_settings.get_ai_setting(key) or _os.environ.get(key) or ''
+        if 'KEY' in key and value:
+            result[key] = ('*' * (len(value) - 4)) + value[-4:]
+        else:
+            result[key] = value
+    return jsonify({'success': True, 'settings': result})
+
+
+@main_bp.route('/api/admin/ai-settings', methods=['PUT'])
+@admin_required
+def update_ai_settings():
+    """更新 AI 設定。API key 傳空字串表示不修改；其餘欄位空值表示清除（回到環境變量）"""
+    data = request.json or {}
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+    updated = []
+    for key, raw_value in data.items():
+        if key not in _AI_SETTING_KEYS:
+            continue
+        value = str(raw_value or '').strip()
+        if 'KEY' in key and not value:
+            continue  # key 空值 = 不修改
+        if ai_settings.set_ai_setting(key, value):
+            updated.append(key)
+    ai_settings.clear_cache()
+    return jsonify({'success': True, 'updated': updated})
 
 
 # ==========================================
