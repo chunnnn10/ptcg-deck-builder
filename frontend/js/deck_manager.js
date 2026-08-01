@@ -353,11 +353,13 @@ function useDeckManager() {
         const text = `${cardType} ${subType}`;
 
         if (text.includes('energy')) return 'Energy';
-        if (text.includes('pokemon') || text.includes('pokémon')) return 'Pokemon';
+        // 寶可夢判斷只看 card_type：sub_type 的「Pokémon Tool（寶可夢道具）」
+        // 是道具不是寶可夢，若一起判斷會把所有道具卡誤丟進寶可夢區
+        if (cardType.includes('pokemon') || cardType.includes('pokémon')) return 'Pokemon';
         if (text.includes('supporter') || text.includes('支援者')) return '支援者';
         if (text.includes('item') || text.includes('物品')) return '物品';
-        if (text.includes('tool') || text.includes('道具')) return '道具';
-        if (text.includes('stadium') || text.includes('競技場')) return '競技場';
+        // 道具與場地合併為一區（佔牌組比例較少，與使用者確認的顯示方式）
+        if (text.includes('tool') || text.includes('道具') || text.includes('stadium') || text.includes('競技場')) return '道具・場地';
         return '其他訓練家';
     };
     const sortCardsForDisplay = (a, b) => {
@@ -368,7 +370,7 @@ function useDeckManager() {
         return String(a.card_id || a.id || '').localeCompare(String(b.card_id || b.id || ''));
     };
     const groupedDeckDisplay = computed(() => {
-        const order = ['Pokemon', '支援者', '物品', '道具', '競技場', '其他訓練家', 'Energy'];
+        const order = ['Pokemon', '支援者', '物品', '道具・場地', '其他訓練家', 'Energy'];
         const buckets = Object.fromEntries(order.map(key => [key, []]));
         deck.value.forEach(card => {
             buckets[getDeckDisplayGroup(card)].push(card);
