@@ -841,14 +841,17 @@ def list_tournament_decks(tournament_id: str, q: str = "") -> dict:
         if has_entries:
             cursor.execute(
                 """
-                SELECT DISTINCT ON (e.entry_id)
-                       e.entry_id, e.deck_id, e.tournament_id, e.player_name, e.placement,
-                       e.archetype, e.title, e.tags, e.deck_url, e.source_region,
-                       e.entry_order, d.fetched_at
-                FROM limitless_tournament_deck_entries e
-                LEFT JOIN limitless_decks d ON d.deck_id = e.deck_id
-                WHERE e.tournament_id = %s
-                ORDER BY e.entry_id, e.placement NULLS LAST, e.entry_order NULLS LAST, e.player_name ASC NULLS LAST
+                SELECT * FROM (
+                    SELECT DISTINCT ON (e.entry_id)
+                           e.entry_id, e.deck_id, e.tournament_id, e.player_name, e.placement,
+                           e.archetype, e.title, e.tags, e.deck_url, e.source_region,
+                           e.entry_order, d.fetched_at
+                    FROM limitless_tournament_deck_entries e
+                    LEFT JOIN limitless_decks d ON d.deck_id = e.deck_id
+                    WHERE e.tournament_id = %s
+                    ORDER BY e.entry_id, e.last_seen_at DESC
+                ) sub
+                ORDER BY sub.placement NULLS LAST, sub.entry_order NULLS LAST, sub.player_name ASC NULLS LAST
                 """,
                 (tournament_id,),
             )
