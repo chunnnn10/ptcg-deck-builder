@@ -13,6 +13,7 @@ from .embeddings import embed_texts, vector_literal
 from .indexer import STANDARD_MARKS, ensure_ai_schema, parse_skills
 from .predicates import parse_predicates, predicates_match_filter
 from services.logic_extractor.adapter import EXTRACTOR_VERSION as LOGIC_EXTRACTOR_VERSION
+from services.card_roles.tagger import FILTERABLE_PARAM_KEYS
 
 
 CARD_LIMIT = 20
@@ -963,6 +964,87 @@ def build_deck_diff(deck: list[dict[str, Any]], actions: list[dict[str, Any]]) -
         "removals": removals,
         "warnings": warnings,
     }
+
+
+def search_card_roles(
+    role: str | None = None,
+    params: dict[str, Any] | None = None,
+    query: str | None = None,
+    limit: int = CARD_LIMIT,
+) -> list[dict[str, Any]]:
+    """依效果角色查已人工批准（approved）的卡片。
+
+    只查 approved 狀態——pending 標註不進入 Agent 視野。
+    params 以 jsonb 包含（@>）比對，例如 {"source": "deck", "old_hand": "discard"}。
+    """
+    role = str(role or "").strip() or None
+    query = str(query or "").strip() or None
+    limit = max(1, min(int(limit or CARD_LIMIT), CARD_LIMIT))
+
+    where = ["t.status = 'approved'"]
+    params_list: list[Any] = []
+
+    if role:
+        where.append("t.role = %s")
+        params_list.append(role)
+    if query:
+        like = f"%{query.replace('%', '').replace('_', '')}%"
+        where.append("(c.name ILIKE %s OR COALESCE(c.japanese_name, '') ILIKE %s)")
+        params_list.extend([like, like])
+    if isinstance(params, dict) and params:
+        filtered = {k: v for k, v in params.items() if k in FILTERABLE_PARAM_KEYS and v is not None}
+        if filtered:
+            where.append("t.params @> %s::jsonb")
+            params_list.append(json.dumps(filtered, ensure_ascii=False))
+
+    conn = database.get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT t.card_id, t.role, t.params, t.evidence_span, t.confidence,
+                   c.name, c.japanese_name, c.card_type, c.sub_type, c.hp,
+                   c.element_type, c.set_code, c.set_number, c.set_name, c.regulation_mark
+            FROM card_role_tags t
+            JOIN cards c ON c.card_id = t.card_id
+            WHERE {' AND '.join(where)}
+            ORDER BY t.confidence DESC, t.id
+            LIMIT %s
+            """,
+            params_list + [limit],
+        )
+        results = []
+        for row in cursor.fetchall():
+            tag_params = row.get("params") or {}
+            if isinstance(tag_params, str):
+                try:
+                    tag_params = json.loads(tag_params)
+                except Exception:
+                    tag_params = {}
+            results.append({
+                "card_id": row.get("card_id"),
+                "name": row.get("name"),
+                "japanese_name": row.get("japanese_name"),
+                "card_type": row.get("card_type"),
+                "sub_type": row.get("sub_type"),
+                "hp": row.get("hp"),
+                "element_type": row.get("element_type"),
+                "set_code": row.get("set_code"),
+                "set_number": row.get("set_number"),
+                "set_name": row.get("set_name"),
+                "regulation_mark": row.get("regulation_mark"),
+                "role": row.get("role"),
+                "params": tag_params,
+                "evidence_span": row.get("evidence_span"),
+                "confidence": round(float(row.get("confidence") or 0), 3),
+            })
+        return results
+    except Exception:
+        return []
+    finally:
+        conn.close()
 
 
 # Compatibility helpers used by older assistant paths/tests.

@@ -650,6 +650,11 @@
                         class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
                     <i class="fa-solid fa-trophy"></i> City Leagues 牌組
                 </button>
+                <button @click="openCardRolesTab"
+                        :class="deckAdminTab === 'roles' ? 'bg-gray-900 text-purple-400 border-b-2 border-purple-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
+                    <i class="fa-solid fa-tags"></i> 效果角色標籤
+                </button>
             </div>
 
             <!-- Content -->
@@ -954,6 +959,186 @@
                     </div>
                     <div v-if="limitlessUpdateState.logs && limitlessUpdateState.logs.length" class="bg-gray-900 border border-gray-700 rounded-xl p-4 max-h-48 overflow-y-auto custom-scroll text-xs font-mono">
                         <div v-for="log in limitlessUpdateState.logs" :key="log.created_at + log.message" class="border-b border-gray-800 py-1 last:border-0"><span class="text-gray-500">[[ log.created_at ]]</span> <span :class="log.level === 'error' ? 'text-red-400' : 'text-green-400'">[[ log.level ]]</span> <span class="text-gray-300">[[ log.context ]]</span> <span class="text-gray-400">[[ log.message ]]</span></div>
+                    </div>
+                </div>
+            </div>
+
+                <!-- ========== 效果角色標籤 ========== -->
+                <div v-if="deckAdminTab === 'roles'" class="space-y-6">
+
+                    <!-- 佇列統計 -->
+                    <div class="bg-gray-800 rounded-xl border border-purple-900/40 p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-bold text-gray-400"><i class="fa-solid fa-tags mr-2 text-purple-400"></i>效果角色標註狀態</h3>
+                            <button @click="loadCardRoleStatus" class="text-xs text-blue-400 hover:text-white"><i class="fa-solid fa-refresh mr-1"></i>刷新</button>
+                        </div>
+                        <div class="grid grid-cols-3 md:grid-cols-5 gap-2 text-center text-sm">
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">待審核</div><div class="font-bold text-yellow-400 mt-1">[[ cardRoleQueue.pending || 0 ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">已批准</div><div class="font-bold text-green-400 mt-1">[[ cardRoleQueue.approved || 0 ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">已拒絕</div><div class="font-bold text-red-400 mt-1">[[ cardRoleQueue.rejected || 0 ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">本批處理</div><div class="font-bold text-white mt-1">[[ cardRoleState.processed || 0 ]]/[[ cardRoleState.total || 0 ]]</div></div>
+                            <div class="bg-gray-750 rounded p-2"><div class="text-xs text-gray-500">自動批准</div><div class="font-bold text-purple-400 mt-1">[[ cardRoleState.auto_approved || 0 ]]</div></div>
+                        </div>
+                        <p v-if="cardRoleState.message" class="text-xs text-gray-500 mt-2">[[ cardRoleState.message ]]</p>
+                    </div>
+
+                    <!-- 開始標註 -->
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="w-10 h-10 bg-purple-900/50 rounded-lg flex items-center justify-center">
+                                <i class="fa-solid fa-wand-magic-sparkles text-purple-400 text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold text-white">效果角色標註（LLM 提取）</h3>
+                                <p class="text-xs text-gray-400">AI 從 TW 卡文提取功能角色（draw/search/ramp…），evidence 經程式驗證逐字存在；高置信度（≥0.9）自動批准，其餘進待審核佇列</p>
+                            </div>
+                        </div>
+
+                        <div v-if="!cardRoleState.running" class="mt-4 space-y-4">
+                            <div class="flex items-center gap-4 flex-wrap">
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm text-gray-400 whitespace-nowrap">本批張數：</label>
+                                    <input v-model.number="cardRoleBatchSize" type="number" min="1" max="5000"
+                                           class="w-24 bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-center">
+                                </div>
+                                <span class="text-xs text-gray-500">(預設 200，避免 LLM 成本爆量；可重複執行續跑未處理的卡)</span>
+                            </div>
+                            <button @click="startCardRoleLabeling"
+                                    class="bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-full font-bold shadow-lg shadow-purple-600/30 transition transform hover:scale-105 text-sm flex items-center">
+                                <i class="fa-solid fa-play mr-2"></i> 開始標註
+                            </button>
+                        </div>
+
+                        <div v-else class="mt-4 space-y-3">
+                            <div class="flex justify-between text-sm">
+                                <span class="font-bold text-gray-300">
+                                    <i class="fa-solid fa-circle-notch fa-spin text-purple-400 mr-2"></i>
+                                    標註進行中...
+                                </span>
+                                <span class="text-purple-400 font-mono">[[ cardRoleState.progress ]]%</span>
+                            </div>
+                            <div class="w-full bg-gray-800 rounded-full h-4 overflow-hidden border border-gray-700">
+                                <div class="bg-purple-500 h-full transition-all duration-300 ease-out relative" :style="{ width: cardRoleState.progress + '%' }">
+                                    <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-4 gap-3 text-center text-sm">
+                                <div><span class="text-gray-500">已標註角色</span> <span class="text-white font-bold">[[ cardRoleState.labeled ]]</span></div>
+                                <div><span class="text-gray-500">自動批准</span> <span class="text-green-400 font-bold">[[ cardRoleState.auto_approved ]]</span></div>
+                                <div><span class="text-gray-500">進待審核</span> <span class="text-yellow-400 font-bold">[[ cardRoleState.pending_added ]]</span></div>
+                                <div><span class="text-gray-500">被拒/失敗</span> <span class="text-red-400 font-bold">[[ (cardRoleState.rejected_roles || 0) + (cardRoleState.failed || 0) ]]</span></div>
+                            </div>
+                            <div v-if="cardRoleState.logs && cardRoleState.logs.length" class="bg-gray-950 rounded border border-gray-800 p-3 h-32 overflow-y-auto custom-scroll console-logs text-xs space-y-1">
+                                <div v-for="(log, idx) in cardRoleState.logs" :key="idx" class="border-b border-gray-800/50 pb-1 last:border-0">
+                                    <span class="opacity-50 mr-2">&gt;&gt;</span>[[ log ]]
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 標註列表 -->
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
+                            <h3 class="text-lg font-bold text-white">標註列表</h3>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <div class="flex rounded-lg overflow-hidden border border-gray-600 text-xs">
+                                    <button v-for="s in ['pending','approved','rejected','all']" :key="s"
+                                            @click="cardRoleFilterStatus = s; cardRolePage = 1; loadCardRoleList()"
+                                            :class="cardRoleFilterStatus === s ? (s === 'approved' ? 'bg-green-600 text-white' : s === 'rejected' ? 'bg-red-600 text-white' : s === 'pending' ? 'bg-yellow-600 text-white' : 'bg-purple-600 text-white') : 'bg-gray-700 text-gray-400 hover:text-white'"
+                                            class="px-3 py-1.5 font-bold">
+                                        [[ s === 'all' ? '全部' : s === 'pending' ? '待審核' : s === 'approved' ? '已批准' : '已拒絕' ]]
+                                    </button>
+                                </div>
+                                <select v-model="cardRoleFilterRole" @change="cardRolePage = 1; loadCardRoleList()"
+                                        class="bg-gray-700 text-white border border-gray-600 rounded-lg px-2 py-1.5 text-xs focus:outline-none">
+                                    <option value="">全部角色</option>
+                                    <option v-for="r in cardRoleRoleOptions" :key="r" :value="r">[[ r ]]</option>
+                                </select>
+                                <button @click="loadCardRoleList" class="text-xs text-blue-400 hover:text-white"><i class="fa-solid fa-refresh mr-1"></i>刷新</button>
+                            </div>
+                        </div>
+
+                        <div v-if="cardRoleFilterStatus === 'pending'" class="flex items-center gap-2 mb-3">
+                            <label class="flex items-center text-xs text-gray-400 gap-1 cursor-pointer select-none">
+                                <input type="checkbox" :checked="cardRoleAllSelected" @change="toggleCardRoleSelectAll" class="w-3.5 h-3.5 rounded bg-gray-700 border-gray-500 text-purple-500">
+                                全選本頁
+                            </label>
+                            <button @click="reviewCardRoles('approve')" class="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded-full font-bold text-xs flex items-center">
+                                <i class="fa-solid fa-check mr-1"></i> 批量批准 ([[ cardRoleSelected.size ]])
+                            </button>
+                            <button @click="reviewCardRoles('reject')" class="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded-full font-bold text-xs flex items-center">
+                                <i class="fa-solid fa-xmark mr-1"></i> 批量拒絕 ([[ cardRoleSelected.size ]])
+                            </button>
+                            <button @click="clearCardRoleQueue('pending')" class="bg-gray-600 hover:bg-gray-500 text-white px-3 py-1 rounded-full font-bold text-xs">
+                                清空待審核佇列
+                            </button>
+                            <button @click="clearCardRoleQueue('rejected')" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-3 py-1 rounded-full font-bold text-xs">
+                                清空已拒絕
+                            </button>
+                        </div>
+
+                        <div v-if="cardRoleListLoading" class="text-center py-10 text-gray-400">
+                            <i class="fa-solid fa-circle-notch fa-spin fa-2x mb-2 text-purple-400"></i>
+                            <p>載入中...</p>
+                        </div>
+                        <div v-else-if="cardRoleList.length === 0" class="text-center py-10 text-gray-500">
+                            <p>沒有符合條件的標註</p>
+                        </div>
+                        <div v-else class="space-y-3">
+                            <div v-for="tag in cardRoleList" :key="tag.id"
+                                 class="bg-gray-750 rounded-lg border border-gray-700 p-4"
+                                 :class="{ 'border-green-700': tag.status === 'approved', 'border-red-800': tag.status === 'rejected', 'border-yellow-700': tag.status === 'pending' }">
+                                <div class="flex items-start gap-3 flex-wrap">
+                                    <input v-if="tag.status === 'pending'" type="checkbox"
+                                           :checked="cardRoleSelected.has(tag.id)"
+                                           @change="toggleCardRoleSelect(tag.id)"
+                                           class="mt-1 w-4 h-4 rounded bg-gray-700 border-gray-500 text-purple-500 flex-shrink-0">
+                                    <div class="flex-1 min-w-[200px]">
+                                        <div class="flex items-center gap-2 flex-wrap">
+                                            <span class="font-bold text-white">[[ tag.tw_name || tag.card_id ]]</span>
+                                            <span v-if="tag.japanese_name" class="text-xs text-gray-500">JP: [[ tag.japanese_name ]]</span>
+                                            <span class="text-xs text-gray-600">[[ tag.set_code ]] [[ tag.set_number ]]</span>
+                                        </div>
+                                        <div class="flex items-center gap-2 mt-1 flex-wrap">
+                                            <span class="px-2 py-0.5 rounded-full text-xs font-bold"
+                                                  :class="roleBadgeClass(tag.role)">[[ tag.role ]]</span>
+                                            <span class="text-xs text-gray-400 font-mono">params: <span class="text-purple-300">[[ formatCardRoleParams(tag.params) ]]</span></span>
+                                            <span class="text-xs text-gray-500">conf: <span :class="tag.confidence >= 0.9 ? 'text-green-400 font-bold' : 'text-gray-400'">[[ tag.confidence ]]</span></span>
+                                            <span class="text-xs px-2 py-0.5 rounded-full font-bold"
+                                                  :class="tag.status === 'approved' ? 'bg-green-900/50 text-green-400' : tag.status === 'rejected' ? 'bg-red-900/50 text-red-400' : 'bg-yellow-900/50 text-yellow-400'">
+                                                [[ tag.status === 'approved' ? '已批准' : tag.status === 'rejected' ? '已拒絕' : '待審核' ]]
+                                            </span>
+                                            <span v-if="tag.validation_errors && tag.validation_errors.length" class="text-xs text-red-400" :title="tag.validation_errors.join('; ')">
+                                                <i class="fa-solid fa-triangle-exclamation mr-1"></i>[[ tag.validation_errors.length ]] 個警示
+                                            </span>
+                                        </div>
+                                        <div class="mt-2 text-xs text-gray-400 bg-gray-900 rounded p-2">
+                                            <span class="text-gray-600">卡文：</span>
+                                            <span v-if="tag.card_text" v-html="highlightCardRoleEvidence(tag.card_text, tag.evidence_span)"></span>
+                                            <span v-else class="text-gray-600">（卡文不存在）</span>
+                                        </div>
+                                        <div class="mt-1 text-xs text-gray-500">
+                                            <span class="text-gray-600">證據：</span><span class="text-green-400">「[[ tag.evidence_span ]]」</span>
+                                        </div>
+                                    </div>
+                                    <div v-if="tag.status === 'pending'" class="flex flex-col gap-1.5 flex-shrink-0">
+                                        <button @click="reviewCardRoles('approve', [tag.id])" class="bg-green-600 hover:bg-green-500 text-white px-4 py-1 rounded-full font-bold text-xs">批准</button>
+                                        <button @click="reviewCardRoles('reject', [tag.id])" class="bg-red-600 hover:bg-red-500 text-white px-4 py-1 rounded-full font-bold text-xs">拒絕</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 分頁 -->
+                        <div v-if="cardRoleTotal > cardRolePageSize" class="flex items-center justify-center gap-3 mt-4 text-sm">
+                            <button @click="cardRolePage = Math.max(1, cardRolePage - 1); loadCardRoleList()"
+                                    :disabled="cardRolePage <= 1"
+                                    class="bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-white px-3 py-1 rounded-full font-bold">上一頁</button>
+                            <span class="text-gray-400">[[ cardRolePage ]] / [[ Math.ceil(cardRoleTotal / cardRolePageSize) ]]（共 [[ cardRoleTotal ]] 筆）</span>
+                            <button @click="cardRolePage += 1; loadCardRoleList()"
+                                    :disabled="cardRolePage >= Math.ceil(cardRoleTotal / cardRolePageSize)"
+                                    class="bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-white px-3 py-1 rounded-full font-bold">下一頁</button>
+                        </div>
                     </div>
                 </div>
             </div>

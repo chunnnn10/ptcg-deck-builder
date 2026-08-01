@@ -755,6 +755,38 @@ def init_db():
         ON CONFLICT (mark) DO NOTHING
         """)
 
+        # 效果角色標籤（card_roles）：LLM 提取 + 人工審核的粗粒度功能角色
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS card_role_tags (
+            id SERIAL PRIMARY KEY,
+            card_id VARCHAR NOT NULL,
+            role VARCHAR NOT NULL,
+            params JSONB DEFAULT '{}'::jsonb,
+            evidence_span TEXT NOT NULL,
+            source VARCHAR DEFAULT 'llm',
+            confidence REAL DEFAULT 0,
+            status VARCHAR DEFAULT 'pending',
+            validation_errors TEXT[] DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at TIMESTAMP,
+            UNIQUE (card_id, role, params)
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_card_role_tags_status ON card_role_tags(status)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_card_role_tags_card ON card_role_tags(card_id)
+        """)
+        # 標註進度：記錄已由 LLM 處理過的 card_id（支援中斷續跑、避免重複花費）
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS card_role_label_progress (
+            card_id VARCHAR PRIMARY KEY,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            attempt_count INTEGER DEFAULT 1
+        )
+        """)
+
         cursor.execute(LIMITLESS_SCHEMA_SQL)
         cursor.execute(ai_schema_sql())
 

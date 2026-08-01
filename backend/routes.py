@@ -2100,6 +2100,196 @@ def get_deck_mapping_stats():
 
 
 # ==========================================
+# [新增] 效果角色標籤管理 API（LLM 提取 → pending → 人工審核）
+# ==========================================
+
+@main_bp.route('/api/admin/card-roles/label', methods=['POST'])
+@admin_required
+def start_card_role_labeling():
+    """啟動效果角色標籤批次標註（背景執行緒，TW cards 表）"""
+    from services.card_roles import tagger
+    data = request.json or {}
+    limit = data.get('limit')
+    worker_count = int(data.get('worker_count', 1))
+    success, message = tagger.label_cards(
+        limit=int(limit) if limit is not None else None,
+        worker_count=worker_count,
+        source=str(data.get('source') or 'cards'),
+    )
+    return jsonify({'success': success, 'message': message, 'status': tagger.get_status()})
+
+
+@main_bp.route('/api/admin/card-roles/status', methods=['GET'])
+@admin_required
+def get_card_role_status():
+    """查詢標註進度 + 佇列統計"""
+    from services.card_roles import tagger
+    conn = database.get_db_connection()
+    queue_stats = {'pending': 0, 'approved': 0, 'rejected': 0}
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, COUNT(*) AS count FROM card_role_tags GROUP BY status")
+            for row in cursor.fetchall():
+                queue_stats[str(row['status'])] = int(row['count'])
+        except Exception as e:
+            print(f"Card role status error: {e}")
+        finally:
+            conn.close()
+    return jsonify({'success': True, 'status': tagger.get_status(), 'queue': queue_stats})
+
+
+@main_bp.route('/api/admin/card-roles/list', methods=['GET'])
+@admin_required
+def list_card_roles():
+    """標註列表（join cards 顯示 TW/JP 卡名與卡文，供 evidence 高亮）"""
+    from services.card_roles import tagger
+    status = (request.args.get('status') or '').strip() or None
+    if status == 'all':
+        status = None
+    role = (request.args.get('role') or '').strip() or None
+    page = max(1, int(request.args.get('page', 1)))
+    page_size = min(100, max(1, int(request.args.get('page_size', 20))))
+
+    where = []
+    params: list = []
+    if status:
+        where.append("t.status = %s")
+        params.append(status)
+    if role:
+        where.append("t.role = %s")
+        params.append(role)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    conn = database.get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': '資料庫錯誤'}), 500
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) AS total FROM card_role_tags t {where_sql}", params)
+        total = int(cursor.fetchone()['total'])
+        cursor.execute(
+            f"""
+            SELECT t.id, t.card_id, t.role, t.params, t.evidence_span, t.confidence, t.status,
+                   t.validation_errors, t.created_at, t.reviewed_at,
+                   c.name AS tw_name, c.japanese_name, c.card_type, c.sub_type,
+                   c.set_code, c.set_number, c.image_file, c.description, c.skills_json
+            FROM card_role_tags t
+            LEFT JOIN cards c ON c.card_id = t.card_id
+            {where_sql}
+            ORDER BY t.id DESC
+            LIMIT %s OFFSET %s
+            """,
+            params + [page_size, (page - 1) * page_size],
+        )
+        tags = []
+        for row in cursor.fetchall():
+            params_json = row.get('params') or {}
+            if isinstance(params_json, str):
+                try:
+                    params_json = json.loads(params_json)
+                except Exception:
+                    params_json = {}
+            errors = row.get('validation_errors') or []
+            if isinstance(errors, str):
+                try:
+                    errors = json.loads(errors)
+                except Exception:
+                    errors = []
+            tags.append({
+                'id': row['id'],
+                'card_id': row['card_id'],
+                'role': row['role'],
+                'params': params_json,
+                'evidence_span': row['evidence_span'],
+                'confidence': round(float(row.get('confidence') or 0), 3),
+                'status': row['status'],
+                'validation_errors': errors,
+                'created_at': str(row['created_at']) if row.get('created_at') else None,
+                'reviewed_at': str(row['reviewed_at']) if row.get('reviewed_at') else None,
+                'tw_name': row.get('tw_name'),
+                'japanese_name': row.get('japanese_name'),
+                'card_type': row.get('card_type'),
+                'sub_type': row.get('sub_type'),
+                'set_code': row.get('set_code'),
+                'set_number': row.get('set_number'),
+                'image_file': row.get('image_file'),
+                'card_text': tagger.build_tw_card_text({
+                    'description': row.get('description'),
+                    'skills_json': row.get('skills_json'),
+                }),
+            })
+        return jsonify({'success': True, 'tags': tags, 'total': total, 'page': page, 'page_size': page_size})
+    except Exception as e:
+        print(f"Card role list error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@main_bp.route('/api/admin/card-roles/review', methods=['POST'])
+@admin_required
+def review_card_roles():
+    """批准/拒絕標註（支援批量）"""
+    data = request.json or {}
+    ids = data.get('ids') or []
+    action = str(data.get('action') or '')
+    if action not in ('approve', 'reject'):
+        return jsonify({'success': False, 'error': 'action 必須是 approve 或 reject'}), 400
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'ids 必須是整數陣列'}), 400
+    if not ids:
+        return jsonify({'success': False, 'error': 'ids 不能為空'}), 400
+
+    status = 'approved' if action == 'approve' else 'rejected'
+    conn = database.get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': '資料庫錯誤'}), 500
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE card_role_tags
+            SET status = %s, reviewed_at = CURRENT_TIMESTAMP
+            WHERE id = ANY(%s) AND status = 'pending'
+            """,
+            (status, ids),
+        )
+        conn.commit()
+        return jsonify({'success': True, 'updated': cursor.rowcount})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@main_bp.route('/api/admin/card-roles/clear', methods=['POST'])
+@admin_required
+def clear_card_roles():
+    """清空指定狀態的佇列（pending/rejected）"""
+    data = request.json or {}
+    status = str(data.get('status') or '')
+    if status not in ('pending', 'rejected'):
+        return jsonify({'success': False, 'error': 'status 必須是 pending 或 rejected'}), 400
+    conn = database.get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': '資料庫錯誤'}), 500
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM card_role_tags WHERE status = %s", (status,))
+        conn.commit()
+        return jsonify({'success': True, 'deleted': cursor.rowcount})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+# ==========================================
 # [新增] 牌組更新 API（每日 + 完整）
 # ==========================================
 

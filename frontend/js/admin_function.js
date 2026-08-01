@@ -884,6 +884,229 @@ function useAdminUpdate() {
         }
     };
 
+    // === 效果角色標籤 ===
+    const cardRoleState = reactive({
+        running: false, progress: 0, message: '就緒', logs: [],
+        total: 0, processed: 0, labeled: 0, auto_approved: 0, pending_added: 0,
+        rejected_roles: 0, failed: 0,
+    });
+    const cardRoleQueue = ref({ pending: 0, approved: 0, rejected: 0 });
+    const cardRoleBatchSize = ref(200);
+    const cardRoleRoleOptions = ['draw', 'discard', 'search', 'ramp', 'evolve_accel', 'heal', 'switch', 'damage', 'condition', 'stall'];
+    const cardRoleFilterStatus = ref('pending');
+    const cardRoleFilterRole = ref('');
+    const cardRoleList = ref([]);
+    const cardRoleListLoading = ref(false);
+    const cardRoleTotal = ref(0);
+    const cardRolePage = ref(1);
+    const cardRolePageSize = ref(20);
+    const cardRoleSelected = ref(new Set());
+    let cardRolePollTimer = null;
+
+    const cardRoleAllSelected = computed(
+        () => cardRoleList.value.length > 0 && cardRoleList.value.filter(t => t.status === 'pending').every(t => cardRoleSelected.value.has(t.id))
+    );
+
+    const openCardRolesTab = () => {
+        deckAdminTab.value = 'roles';
+        loadCardRoleStatus();
+        loadCardRoleList();
+    };
+
+    const loadCardRoleStatus = async () => {
+        try {
+            const res = await fetch('/api/admin/card-roles/status');
+            const data = await res.json();
+            if (!data.success) return;
+            const st = data.status || {};
+            cardRoleState.running = !!st.running;
+            cardRoleState.progress = st.progress || 0;
+            cardRoleState.message = st.message || '';
+            cardRoleState.logs = st.logs || [];
+            cardRoleState.total = st.total || 0;
+            cardRoleState.processed = st.processed || 0;
+            cardRoleState.labeled = st.labeled || 0;
+            cardRoleState.auto_approved = st.auto_approved || 0;
+            cardRoleState.pending_added = st.pending_added || 0;
+            cardRoleState.rejected_roles = st.rejected_roles || 0;
+            cardRoleState.failed = st.failed || 0;
+            cardRoleQueue.value = data.queue || { pending: 0, approved: 0, rejected: 0 };
+        } catch (e) { console.error('Card role status error:', e); }
+    };
+
+    const startCardRoleLabeling = async () => {
+        if (cardRoleState.running) return;
+        const limit = Math.max(1, cardRoleBatchSize.value || 200);
+        try {
+            const res = await fetch('/api/admin/card-roles/label', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ limit })
+            });
+            const data = await res.json();
+            if (data.success) {
+                cardRoleState.running = true;
+                Object.assign(cardRoleState, data.status || {});
+                cardRoleState.running = true;
+                pollCardRoleStatus();
+                loadCardRoleList();
+            } else {
+                alert(data.message || '啟動失敗');
+            }
+        } catch (e) { alert('連線錯誤: ' + e.message); }
+    };
+
+    const pollCardRoleStatus = async () => {
+        if (cardRolePollTimer) clearTimeout(cardRolePollTimer);
+        try {
+            const res = await fetch('/api/admin/card-roles/status');
+            const data = await res.json();
+            if (data.success) {
+                const st = data.status || {};
+                Object.assign(cardRoleState, {
+                    running: !!st.running,
+                    progress: st.progress || 0,
+                    message: st.message || '',
+                    logs: st.logs || [],
+                    total: st.total || 0,
+                    processed: st.processed || 0,
+                    labeled: st.labeled || 0,
+                    auto_approved: st.auto_approved || 0,
+                    pending_added: st.pending_added || 0,
+                    rejected_roles: st.rejected_roles || 0,
+                    failed: st.failed || 0,
+                });
+                cardRoleQueue.value = data.queue || cardRoleQueue.value;
+                if (st.running) {
+                    cardRolePollTimer = setTimeout(pollCardRoleStatus, 2500);
+                } else {
+                    loadCardRoleStatus();
+                    loadCardRoleList();
+                }
+            }
+        } catch (e) {
+            console.error('Card role poll error:', e);
+            cardRolePollTimer = setTimeout(pollCardRoleStatus, 4000);
+        }
+    };
+
+    const loadCardRoleList = async () => {
+        cardRoleListLoading.value = true;
+        try {
+            const params = new URLSearchParams({
+                status: cardRoleFilterStatus.value === 'all' ? '' : cardRoleFilterStatus.value,
+                role: cardRoleFilterRole.value,
+                page: cardRolePage.value,
+                page_size: cardRolePageSize.value,
+            });
+            const res = await fetch('/api/admin/card-roles/list?' + params.toString());
+            const data = await res.json();
+            if (data.success) {
+                cardRoleList.value = data.tags || [];
+                cardRoleTotal.value = data.total || 0;
+                // 清除已不在本頁的選取
+                const valid = new Set((data.tags || []).map(t => t.id));
+                cardRoleSelected.value = new Set([...cardRoleSelected.value].filter(id => valid.has(id)));
+            }
+        } catch (e) { console.error('Card role list error:', e); }
+        finally { cardRoleListLoading.value = false; }
+    };
+
+    const toggleCardRoleSelect = (id) => {
+        const next = new Set(cardRoleSelected.value);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        cardRoleSelected.value = next;
+    };
+
+    const toggleCardRoleSelectAll = () => {
+        if (cardRoleAllSelected.value) {
+            cardRoleSelected.value = new Set();
+        } else {
+            cardRoleSelected.value = new Set(cardRoleList.value.filter(t => t.status === 'pending').map(t => t.id));
+        }
+    };
+
+    const reviewCardRoles = async (action, ids = null) => {
+        const idList = ids || [...cardRoleSelected.value];
+        if (!idList.length) {
+            if (!ids) alert('請先勾選要操作的標註');
+            return;
+        }
+        try {
+            const res = await fetch('/api/admin/card-roles/review', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: idList, action })
+            });
+            const data = await res.json();
+            if (data.success) {
+                alert(`已${action === 'approve' ? '批准' : '拒絕'} ${data.updated} 筆標註`);
+                if (!ids) cardRoleSelected.value = new Set();
+                loadCardRoleList();
+                loadCardRoleStatus();
+            } else {
+                alert('操作失敗: ' + (data.error || ''));
+            }
+        } catch (e) { alert('連線錯誤: ' + e.message); }
+    };
+
+    const clearCardRoleQueue = async (status) => {
+        const label = status === 'pending' ? '待審核' : '已拒絕';
+        if (!confirm(`⚠️ 確定要清空所有「${label}」狀態的標註？\n此操作無法復原！`)) return;
+        try {
+            const res = await fetch('/api/admin/card-roles/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status })
+            });
+            const data = await res.json();
+            if (data.success) {
+                alert(`已清空 ${data.deleted} 筆`);
+                loadCardRoleList();
+                loadCardRoleStatus();
+            } else {
+                alert('清空失敗: ' + (data.error || ''));
+            }
+        } catch (e) { alert('連線錯誤'); }
+    };
+
+    const roleBadgeClass = (role) => {
+        const colors = {
+            draw: 'bg-blue-900/50 text-blue-400',
+            discard: 'bg-red-900/50 text-red-400',
+            search: 'bg-green-900/50 text-green-400',
+            ramp: 'bg-orange-900/50 text-orange-400',
+            evolve_accel: 'bg-pink-900/50 text-pink-400',
+            heal: 'bg-teal-900/50 text-teal-400',
+            switch: 'bg-indigo-900/50 text-indigo-400',
+            damage: 'bg-yellow-900/50 text-yellow-400',
+            condition: 'bg-fuchsia-900/50 text-fuchsia-400',
+            stall: 'bg-cyan-900/50 text-cyan-400',
+        };
+        return colors[role] || 'bg-gray-900/50 text-gray-400';
+    };
+
+    const formatCardRoleParams = (params) => {
+        try {
+            const obj = (params && typeof params === 'object') ? params : JSON.parse(params || '{}');
+            return Object.entries(obj).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ') || '{}';
+        } catch (e) { return String(params || '{}'); }
+    };
+
+    const highlightCardRoleEvidence = (text, evidence) => {
+        if (!text || !evidence) return escapeHtml(text || '');
+        const index = text.indexOf(evidence);
+        if (index < 0) return escapeHtml(text);
+        const before = escapeHtml(text.slice(0, index));
+        const hit = escapeHtml(text.slice(index, index + evidence.length));
+        const after = escapeHtml(text.slice(index + evidence.length));
+        return before + '<mark class="bg-yellow-500/40 text-yellow-100 px-0.5 rounded font-bold">' + hit + '</mark>' + after;
+    };
+
+    const escapeHtml = (value) => {
+        return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    };
+
     // === 每日牌組更新 ===
     const dailyUpdateBotCount = ref(3);
     const dailyUpdateState = reactive({
@@ -1196,6 +1419,33 @@ function useAdminUpdate() {
         openLimitlessAdmin,
         startMapping,
         pollMappingStatus,
+
+        // 效果角色標籤
+        cardRoleState,
+        cardRoleQueue,
+        cardRoleBatchSize,
+        cardRoleRoleOptions,
+        cardRoleFilterStatus,
+        cardRoleFilterRole,
+        cardRoleList,
+        cardRoleListLoading,
+        cardRoleTotal,
+        cardRolePage,
+        cardRolePageSize,
+        cardRoleSelected,
+        cardRoleAllSelected,
+        openCardRolesTab,
+        loadCardRoleStatus,
+        startCardRoleLabeling,
+        pollCardRoleStatus,
+        loadCardRoleList,
+        toggleCardRoleSelect,
+        toggleCardRoleSelectAll,
+        reviewCardRoles,
+        clearCardRoleQueue,
+        roleBadgeClass,
+        formatCardRoleParams,
+        highlightCardRoleEvidence,
 
         // 每日 + 完整牌組更新
         dailyUpdateBotCount,

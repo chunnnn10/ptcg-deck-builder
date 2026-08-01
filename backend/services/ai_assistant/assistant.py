@@ -16,6 +16,7 @@ from .tools import (
     get_meta_deck_cards,
     get_card_detail,
     propose_deck_patch,
+    search_card_roles,
     search_japanese_decks_by_card,
     search_meta_decks,
     semantic_search_cards,
@@ -129,6 +130,29 @@ TOOL_SCHEMAS = [
                     "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["archetype_or_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_card_roles",
+            "description": "Search cards by approved effect-role tags (draw/discard/search/ramp/evolve_accel/heal/switch/damage/condition/stall) with optional mechanism params, e.g. {'role':'draw','params':{'old_hand':'discard'}} finds true filtering draw cards that discard the old hand first. Only admin-approved tags are searchable.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": ["draw", "discard", "search", "ramp", "evolve_accel", "heal", "switch", "damage", "condition", "stall"],
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Mechanism filter. Usable keys: source, old_hand, reshuffle, target, count, max_count, destination, from, to, target_type, type, condition.",
+                    },
+                    "query": {"type": "string", "description": "Optional card name keyword filter"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "required": [],
             },
         },
     },
@@ -899,6 +923,13 @@ def _run_tool(name: str, args: dict[str, Any], context: dict[str, Any]) -> Any:
         filters.setdefault("language", language)
         filters.setdefault("standard_marks", list(STANDARD_MARKS))
         return semantic_search_cards(str(args.get("query") or ""), int(args.get("limit") or 10), filters)
+    if name == "search_card_roles":
+        return search_card_roles(
+            str(args.get("role") or ""),
+            args.get("params") if isinstance(args.get("params"), dict) else None,
+            str(args.get("query") or ""),
+            int(args.get("limit") or 10),
+        )
     if name == "get_card_detail":
         return get_card_detail(str(args.get("card_id") or ""), language)
     if name == "search_meta_decks":

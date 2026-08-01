@@ -108,6 +108,11 @@ AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL') or 'text-embedding-3-s
 AI_EMBEDDING_DIMENSIONS = int(os.environ.get('AI_EMBEDDING_DIMENSIONS') or 1536)
 AI_TIMEOUT = _env_int('AI_TIMEOUT', 45)
 
+# ── 效果角色標籤（card_roles）──
+CARD_ROLE_BATCH_SIZE = _env_int('CARD_ROLE_BATCH_SIZE', 200)      # 每批標註張數（LLM 成本控制）
+CARD_ROLE_AUTO_APPROVE_CONFIDENCE = float(os.environ.get('CARD_ROLE_AUTO_APPROVE_CONFIDENCE') or 0.9)
+CARD_ROLE_MAX_RETRIES = _env_int('CARD_ROLE_MAX_RETRIES', 3)      # 每卡最多 LLM 呼叫次數
+
 # ── SMTP ──
 MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.gmail.com'
 MAIL_PORT = _env_int('MAIL_PORT', 587)
