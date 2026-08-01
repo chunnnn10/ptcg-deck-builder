@@ -67,6 +67,8 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     const limitlessMode = ref("normal");
     const limitlessImporting = ref(false);
     const limitlessImportMissing = ref([]);
+    // 手機版 LimitLess 分步瀏覽：'tournaments' | 'decks' | 'detail'（桌面三欄並排不受影響）
+    const limitlessMobileTab = ref("tournaments");
     const importMissingNotice = ref(null);
 
     const showLiveModal = ref(false);
@@ -191,6 +193,8 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
             if (data.success) {
                 selectedLimitlessTournament.value = data.tournament;
                 limitlessDecks.value = data.decks || [];
+                // 手機版自動切到「牌組」頁（桌面三欄無影響）
+                limitlessMobileTab.value = "decks";
                 if (limitlessDecks.value.length) await openLimitlessDeck(limitlessDecks.value[0].deck_id);
             }
         } catch (e) {
@@ -215,6 +219,8 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
                 limitlessLang.value = available.tw && available.tw.normal ? "tw" : (available.jp && available.jp.normal ? "jp" : "en");
                 limitlessMode.value = "normal";
                 limitlessImportMissing.value = [];
+                // 手機版自動切到「牌表」頁（桌面三欄無影響）
+                limitlessMobileTab.value = "detail";
                 await loadLimitlessCards();
             } else {
                 alert(data.error || "Limitless deck not found");
@@ -229,6 +235,10 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
 
     const closeLimitlessDeckDetail = () => {
         selectedLimitlessDeck.value = null;
+    };
+
+    const setLimitlessMobileTab = (tab) => {
+        if (["tournaments", "decks", "detail"].includes(tab)) limitlessMobileTab.value = tab;
     };
 
     const loadLimitlessCards = async () => {
@@ -696,6 +706,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         limitlessMode, openLimitlessDeckLibrary, searchLimitlessDecks, openLimitlessDeck,
         searchLimitlessTournaments, openLimitlessTournament, importLimitlessDeck,
         limitlessImporting, limitlessImportMissing, importMissingNotice, closeImportMissingNotice,
+        limitlessMobileTab, setLimitlessMobileTab,
         loadLimitlessCards, setLimitlessLang, setLimitlessMode,
         closeLimitlessDeckDetail, getLimitlessCards, getLimitlessSectionCards,
         getLimitlessSectionCount, getLimitlessDeckName, getLimitlessTagName,

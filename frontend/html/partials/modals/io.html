@@ -95,8 +95,20 @@
                 <button @click="showLimitlessDeckLibrary = false" class="hidden lg:block text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
             </div>
 
-            <div class="flex-1 overflow-hidden grid grid-cols-1 xl:grid-cols-[300px_360px_1fr]">
-                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4">
+            <div class="flex-1 overflow-hidden flex flex-col xl:grid xl:grid-cols-[300px_360px_1fr]">
+                <!-- 手機版分步瀏覽 tab（桌面 xl 以上隱藏，三欄並排） -->
+                <div class="xl:hidden flex border-b border-gray-700 bg-gray-800 shrink-0">
+                    <button @click="setLimitlessMobileTab('tournaments')" class="flex-1 py-3 text-xs font-bold transition" :class="limitlessMobileTab === 'tournaments' ? 'bg-yellow-600 text-white' : 'text-gray-400'">
+                        <i class="fa-solid fa-trophy mr-1"></i>比賽<span v-if="limitlessTournaments.length" class="ml-1 opacity-80">([[ limitlessTournaments.length ]])</span>
+                    </button>
+                    <button @click="setLimitlessMobileTab('decks')" class="flex-1 py-3 text-xs font-bold transition" :class="limitlessMobileTab === 'decks' ? 'bg-yellow-600 text-white' : 'text-gray-400'">
+                        <i class="fa-solid fa-list mr-1"></i>牌組<span v-if="limitlessDecks.length" class="ml-1 opacity-80">([[ limitlessDecks.length ]])</span>
+                    </button>
+                    <button @click="setLimitlessMobileTab('detail')" class="flex-1 py-3 text-xs font-bold transition" :class="limitlessMobileTab === 'detail' ? 'bg-yellow-600 text-white' : 'text-gray-400'">
+                        <i class="fa-solid fa-clipboard-list mr-1"></i>牌表
+                    </button>
+                </div>
+                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4 flex-1 min-h-0" :class="limitlessMobileTab === 'tournaments' ? 'flex flex-col' : 'hidden xl:flex'">
                     <div v-if="limitlessTournamentsLoading" class="text-center mt-20 text-yellow-400"><i class="fa-solid fa-circle-notch fa-spin fa-3x"></i><p class="mt-4">正在載入比賽...</p></div>
                     <div v-else-if="limitlessTournaments.length === 0" class="text-center mt-20 text-gray-500"><i class="fa-solid fa-trophy fa-3x mb-4 opacity-30"></i><p>沒有找到比賽</p></div>
                     <div v-else class="space-y-2">
@@ -111,7 +123,7 @@
                     </div>
                 </div>
 
-                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4">
+                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4 flex-1 min-h-0" :class="limitlessMobileTab === 'decks' ? 'flex flex-col' : 'hidden xl:flex'">
                     <div v-if="limitlessDecksLoading" class="text-center mt-20 text-yellow-400"><i class="fa-solid fa-circle-notch fa-spin fa-3x"></i><p class="mt-4">正在載入牌組...</p></div>
                     <div v-else-if="limitlessDecks.length === 0" class="text-center mt-20 text-gray-500"><i class="fa-solid fa-list fa-3x mb-4 opacity-30"></i><p>[[ selectedLimitlessTournament && !selectedLimitlessTournament.detail_synced ? '此比賽詳情尚未同步' : '此比賽沒有牌組' ]]</p></div>
                     <div v-else class="space-y-2">
@@ -125,7 +137,7 @@
                     </div>
                 </div>
 
-                <div class="overflow-y-auto custom-scroll p-4 lg:p-6">
+                <div class="overflow-y-auto custom-scroll p-4 lg:p-6 flex-1 min-h-0" :class="limitlessMobileTab === 'detail' ? 'flex flex-col' : 'hidden xl:flex'">
                     <div v-if="limitlessDetailLoading" class="text-center mt-20 text-yellow-400"><i class="fa-solid fa-circle-notch fa-spin fa-3x"></i><p class="mt-4">正在載入牌表...</p></div>
                     <div v-else-if="!selectedLimitlessDeck" class="text-center mt-20 text-gray-500"><i class="fa-solid fa-hand-pointer fa-3x mb-4 opacity-30"></i><p>請選擇一副 Limitless 牌組</p></div>
                     <div v-else>
