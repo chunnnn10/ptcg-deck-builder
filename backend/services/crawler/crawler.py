@@ -804,9 +804,9 @@ def worker_robot(worker_id, q):
             task = q.get(timeout=3)
             card_id = task['id']
 
-            log_update(f"機器人 #{worker_id} 處理: {card_id} ({task['set_code']})")
+            log_update(f"機器人 #{worker_id} 處理: {card_id} ({task.get('set_code', 'CUSTOM')})")
             card_data = parse_detail_page(card_id)
-            
+
             if card_data:
                 save_card_with_context(card_data, task)
                 # log_update(f"✅ {card_data['name']} 更新完成")
@@ -891,37 +891,116 @@ def construct_filtered_url(base_url, page_no, expansion_code, regulation):
         parsed = urlparse(base_url)
         query_params = parse_qs(parsed.query)
         query_params['pageNo'] = [str(page_no)]
-        
+
         # 加入關鍵過濾條件
+        # 關鍵修復：expansion_code 為 None/空字串時，保留 base_url 既有 expansionCodes
+        # （自定義 URL 模式下使用者已在 URL 內指定條件，不應被覆寫為單一系列）
         if expansion_code:
             query_params['expansionCodes'] = [expansion_code]
         if regulation:
             query_params['regulation'] = [str(regulation)]
-            
+
         new_query = urlencode(query_params, doseq=True)
         return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
     except Exception as e:
         return base_url
 
-def run_update_process(target_expansion_codes=None, target_regulations=None, update_japanese=True, skip_images=False):
+
+def _detect_total_pages(first_url):
+    """偵測列表頁總頁數。失敗回傳 1。"""
+    try:
+        res = requests.get(first_url, headers=config.HEADERS, timeout=10)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            page_tag = soup.find('p', class_='resultTotalPages')
+            if page_tag:
+                txt = page_tag.get_text(strip=True)
+                m = re.search(r'(\d+)', txt)
+                if m:
+                    return int(m.group(1))
+    except Exception as e:
+        log_update(f"頁數偵測失敗: {e}")
+    return 1
+
+
+def _scan_list_page(list_url, task_queue, found_ids, task_payload_template):
+    """掃描單頁卡牌列表，把符合的 card_id 推入 task_queue。
+    task_payload_template 提供 set_code/set_name/regulation/skip_images，本函式只填 id。
+    回傳本頁新增的卡片數。
+    """
+    added = 0
+    try:
+        resp = requests.get(list_url, headers=config.HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return 0
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        card_items = soup.find_all('li', class_='card')
+        for item in card_items:
+            link = item.find('a')
+            if not link:
+                continue
+            match = re.search(r'/detail/(\d+)/', link.get('href', ''))
+            if not match:
+                continue
+            c_id = match.group(1)
+            if c_id in found_ids:
+                continue
+            found_ids.add(c_id)
+            payload = dict(task_payload_template)
+            payload['id'] = c_id
+            task_queue.put(payload)
+            with update_lock:
+                UPDATE_STATE['total_tasks'] += 1
+            added += 1
+    except Exception as e:
+        log_update(f"列表掃描錯誤: {e}")
+    return added
+
+
+def run_update_process(target_expansion_codes=None, target_regulations=None,
+                      update_japanese=True, skip_images=False,
+                      custom_url=None, custom_set_code=None, custom_set_name=None):
     """
     Args:
         target_expansion_codes (list): 例如 ['M3', 'AS6b']。如果為 None，則不限制（不建議）。
         target_regulations (list): 例如 [1, 2]。1=標準, 2=開放。
+        custom_url (str): 自定義列表 URL（舊版更新方法）。若提供且未指定 expansion_codes，
+            直接以該 URL 為基礎逐頁爬取，不自動覆寫 expansionCodes，可用於更新尚未建檔的系列。
+        custom_set_code (str): 自定義模式寫入 cards.set_code 的代碼（預設 'CUSTOM'）。
+        custom_set_name (str): 自定義模式寫入 cards.set_name 的名稱（預設 'Custom URL Import'）。
     """
     global UPDATE_STATE
     ensure_schema_updates()
-    
+
     # 1. 確保擁有最新的擴充包代碼對照表
     expansion_map = fetch_expansion_meta()
-    
-    # 如果沒有指定，預設只更新前幾個最新的（避免全站掃描）
-    if not target_expansion_codes:
+
+    # 決定 base URL
+    if custom_url:
+        base_list_url = custom_url
+        log_update(f"🔗 自定義 URL 模式：{custom_url}")
+    else:
+        base_list_url = config.DEFAULT_LIST_URL
+
+    # 自定義 URL 模式且未指定 expansion_codes：直接逐頁抓該 URL 的所有卡牌
+    use_custom_mode = bool(custom_url) and not target_expansion_codes
+    if use_custom_mode:
+        custom_code = (custom_set_code or 'CUSTOM').strip() or 'CUSTOM'
+        custom_name = (custom_set_name or 'Custom URL Import').strip() or 'Custom URL Import'
+        target_expansion_codes = [None]  # placeholder，循環只跑一次
+        target_regulations = [None]  # 不覆寫 regulation
+        exp_name = custom_name
+        log_update(f"📄 自定義系列 code={custom_code}, name={custom_name}")
+    else:
+        custom_code = custom_set_code or ''
+
+    # 如果沒有指定且非自定義模式，預設只更新前 1 個系列
+    if not use_custom_mode and not target_expansion_codes:
         log_update("未指定擴充包，將僅更新擴充包列表中前 1 個系列...")
         target_expansion_codes = list(expansion_map.keys())[:1]
-    
+
     if not target_regulations:
-        target_regulations = [1, 2] # 預設跑雙賽制掃描
+        target_regulations = [1, 2]  # 預設跑雙賽制掃描
 
     with update_lock:
         UPDATE_STATE['running'] = True
@@ -933,74 +1012,50 @@ def run_update_process(target_expansion_codes=None, target_regulations=None, upd
 
     log_update(f"🎯 目標系列: {target_expansion_codes}")
     log_update(f"⚖️ 目標賽制: {target_regulations}")
-    
+
     task_queue = queue.Queue()
     found_ids_in_batch = set()
 
     # ==========================
     # 階段一：掃描列表
     # ==========================
-    
+
     for exp_code in target_expansion_codes:
-        exp_info = expansion_map.get(exp_code, {})
-        exp_name = exp_info.get('name', 'Unknown Set') if isinstance(exp_info, dict) else exp_info
-        
+        if use_custom_mode:
+            exp_info = {}
+            exp_name = custom_name
+            effective_code = custom_code
+        else:
+            exp_info = expansion_map.get(exp_code, {})
+            exp_info_obj = exp_info if isinstance(exp_info, dict) else {}
+            exp_name = exp_info_obj.get('name', 'Unknown Set')
+            effective_code = exp_code
+
         for reg in target_regulations:
-            if not UPDATE_STATE['running']: break
-            
-            log_update(f"正在掃描: [{exp_code}] {exp_name} (Regulation {reg})...")
-            
-            # 偵測該組合的總頁數
-            current_total_pages = 1
-            first_url = construct_filtered_url(config.DEFAULT_LIST_URL, 1, exp_code, reg)
-            try:
-                res = requests.get(first_url, headers=config.HEADERS, timeout=10)
-                if res.status_code == 200:
-                    soup = BeautifulSoup(res.text, 'html.parser')
-                    page_tag = soup.find('p', class_='resultTotalPages')
-                    if page_tag:
-                        txt = page_tag.get_text(strip=True)
-                        m = re.search(r'(\d+)', txt)
-                        if m: current_total_pages = int(m.group(1))
-            except Exception as e:
-                log_update(f"頁數偵測失敗: {e}")
+            if not UPDATE_STATE['running']:
+                break
+
+            log_update(f"正在掃描: [{effective_code}] {exp_name} (Regulation {reg})...")
+
+            # 偵測該組合的總頁數；自定義模式不覆寫 expansionCodes
+            scan_exp_code = None if use_custom_mode else exp_code
+            first_url = construct_filtered_url(base_list_url, 1, scan_exp_code, reg)
+            current_total_pages = _detect_total_pages(first_url)
+
+            task_template = {
+                'set_code': effective_code,
+                'set_name': exp_name,
+                'regulation': reg if reg is not None else 1,
+                'skip_images': skip_images,
+            }
 
             # 開始翻頁
             for page in range(1, current_total_pages + 1):
-                if not UPDATE_STATE['running']: break
-                
-                list_url = construct_filtered_url(config.DEFAULT_LIST_URL, page, exp_code, reg)
-                try:
-                    resp = requests.get(list_url, headers=config.HEADERS, timeout=10)
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.text, 'html.parser')
-                        card_items = soup.find_all('li', class_='card')
-                        
-                        for item in card_items:
-                            link = item.find('a')
-                            if not link: continue
-                            match = re.search(r'/detail/(\d+)/', link['href'])
-                            if match:
-                                c_id = match.group(1)
-                                # 組合唯一任務 ID (避免重複掃描，但如果不同賽制可能需要更新 flag)
-                                # 這裡我們簡單做：如果這張卡在這個批次已經加過，就不加了
-                                # (或者你可以允許重複，以便更新 regulation flag，看需求)
-                                if c_id not in found_ids_in_batch:
-                                    found_ids_in_batch.add(c_id)
-                                    
-                                    # 關鍵：將上下文封裝進任務
-                                    task_payload = {
-                                        'id': c_id,
-                                        'set_code': exp_code,
-                                        'set_name': exp_name,
-                                        'regulation': reg,
-                                        'skip_images': skip_images
-                                    }
-                                    task_queue.put(task_payload)
-                                    with update_lock: UPDATE_STATE['total_tasks'] += 1
-                except Exception as e:
-                    log_update(f"列表掃描錯誤: {e}")
-                    
+                if not UPDATE_STATE['running']:
+                    break
+                list_url = construct_filtered_url(base_list_url, page, scan_exp_code, reg)
+                _scan_list_page(list_url, task_queue, found_ids_in_batch, task_template)
+
     log_update(f"掃描完成，共發現 {task_queue.qsize()} 張卡片需處理。")
 
     # ==========================

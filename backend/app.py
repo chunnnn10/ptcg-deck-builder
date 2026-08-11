@@ -208,6 +208,12 @@ def start_background_update_threads():
     else:
         print(">>> [User Backup] disabled by ENABLE_USER_BACKUP", flush=True)
 
+    if config.ENABLE_CARD_DB_AUTO_UPDATE:
+        from services.card_db_auto_update import run_card_db_auto_update_service
+        threading.Thread(target=run_card_db_auto_update_service, daemon=True).start()
+    else:
+        print(">>> [Card DB Auto Update] disabled by ENABLE_CARD_DB_AUTO_UPDATE", flush=True)
+
 database.init_db()
 app.register_blueprint(main_bp)
 start_background_update_threads()

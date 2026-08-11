@@ -775,10 +775,13 @@ def test_crawl(count: int = 20, start_id: int = 50250):
 # ==========================================
 # 擴充包列表抓取
 # ==========================================
-def fetch_jp_expansion_meta() -> list[dict]:
+def fetch_jp_expansion_meta(persist: bool = True) -> list[dict]:
     """
     從 JP 搜尋頁的 JS 資料中提取擴充包列表。
     回傳: [{'code': '954', 'name': '拡張パック「アビスアイ」', 'series': ''}, ...]
+
+    Args:
+        persist: 若 True，將結果 UPSERT 進 jp_expansion_sets 表（每日自動更新所需）。
     """
     url = "https://www.pokemon-card.com/card-search/index.php"
     jp_log("正在同步 JP 擴充包列表...")
@@ -814,7 +817,88 @@ def fetch_jp_expansion_meta() -> list[dict]:
                 expansions.append({'code': code, 'name': name, 'series': ''})
 
     jp_log(f"從 JP 搜尋頁找到 {len(expansions)} 個擴充包")
+
+    if persist and expansions:
+        _persist_jp_expansion_sets(expansions)
+
     return expansions
+
+
+def _persist_jp_expansion_sets(expansions: list[dict]) -> int:
+    """把 JP 擴充包列表 UPSERT 進 jp_expansion_sets 表。回傳寫入筆數。"""
+    if not expansions:
+        return 0
+    conn = database.get_db_connection()
+    if not conn:
+        jp_log("JP 擴充包寫入失敗：無資料庫連線")
+        return 0
+    written = 0
+    try:
+        cursor = conn.cursor()
+        for exp in expansions:
+            code = (exp.get('code') or '').strip()
+            name = (exp.get('name') or '').strip()
+            series = (exp.get('series') or '').strip()
+            if not code:
+                continue
+            try:
+                cursor.execute(
+                    """INSERT INTO jp_expansion_sets (set_code, set_name, series)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (set_code) DO UPDATE
+                       SET set_name = EXCLUDED.set_name,
+                           series = EXCLUDED.series,
+                           last_updated = CURRENT_TIMESTAMP""",
+                    (code, name, series),
+                )
+                written += 1
+            except Exception as e:
+                jp_log(f"JP 擴充包寫入失敗 {code}: {e}")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        jp_log(f"JP 擴充包批次寫入失敗: {e}")
+    finally:
+        conn.close()
+    if written:
+        jp_log(f"已同步 {written} 個 JP 擴充包至資料庫")
+    return written
+
+
+def detect_new_jp_expansion_codes(max_new: int = 3) -> list[str]:
+    """找出資料庫尚未收錄任何卡牌的 JP 擴充包代碼，用於增量更新。
+    max_new 限制本次要抓的新系列數量，避免一次跑太多。
+    """
+    conn = database.get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT s.set_code
+            FROM jp_expansion_sets s
+            LEFT JOIN jp_cards c ON c.set_code = s.set_code
+            WHERE c.card_id IS NULL
+            ORDER BY s.last_updated DESC
+            LIMIT %s
+            """,
+            (int(max_new),),
+        )
+        rows = cursor.fetchall()
+        return [r['set_code'] for r in rows if r.get('set_code')]
+    except Exception as e:
+        jp_log(f"偵測 JP 新系列失敗: {e}")
+        return []
+    finally:
+        conn.close()
 
 
 def crawl_expansion_card_ids(expansion_code: str, max_pages: int = 20) -> list[int]:

@@ -1716,23 +1716,40 @@ def check_version():
 @main_bp.route('/api/crawler/start', methods=['POST'])
 @admin_required
 def start_update():
-    """啟動後台更新任務 (支援指定擴充包與賽制)"""
+    """啟動後台更新任務 (支援指定擴充包、賽制、與自定義 URL 舊版更新方法)"""
     if crawler.UPDATE_STATE['running']:
         return jsonify({'success': False, 'message': '更新已在進行中'})
-    
-    data = request.json
+
+    data = request.json or {}
     # 支援新的參數格式
     target_expansion_codes = data.get('target_expansion_codes', []) # e.g. ['M3', 'AS6b']
     target_regulations = data.get('target_regulations', [1, 2])     # e.g. [1, 2]
     update_japanese = data.get('update_japanese', False)            # default False
     skip_images = data.get('skip_images', False)                    # default False (update images)
 
+    # 舊版更新方法：自定義列表 URL（修復指定 URL 卻被強制要求選系列的問題）
+    custom_url = (data.get('custom_url') or '').strip()
+    custom_set_code = (data.get('custom_set_code') or '').strip()
+    custom_set_name = (data.get('custom_set_name') or '').strip()
+
     # 啟動執行緒
-    t = threading.Thread(target=crawler.run_update_process, args=(target_expansion_codes, target_regulations, update_japanese, skip_images))
+    t = threading.Thread(
+        target=crawler.run_update_process,
+        args=(target_expansion_codes, target_regulations, update_japanese, skip_images),
+        kwargs={
+            'custom_url': custom_url or None,
+            'custom_set_code': custom_set_code or None,
+            'custom_set_name': custom_set_name or None,
+        },
+    )
     t.daemon = True
     t.start()
-    
-    return jsonify({'success': True, 'message': '更新任務已啟動'})
+
+    if custom_url and not target_expansion_codes:
+        msg = f'自定義 URL 更新任務已啟動：{custom_url}'
+    else:
+        msg = '更新任務已啟動'
+    return jsonify({'success': True, 'message': msg})
 
 
 # ==========================================
@@ -1748,8 +1765,10 @@ def jp_crawler_status():
 
 @main_bp.route('/api/jp/crawler/expansions')
 def jp_expansion_list():
-    """取得 JP 擴充包列表 (從搜尋頁 JS 資料解析)"""
-    expansions = jp_crawler.fetch_jp_expansion_meta()
+    """取得 JP 擴充包列表 (從搜尋頁 JS 資料解析)。
+    持久化進 jp_expansion_sets 表以供每日自動偵測新系列使用。
+    """
+    expansions = jp_crawler.fetch_jp_expansion_meta(persist=True)
     return jsonify(expansions)
 
 
@@ -1968,25 +1987,66 @@ def update_regulation_settings():
 @main_bp.route('/api/crawler/expansions', methods=['GET'])
 @admin_required
 def get_expansions():
-    """取得擴充包列表 (用於更新選擇器)，按系列分組"""
+    """取得擴充包列表 (用於更新選擇器)，按系列分組。
+
+    修復 1：資料庫非空但官網已推出新系列時，dropdown 不會自動同步。
+    現在會檢查 expansion_sets.last_updated 是否超過 EXPANSION_META_RESYNC_INTERVAL_SECONDS
+    （預設 24h），超過就在本次請求內呼叫 fetch_expansion_meta() 重新同步官網，
+    讓 dropdown 能即時反映新系列。可透過 ?force_sync=1 強制立刻重新同步。
+    """
     try:
         conn = database.get_db_connection()
         cursor = conn.cursor()
 
         # 確保 expansion_sets 表存在
         try:
-            cursor.execute("SELECT set_code, set_name, series FROM expansion_sets ORDER BY last_updated DESC")
+            cursor.execute("SELECT set_code, set_name, series, last_updated FROM expansion_sets ORDER BY last_updated DESC")
             rows = cursor.fetchall()
         except psycopg2.OperationalError:
             crawler.ensure_schema_updates()
             rows = []
 
-        # 如果資料庫是空的，嘗試自動同步一次 meta
+        need_sync = False
         if not rows:
-            print("擴充包列表為空，正在同步...")
-            crawler.fetch_expansion_meta()
-            cursor.execute("SELECT set_code, set_name, series FROM expansion_sets ORDER BY last_updated DESC")
-            rows = cursor.fetchall()
+            need_sync = True
+        else:
+            force_sync = request.args.get('force_sync', '') in ('1', 'true', 'yes')
+            if force_sync:
+                need_sync = True
+            else:
+                resync_seconds = int(getattr(config, 'EXPANSION_META_RESYNC_INTERVAL_SECONDS', 86400) or 86400)
+                try:
+                    last_updated = rows[0].get('last_updated')
+                    if last_updated:
+                        age_seconds = (datetime.utcnow() - last_updated).total_seconds()
+                        # last_updated 可能是 naive (DB DEFAULT CURRENT_TIMESTAMP 通常 naive UTC)
+                        # 或 tz-aware；統一取絕對值避免時區誤判
+                        if age_seconds < 0:
+                            age_seconds = -age_seconds
+                        if age_seconds > resync_seconds:
+                            need_sync = True
+                except Exception as e:
+                    print(f"expansion_sets last_updated 檢查失敗，採保守同步: {e}")
+                    need_sync = True
+
+        if need_sync:
+            print("擴充包列表過期或為空，正在同步官網...")
+            try:
+                crawler.fetch_expansion_meta()
+                cursor.execute("SELECT set_code, set_name, series, last_updated FROM expansion_sets ORDER BY last_updated DESC")
+                rows = cursor.fetchall()
+            except Exception as e:
+                print(f"sync_expansion_meta 失敗（沿用舊資料）: {e}")
+
+        # 取最新同步時間（最新一筆 last_updated）
+        last_synced = None
+        if rows:
+            try:
+                last_synced = rows[0].get('last_updated')
+                if last_synced and hasattr(last_synced, 'isoformat'):
+                    last_synced = last_synced.isoformat()
+            except Exception:
+                last_synced = None
 
         conn.close()
 
@@ -2012,7 +2072,8 @@ def get_expansions():
         return jsonify({
             'success': True,
             'expansions': flat_list,       # 向後相容
-            'grouped': grouped             # 新版分組格式
+            'grouped': grouped,            # 新版分組格式
+            'last_synced': last_synced,    # 上次同步時間（方便 UI 顯示）
         })
 
     except Exception as e:
@@ -2024,6 +2085,33 @@ def get_expansions():
 def get_update_status():
     """獲取當前更新狀態"""
     return jsonify(crawler.UPDATE_STATE)
+
+
+@main_bp.route('/api/crawler/expansions/sync', methods=['POST'])
+@admin_required
+def sync_expansions_now():
+    """立即重新同步中/日文官網擴充包列表（不執行卡牌爬蟲）。
+    用於修復 admin dropdown 停滯問題，讓管理者不必等每日排程就能拿到最新系列。
+    """
+    payload = {'tw': 0, 'jp': 0, 'errors': []}
+
+    try:
+        tw_map = crawler.fetch_expansion_meta()
+        payload['tw'] = len(tw_map) if tw_map else 0
+    except Exception as e:
+        payload['errors'].append(f'tw: {e}')
+
+    try:
+        jp_list = jp_crawler.fetch_jp_expansion_meta(persist=True)
+        payload['jp'] = len(jp_list) if jp_list else 0
+    except Exception as e:
+        payload['errors'].append(f'jp: {e}')
+
+    return jsonify({
+        'success': True,
+        'message': f"已同步 TW={payload['tw']} / JP={payload['jp']} 個擴充包",
+        'stats': payload,
+    })
 
 
 # ==========================================

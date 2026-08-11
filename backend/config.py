@@ -99,6 +99,19 @@ JP_DECK_DETAIL_FETCH_CAP = _env_int('JP_DECK_DETAIL_FETCH_CAP', 500)
 # 自動更新服務等待背景任務完成的整體超時（秒）；逾時不再等，避免循環卡死
 AUTO_UPDATE_MAX_WAIT_SECONDS = _env_int('AUTO_UPDATE_MAX_WAIT_SECONDS', 7200)
 
+# ── 單卡庫每日自動更新（cards / jp_cards）──
+# 同步官網擴充包列表 + 偵測並增量抓取新系列，避免 admin 更新頁 dropdown 停滯在舊版本。
+ENABLE_CARD_DB_AUTO_UPDATE = _env_bool('ENABLE_CARD_DB_AUTO_UPDATE', True)
+CARD_DB_AUTO_UPDATE_INTERVAL_SECONDS = _env_int('CARD_DB_AUTO_UPDATE_INTERVAL_SECONDS', 86400)
+CARD_DB_AUTO_UPDATE_INITIAL_DELAY_SECONDS = _env_int('CARD_DB_AUTO_UPDATE_INITIAL_DELAY_SECONDS', 60)
+# 每次同步最多抓多少個「尚未收錄任何卡牌」的新系列（避免一次跑太多打爆來源站）
+CARD_DB_AUTO_UPDATE_MAX_NEW_SETS = max(1, _env_int('CARD_DB_AUTO_UPDATE_MAX_NEW_SETS', 3))
+CARD_DB_AUTO_UPDATE_MAX_NEW_JP_SETS = max(1, _env_int('CARD_DB_AUTO_UPDATE_MAX_NEW_JP_SETS', 3))
+# 每日同步預設不下載卡圖（圖檔通常已快取），節省頻寬；admin 手動更新可另外選擇
+CARD_DB_AUTO_UPDATE_SKIP_IMAGES = _env_bool('CARD_DB_AUTO_UPDATE_SKIP_IMAGES', True)
+# /api/crawler/expansions 快取時間（秒）：超過則自動重新同步官網 dropdown 列表
+EXPANSION_META_RESYNC_INTERVAL_SECONDS = _env_int('EXPANSION_META_RESYNC_INTERVAL_SECONDS', 86400)
+
 # ── 每日備份（僅用戶資料，容器內排程，UTC 04:17）──
 ENABLE_USER_BACKUP = _env_bool('ENABLE_USER_BACKUP', True)
 AI_BASE_URL = os.environ.get('AI_BASE_URL') or 'https://api.openai.com/v1'
