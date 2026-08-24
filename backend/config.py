@@ -46,6 +46,7 @@ FRONTEND_DIR = os.path.normpath(os.path.join(BASE_DIR, '..', 'frontend'))
 TEMPLATE_DIR = os.path.join(FRONTEND_DIR, 'html')
 CSS_DIR = os.path.join(FRONTEND_DIR, 'css')
 JS_DIR = os.path.join(FRONTEND_DIR, 'js')
+FONTS_DIR = os.path.join(FRONTEND_DIR, 'fonts')
 PUBLIC_DIR = FRONTEND_DIR
 IMAGE_FOLDER = os.path.normpath(os.path.join(BASE_DIR, '..', 'data', 'images'))
 JP_IMAGE_FOLDER = os.path.normpath(os.path.join(BASE_DIR, '..', 'data', 'images_jp'))

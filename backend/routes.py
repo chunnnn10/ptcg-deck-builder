@@ -678,6 +678,9 @@ def serve_css(filename): return send_from_directory(config.CSS_DIR, filename)
 @main_bp.route('/static/js/<path:filename>')
 def serve_js(filename): return send_from_directory(config.JS_DIR, filename)
 
+@main_bp.route('/static/fonts/<path:filename>')
+def serve_fonts(filename): return send_from_directory(config.FONTS_DIR, filename)
+
 @main_bp.route('/images/<path:filename>')
 def serve_image(filename): return send_from_directory(config.IMAGE_FOLDER, filename)
 
