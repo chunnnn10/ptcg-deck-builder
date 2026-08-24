@@ -2,14 +2,14 @@
 
     <div v-if="showAddCardModal"
          class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
-        <div class="bg-gray-900 rounded-xl w-full max-w-3xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-3xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
              @click.stop>
             <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
                 <h2 class="text-xl font-bold text-white">
-                    <i class="fa-solid fa-plus-circle mr-2 text-green-400"></i>Add Card
+                    <span class="ms mr-2 text-green-400" aria-hidden="true">add_circle</span>Add Card
                 </h2>
                 <button @click="showAddCardModal = false" class="text-gray-400 hover:text-white">
-                    <i class="fa-solid fa-times fa-lg"></i>
+                    <span class="ms ms-lg" aria-hidden="true">close</span>
                 </button>
             </div>
 
@@ -94,7 +94,7 @@
                             <h3 class="text-sm font-bold text-gray-200">Skills / text</h3>
                             <button @click="addSkill"
                                     class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded">
-                                <i class="fa-solid fa-plus mr-1"></i>Add line
+                    <span class="ms mr-1" aria-hidden="true">add</span>Add line
                             </button>
                         </div>
                         <div class="flex flex-wrap gap-2">
@@ -138,7 +138,7 @@
                                     <button @click="removeLastSkillCost(idx)"
                                             class="w-6 h-6 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-400"
                                             title="Remove last cost">
-                                        <i class="fa-solid fa-delete-left text-xs"></i>
+                                        <span class="ms text-xs" aria-hidden="true">backspace</span>
                                     </button>
                                     <span class="ml-2 flex">
                                         <img v-for="(energy, costIdx) in skill.cost"
@@ -169,7 +169,7 @@
                                    class="flex-1 bg-gray-800 border border-gray-600 rounded-l px-3 py-2 text-white focus:border-green-500 outline-none"
                                    placeholder="Search source card">
                             <button @click="searchSourceCard" class="bg-gray-700 hover:bg-gray-600 px-4 rounded-r border border-l-0 border-gray-600">
-                                <i class="fa-solid fa-search"></i>
+                                <span class="ms" aria-hidden="true">search</span>
                             </button>
                         </div>
                         <div v-if="sourceSearchResults.length > 0"
@@ -187,7 +187,7 @@
                         </div>
                     </label>
                     <div v-if="newCardData.sourceCardId" class="bg-gray-800 border border-green-500/50 rounded p-3 flex items-center">
-                        <i class="fa-solid fa-check-circle text-green-500 mr-3"></i>
+                        <span class="ms text-green-500 mr-3" aria-hidden="true">check_circle</span>
                         <div class="min-w-0">
                             <div class="text-xs text-gray-400">Selected source</div>
                             <div class="font-bold text-green-400 truncate">[[ newCardData.sourceName ]]</div>
@@ -210,7 +210,7 @@
                     <span class="block text-gray-400 text-xs font-bold mb-2">Card image</span>
                     <div class="flex items-center gap-4">
                         <label class="cursor-pointer bg-gray-800 hover:bg-gray-700 border border-gray-600 px-4 py-2 rounded transition flex items-center">
-                            <i class="fa-solid fa-upload mr-2"></i>Upload image
+                            <span class="ms mr-2" aria-hidden="true">upload</span>Upload image
                             <input type="file" @change="handleFileUpload" class="hidden" accept="image/*">
                         </label>
                         <span v-if="newCardData.imageFile" class="text-sm text-gray-300 truncate">[[ newCardData.imageFile.name ]]</span>
@@ -228,7 +228,7 @@
                 <button @click="submitNewCard"
                         :disabled="isSubmittingCard"
                         class="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded font-bold transition flex items-center">
-                    <i v-if="isSubmittingCard" class="fa-solid fa-circle-notch fa-spin mr-2"></i>
+                    <span v-if="isSubmittingCard" class="ms animate-spin mr-2" aria-hidden="true">progress_activity</span>
                     [[ isSubmittingCard ? 'Saving...' : 'Save card' ]]
                 </button>
             </div>

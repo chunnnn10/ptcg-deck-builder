@@ -7,18 +7,16 @@
     <link rel="icon" href="/favicon.ico">
     <!-- Tailwind 3.4.17 自托管（play CDN 不發 CORS header，SRI 無法用於外部載入） -->
     <script src="/static/js/vendor/tailwind-3.4.17.js" integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K"></script>
+    <script src="/static/js/tailwind-config.js"></script>
     <script src="https://unpkg.com/vue@3.5.40/dist/vue.global.prod.js" integrity="sha384-yjSqnKX+01fhYzLUMRlCkMrHMTdKxwYcGIk5HZ6ug+4nfJn10+F7YsKRuGR5kQac" crossorigin="anonymous"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha384-iw3OoTErCYJJB9mCa8LNS2hbsQ7M3C0EpIsO/H5+EGAkPGc6rk+V8i04oW/K5xq0" crossorigin="anonymous">
     <link rel="stylesheet" href="/static/css/style.css">
     <style>
         [v-cloak] { display: none !important; }
-        .bg-grid { background-image: radial-gradient(#374151 1px, transparent 1px); background-size: 20px 20px; }
-        .bg-gray-750 { background-color: #273142; }
-        .bg-gray-850 { background-color: #1a1f2e; }
+        .bg-grid { background-image: radial-gradient(#3C4043 1px, transparent 1px); background-size: 20px 20px; }
         .workspace-item { transition: all 0.15s ease; }
-        .workspace-item:hover { background-color: rgba(55, 65, 81, 0.5); }
-        .workspace-item.active { background-color: rgba(37, 99, 235, 0.3); border-left: 2px solid #3b82f6; }
-        .workspace-item.drag-over { background-color: rgba(37, 99, 235, 0.2); outline: 1px dashed #3b82f6; }
+        .workspace-item:hover { background-color: rgba(156, 160, 166, 0.08); }
+        .workspace-item.active { background-color: rgba(53, 116, 240, 0.18); border-left: 2px solid #3574F0; }
+        .workspace-item.drag-over { background-color: rgba(53, 116, 240, 0.15); outline: 1px dashed #3574F0; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans overflow-hidden h-[100dvh]">
@@ -28,22 +26,22 @@
         <div class="flex flex-1 min-h-0 overflow-hidden relative">
             <nav class="w-12 bg-gray-950 border-r border-gray-800 flex flex-col items-center py-2 gap-1 shrink-0 z-40">
                 <button @click="toggleActivity('workspace')"
-                        class="w-10 h-10 rounded flex items-center justify-center transition"
+                        class="w-10 h-9 rounded-full flex items-center justify-center transition"
                         :class="activeActivity === 'workspace' && sidePanelVisible ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
                         title="Workspace">
-                    <i class="fa-solid fa-folder-tree"></i>
+                    <span class="ms" aria-hidden="true">account_tree</span>
                 </button>
                 <button @click="toggleActivity('search')"
-                        class="w-10 h-10 rounded flex items-center justify-center transition"
+                        class="w-10 h-9 rounded-full flex items-center justify-center transition"
                         :class="activeActivity === 'search' && sidePanelVisible ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
                         title="Search">
-                    <i class="fa-solid fa-search"></i>
+                    <span class="ms" aria-hidden="true">search</span>
                 </button>
                 <button @click="toggleActivity('ai')"
-                        class="w-10 h-10 rounded flex items-center justify-center transition"
+                        class="w-10 h-9 rounded-full flex items-center justify-center transition"
                         :class="activeActivity === 'ai' && sidePanelVisible ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
                         title="AI Agent">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <span class="ms" aria-hidden="true">auto_awesome</span>
                 </button>
             </nav>
 
@@ -79,7 +77,7 @@
 
     <template id="workspace-tree-node-template">
         <div class="workspace-node">
-            <div class="workspace-item flex items-center px-2 py-1.5 rounded cursor-pointer text-sm"
+            <div class="workspace-item flex items-center px-2 py-1.5 rounded-full cursor-pointer text-sm"
                  :class="{ 'active': currentItem && currentItem.id === item.id, 'drag-over': isDragOver }"
                  :style="{ paddingLeft: (depth * 12 + 8) + 'px' }"
                  @click="handleClick"
@@ -91,14 +89,14 @@
                  @dragleave="onDragLeave"
                  @drop.prevent="onDrop">
                 <span v-if="item.type === 'folder'" class="w-4 mr-1 text-gray-500">
-                    <i class="fa-solid text-xs" :class="isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'"></i>
+                    <span class="ms text-xs" aria-hidden="true">[[ isExpanded ? 'expand_more' : 'chevron_right' ]]</span>
                 </span>
                 <span v-else class="w-4 mr-1"></span>
-                <i v-if="item.type === 'folder'" class="fa-solid fa-folder mr-2 text-yellow-500" :class="{ 'fa-folder-open': isExpanded }"></i>
-                <i v-else class="fa-solid fa-file-lines mr-2 text-green-400"></i>
+                <span v-if="item.type === 'folder'" class="ms mr-2 text-yellow-500" aria-hidden="true">[[ isExpanded ? 'folder_open' : 'folder' ]]</span>
+                <span v-else class="ms mr-2 text-green-400" aria-hidden="true">description</span>
                 <span class="flex-1 truncate" :title="item.name">[[ item.name ]]</span>
                 <span v-if="currentItem && currentItem.id === item.id && hasUnsavedChanges" class="text-yellow-400 ml-1" title="未儲存">
-                    <i class="fa-solid fa-circle text-[6px]"></i>
+                    <span class="ms ms-fill text-[6px]" aria-hidden="true">circle</span>
                 </span>
                 <span v-if="item.type === 'deck' && item.card_count !== undefined" class="text-xs text-gray-500 ml-1">
                     [[ item.card_count ]]

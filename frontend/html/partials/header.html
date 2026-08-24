@@ -2,145 +2,145 @@
     <div class="flex justify-between items-center gap-3">
         <div class="flex items-center gap-3 min-w-0">
             <h1 class="text-lg md:text-xl font-bold text-yellow-400 cursor-pointer whitespace-nowrap flex items-center" @click="goHome">
-                <i class="fa-solid fa-layer-group mr-2 hidden md:inline"></i>
+                <span class="ms mr-2 hidden md:inline" aria-hidden="true">layers</span>
                 <span class="hidden md:inline">Chun Deck Builder</span>
                 <span class="md:hidden">Chun</span>
             </h1>
             <div v-if="activeDeckTab"
                  class="hidden md:flex items-center gap-2 min-w-0 text-xs bg-gray-900 border border-gray-700 rounded px-2 py-1.5 max-w-[260px]">
-                <i class="fa-solid text-blue-300" :class="getDeckTabSourceIcon(activeDeckTab)"></i>
+                <span class="ms text-blue-300" aria-hidden="true">[[ getDeckTabSourceIcon(activeDeckTab) ]]</span>
                 <span class="truncate text-gray-200">[[ activeDeckTab.title ]]</span>
                 <span v-if="activeDeckTab.dirty" class="text-yellow-400" title="未儲存">
-                    <i class="fa-solid fa-circle text-[7px]"></i>
+                    <span class="ms ms-fill text-[7px]" aria-hidden="true">circle</span>
                 </span>
             </div>
         </div>
 
         <div class="flex items-center gap-2 md:gap-3 text-sm font-medium shrink-0">
-            <button @click="openDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded hover:bg-gray-700 transition">
-                <i class="fa-solid fa-globe mr-1 text-blue-400"></i> 推薦
+            <button @click="openDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded-full hover:bg-gray-700 transition">
+                <span class="ms mr-1 text-blue-400" aria-hidden="true">public</span> 推薦
             </button>
-            <button @click="openJpDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded hover:bg-gray-700 transition">
-                <i class="fa-solid fa-torii-gate mr-1 text-red-400"></i> 日本牌組
+            <button @click="openJpDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded-full hover:bg-gray-700 transition">
+                <span class="ms mr-1 text-red-400" aria-hidden="true">temple_buddhist</span> 日本牌組
             </button>
-            <button @click="openLimitlessDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded hover:bg-gray-700 transition">
-                <i class="fa-solid fa-trophy mr-1 text-yellow-400"></i> LimitLess
+            <button @click="openLimitlessDeckLibrary" class="hidden xl:block text-gray-300 hover:text-white px-3 py-2 rounded-full hover:bg-gray-700 transition">
+                <span class="ms mr-1 text-yellow-400" aria-hidden="true">emoji_events</span> LimitLess
             </button>
 
-            <div class="hidden md:flex items-center bg-gray-700 rounded-lg p-1">
-                <button @click="currentLang = 'tw'" :class="{'bg-blue-600 text-white': currentLang === 'tw', 'text-gray-400': currentLang !== 'tw'}" class="px-3 py-1.5 rounded text-xs font-bold">中</button>
-                <button @click="currentLang = 'jp'" :class="{'bg-red-600 text-white': currentLang === 'jp', 'text-gray-400': currentLang !== 'jp'}" class="px-3 py-1.5 rounded text-xs font-bold">日</button>
+            <div class="hidden md:flex items-center bg-gray-900 border border-gray-600 rounded-full p-1 gap-1">
+                <button @click="currentLang = 'tw'" :class="{'bg-blue-600 text-white shadow-sm': currentLang === 'tw', 'text-gray-400 hover:text-white': currentLang !== 'tw'}" class="px-3 py-1.5 rounded-full text-xs font-bold">中</button>
+                <button @click="currentLang = 'jp'" :class="{'bg-blue-600 text-white shadow-sm': currentLang === 'jp', 'text-gray-400 hover:text-white': currentLang !== 'jp'}" class="px-3 py-1.5 rounded-full text-xs font-bold">日</button>
             </div>
 
-            <div class="hidden md:flex items-center bg-gray-700 rounded-lg p-1">
-                <button @click="isStandardMode = true" :class="{'bg-blue-600 text-white': isStandardMode, 'text-gray-400': !isStandardMode}" class="px-3 py-1.5 rounded text-xs font-bold">標準</button>
-                <button @click="isStandardMode = false" :class="{'bg-purple-600 text-white': !isStandardMode, 'text-gray-400': isStandardMode}" class="px-3 py-1.5 rounded text-xs font-bold">自由</button>
+            <div class="hidden md:flex items-center bg-gray-900 border border-gray-600 rounded-full p-1 gap-1">
+                <button @click="isStandardMode = true" :class="{'bg-blue-600 text-white shadow-sm': isStandardMode, 'text-gray-400 hover:text-white': !isStandardMode}" class="px-3 py-1.5 rounded-full text-xs font-bold">標準</button>
+                <button @click="isStandardMode = false" :class="{'bg-blue-600 text-white shadow-sm': !isStandardMode, 'text-gray-400 hover:text-white': isStandardMode}" class="px-3 py-1.5 rounded-full text-xs font-bold">自由</button>
             </div>
 
-            <div class="hidden lg:flex gap-3 bg-gray-700 px-4 py-2 rounded-lg">
-                <span :class="getCountColorClass"><i class="fa-solid fa-clone"></i> [[ totalCards ]]<span v-if="isStandardMode">/60</span></span>
-                <span class="text-blue-300"><i class="fa-solid fa-paw"></i> [[ stats.pokemon ]]</span>
-                <span class="text-green-300"><i class="fa-solid fa-user-graduate"></i> [[ stats.trainers ]]</span>
-                <span class="text-yellow-300"><i class="fa-solid fa-bolt"></i> [[ stats.energy ]]</span>
+            <div class="hidden lg:flex gap-3 rounded-full bg-gray-900 border border-gray-700 px-4 py-2">
+                <span :class="getCountColorClass"><span class="ms" aria-hidden="true">style</span> [[ totalCards ]]<span v-if="isStandardMode">/60</span></span>
+                <span class="text-blue-300"><span class="ms" aria-hidden="true">pets</span> [[ stats.pokemon ]]</span>
+                <span class="text-green-300"><span class="ms" aria-hidden="true">school</span> [[ stats.trainers ]]</span>
+                <span class="text-yellow-300"><span class="ms" aria-hidden="true">bolt</span> [[ stats.energy ]]</span>
             </div>
 
-            <button @click="openSimModal" class="hidden md:flex bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg font-bold transition items-center">
-                <i class="fa-solid fa-flask md:mr-2"></i><span class="hidden md:inline">模擬</span>
+            <button @click="openSimModal" class="hidden md:flex bg-teal-500 hover:bg-teal-400 text-gray-950 px-3 py-2 rounded-full font-bold transition items-center">
+                <span class="ms md:mr-2" aria-hidden="true">science</span><span class="hidden md:inline">模擬</span>
             </button>
 
             <div v-if="!isAuthenticated" class="hidden md:block">
-                <button @click.stop="openAuthModal('login')" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition border border-gray-600">
-                    <i class="fa-solid fa-user mr-2"></i>登入
+                <button @click.stop="openAuthModal('login')" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-full transition border border-gray-600">
+                    <span class="ms mr-2" aria-hidden="true">person</span>登入
                 </button>
             </div>
             <div v-else class="relative hidden md:block">
                 <button @click.stop="showUserMenu = !showUserMenu"
-                        class="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-blue-300 px-3 py-2 rounded-lg border border-blue-900/50 transition">
+                        class="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-blue-300 px-3 py-2 rounded-full border border-blue-900/50 transition">
                     <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs text-white font-bold"
                          :class="user.is_admin ? 'bg-yellow-600' : 'bg-blue-600'">
                         [[ user.username.charAt(0).toUpperCase() ]]
                     </div>
                     <span>[[ user.username ]]</span>
-                    <i class="fa-solid fa-chevron-down text-xs"></i>
+                    <span class="ms text-xs" aria-hidden="true">expand_more</span>
                 </button>
-                <div v-if="showUserMenu" @click.stop class="absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-xl border border-gray-700 z-50 py-1">
+                <div v-if="showUserMenu" @click.stop class="absolute right-0 mt-2 w-48 bg-gray-800 rounded-2xl shadow-2xl border border-gray-600 z-50 py-1 overflow-hidden">
                     <div class="px-4 py-2 border-b border-gray-700">
                         <div class="text-sm text-white font-medium">[[ user.username ]]</div>
                         <div class="text-xs text-gray-400">[[ user.email ]]</div>
                     </div>
-                    <a @click="logout(); showUserMenu = false" class="block px-4 py-2 hover:bg-red-900/50 text-red-400 cursor-pointer">
-                        <i class="fa-solid fa-sign-out-alt mr-2"></i> 登出
+                    <a @click="logout(); showUserMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-red-900/50 text-red-400 cursor-pointer">
+                        <span class="ms mr-2" aria-hidden="true">logout</span> 登出
                     </a>
                 </div>
                 <div v-if="showUserMenu" @click="showUserMenu = false" class="fixed inset-0 z-40"></div>
             </div>
 
             <div class="relative">
-                <button @click.stop="showMenu = !showMenu" class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg transition relative z-50">
-                    <i class="fa-solid fa-bars"></i>
+                <button @click.stop="showMenu = !showMenu" class="w-10 h-10 rounded-full p-0 flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-white transition relative z-50">
+                    <span class="ms" aria-hidden="true">menu</span>
                 </button>
                 <div v-if="showMenu" @click="showMenu = false" class="fixed inset-0 z-40 cursor-default"></div>
-                <div v-if="showMenu" class="absolute right-0 mt-2 w-64 bg-gray-800 rounded-lg shadow-xl border border-gray-700 z-50 py-1 max-h-[80vh] overflow-y-auto">
+                <div v-if="showMenu" class="absolute right-0 mt-2 w-64 bg-gray-800 rounded-2xl shadow-2xl border border-gray-600 z-50 py-1 max-h-[80vh] overflow-y-auto overflow-hidden">
                     <div class="md:hidden border-b border-gray-700 pb-2 mb-2">
-                        <a @click="openDeckLibrary(); showMenu=false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-gray-300">
-                            <i class="fa-solid fa-globe mr-2 text-blue-400"></i> 推薦牌組
+                        <a @click="openDeckLibrary(); showMenu=false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-gray-300">
+                            <span class="ms mr-2 text-blue-400" aria-hidden="true">public</span> 推薦牌組
                         </a>
-                        <a @click="openJpDeckLibrary(); showMenu=false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-gray-300">
-                            <i class="fa-solid fa-torii-gate mr-2 text-red-400"></i> 日本牌組
+                        <a @click="openJpDeckLibrary(); showMenu=false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-gray-300">
+                            <span class="ms mr-2 text-red-400" aria-hidden="true">temple_buddhist</span> 日本牌組
                         </a>
-                        <a @click="openLimitlessDeckLibrary(); showMenu=false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-gray-300">
-                            <i class="fa-solid fa-trophy mr-2 text-yellow-400"></i> LimitLess DeckList
+                        <a @click="openLimitlessDeckLibrary(); showMenu=false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-gray-300">
+                            <span class="ms mr-2 text-yellow-400" aria-hidden="true">emoji_events</span> LimitLess DeckList
                         </a>
-                        <button v-if="!isAuthenticated" @click="openAuthModal('login'); showMenu=false" class="mx-4 my-2 w-[calc(100%-2rem)] bg-blue-600 text-white py-2 rounded-lg font-bold">
+                        <button v-if="!isAuthenticated" @click="openAuthModal('login'); showMenu=false" class="mx-4 my-2 w-[calc(100%-2rem)] bg-blue-600 text-white py-2 rounded-full font-bold">
                             登入 / 註冊
                         </button>
                     </div>
 
                     <template v-if="user && user.is_admin">
                         <div class="text-xs text-gray-500 px-4 py-1 uppercase font-bold">Admin</div>
-                        <a @click="openAdminPanel(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-yellow-400">
-                            <i class="fa-solid fa-user-shield mr-2"></i> 管理面板
+                        <a @click="openAdminPanel(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-yellow-400">
+                            <span class="ms mr-2" aria-hidden="true">admin_panel_settings</span> 管理面板
                         </a>
-                        <a @click="openDeckManager(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-blue-400">
-                            <i class="fa-solid fa-globe mr-2"></i> 牌組管理
+                        <a @click="openDeckManager(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-blue-400">
+                            <span class="ms mr-2" aria-hidden="true">public</span> 牌組管理
                         </a>
-                        <a @click="openUpdateModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-pink-400">
-                            <i class="fa-solid fa-sync mr-2"></i> 中文卡更新
+                        <a @click="openUpdateModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-pink-400">
+                            <span class="ms mr-2" aria-hidden="true">refresh</span> 中文卡更新
                         </a>
-                        <a @click="openJPUpdateModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-red-400">
-                            <i class="fa-solid fa-cloud-arrow-down mr-2"></i> 日本卡更新
+                        <a @click="openJPUpdateModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-red-400">
+                            <span class="ms mr-2" aria-hidden="true">cloud_download</span> 日本卡更新
                         </a>
-                        <a @click="openLimitlessAdmin(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-yellow-400">
-                            <i class="fa-solid fa-trophy mr-2"></i> LimitLess 管理
+                        <a @click="openLimitlessAdmin(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-yellow-400">
+                            <span class="ms mr-2" aria-hidden="true">emoji_events</span> LimitLess 管理
                         </a>
-                        <a @click="openAddCardModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-green-400">
-                            <i class="fa-solid fa-plus-circle mr-2"></i> 新增卡片
+                        <a @click="openAddCardModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-green-400">
+                            <span class="ms mr-2" aria-hidden="true">add_circle</span> 新增卡片
                         </a>
-                        <a @click="openDeckAdmin(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-purple-400 border-b border-gray-700">
-                            <i class="fa-solid fa-layer-group mr-2"></i> 匯入牌組管理
+                        <a @click="openDeckAdmin(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-purple-400 border-b border-gray-700">
+                            <span class="ms mr-2" aria-hidden="true">layers</span> 匯入牌組管理
                         </a>
                     </template>
 
-                    <a @click="openSaveModal(); showMenu = false" class="block px-4 py-3 hover:bg-gray-700 cursor-pointer text-yellow-400 border-b border-gray-700">
-                        <i class="fa-solid fa-share-nodes mr-2"></i> 分享牌組
+                    <a @click="openSaveModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-3 rounded-full hover:bg-gray-700 cursor-pointer text-yellow-400 border-b border-gray-700">
+                        <span class="ms mr-2" aria-hidden="true">share</span> 分享牌組
                     </a>
-                    <a @click="saveAsNewDeck(null); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-blue-400">
-                        <i class="fa-solid fa-folder-plus mr-2"></i> 儲存到 Workspace
+                    <a @click="saveAsNewDeck(null); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-blue-400">
+                        <span class="ms mr-2" aria-hidden="true">create_new_folder</span> 儲存到 Workspace
                     </a>
-                    <a @click="openImportModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-green-400">
-                        <i class="fa-solid fa-file-import mr-2"></i> 導入文字列表
+                    <a @click="openImportModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-green-400">
+                        <span class="ms mr-2" aria-hidden="true">input</span> 導入文字列表
                     </a>
-                    <a @click="openExportModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer">
-                        <i class="fa-solid fa-file-export mr-2"></i> 導出文字列表
+                    <a @click="openExportModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer">
+                        <span class="ms mr-2" aria-hidden="true">output</span> 導出文字列表
                     </a>
-                    <a @click="openPrintModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-blue-400">
-                        <i class="fa-solid fa-print mr-2"></i> 列印 / 圖片
+                    <a @click="openPrintModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-blue-400">
+                        <span class="ms mr-2" aria-hidden="true">print</span> 列印 / 圖片
                     </a>
-                    <a @click="openLiveModal(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-indigo-400">
-                        <i class="fa-solid fa-gamepad mr-2"></i> PTCG Live
+                    <a @click="openLiveModal(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-indigo-400">
+                        <span class="ms mr-2" aria-hidden="true">sports_esports</span> PTCG Live
                     </a>
-                    <a @click="clearDeck(); showMenu = false" class="block px-4 py-2 hover:bg-gray-700 cursor-pointer text-red-400 border-t border-gray-700 mt-1">
-                        <i class="fa-solid fa-trash mr-2"></i> 清空目前分頁
+                    <a @click="clearDeck(); showMenu = false" class="mx-2 my-0.5 block px-4 py-2 rounded-full hover:bg-gray-700 cursor-pointer text-red-400 border-t border-gray-700 mt-1">
+                        <span class="ms mr-2" aria-hidden="true">delete</span> 清空目前分頁
                     </a>
                 </div>
             </div>

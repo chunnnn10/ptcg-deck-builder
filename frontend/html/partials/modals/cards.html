@@ -1,11 +1,11 @@
 <!-- === 詳情彈窗 === -->
 
     <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 backdrop-blur-sm p-4" @click.self="closeModal">
-        <div class="bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col md:flex-row max-h-[90vh]">
+        <div class="modal-panel bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col md:flex-row max-h-[90vh]">
             <div class="md:w-1/2 bg-gray-900 p-6 flex items-center justify-center flex-col">
                 <img :src="selectedCard.image_url" class="max-h-[65vh] rounded-lg shadow-lg object-contain" @load="checkResolution">
                 <div v-if="isLowResolution" class="mt-3 px-3 py-2 bg-yellow-900 text-yellow-200 text-xs rounded flex items-center border border-yellow-700">
-                    <i class="fa-solid fa-triangle-exclamation mr-2"></i>注意：此圖片解析度較低 ([[ resolutionInfo ]])，打印可能會模糊。
+                    <span class="ms mr-2" aria-hidden="true">warning</span>注意：此圖片解析度較低 ([[ resolutionInfo ]])，打印可能會模糊。
                 </div>
             </div>
             <div class="md:w-1/2 p-6 flex flex-col overflow-y-auto">
@@ -49,7 +49,7 @@
                                     title="[[ cardVariants.jp.name ]]">🇯🇵 日本語</button>
                         </div>
                     </div>
-                    <button @click="closeModal" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times fa-lg"></i></button>
+                    <button @click="closeModal" class="text-gray-400 hover:text-white"><span class="ms ms-lg" aria-hidden="true">close</span></button>
                 </div>
                 <div class="flex-1 space-y-4 mb-6 overflow-y-auto pr-2 custom-scroll">
                     <div v-if="selectedCard.skills && selectedCard.skills.length > 0">
@@ -81,25 +81,25 @@
                         <button v-if="modalContext === 'search'" 
                                 @click="addToDeck(selectedCard); closeModal()" 
                                 class="flex-1 bg-green-600 hover:bg-green-500 text-white py-3 rounded-lg font-bold transition flex items-center justify-center shadow-lg active:transform active:scale-95">
-                            <i class="fa-solid fa-plus mr-2"></i> 加入牌組
+                            <span class="ms mr-2" aria-hidden="true">add</span> 加入牌組
                         </button>
                         
                         <!-- 牌組情境: 刪除或增加 -->
                         <div v-else class="flex-1 flex gap-2">
                             <button @click="removeCardInstance(selectedCard.uniqueId); closeModal()" 
                                     class="flex-1 bg-red-600 hover:bg-red-500 text-white py-3 rounded-lg font-bold transition flex items-center justify-center shadow-lg active:transform active:scale-95">
-                                <i class="fa-solid fa-trash mr-2"></i> 移除這張
+                                <span class="ms mr-2" aria-hidden="true">delete</span> 移除這張
                             </button>
                             <button @click="addToDeck(selectedCard); closeModal()" 
                                     class="flex-1 bg-green-600 hover:bg-green-500 text-white py-3 rounded-lg font-bold transition flex items-center justify-center shadow-lg active:transform active:scale-95">
-                                <i class="fa-solid fa-plus mr-2"></i> 再加一張
+                                <span class="ms mr-2" aria-hidden="true">add</span> 再加一張
                             </button>
                         </div>
                     </div>
                     
                     <div class="grid grid-cols-2 gap-2">
-                        <button @click="searchSameName(selectedCard.name)" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 rounded-lg text-sm transition"><i class="fa-solid fa-search mr-1"></i> 搜同名卡</button>
-                        <a :href="selectedCard.image_url" download target="_blank" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 rounded-lg text-sm transition text-center block decoration-0"><i class="fa-solid fa-download mr-1"></i> 下載圖片</a>
+                        <button @click="searchSameName(selectedCard.name)" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 rounded-lg text-sm transition"><span class="ms mr-1" aria-hidden="true">search</span> 搜同名卡</button>
+                        <a :href="selectedCard.image_url" download target="_blank" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 rounded-lg text-sm transition text-center block decoration-0"><span class="ms mr-1" aria-hidden="true">download</span> 下載圖片</a>
                     </div>
                 </div>
             </div>

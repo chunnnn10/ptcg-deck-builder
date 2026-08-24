@@ -8,15 +8,15 @@
              @keydown.enter.prevent="activateDeckTab(tab.id)"
              class="group h-10 min-w-[150px] max-w-[240px] px-3 border-r border-gray-800 flex items-center gap-2 text-sm transition cursor-pointer select-none"
              :class="tab.id === activeDeckTabId ? 'bg-gray-900 text-white border-t-2 border-t-blue-500' : 'bg-gray-950 text-gray-400 hover:bg-gray-900 hover:text-gray-200'">
-            <i class="fa-solid text-xs shrink-0" :class="getDeckTabSourceIcon(tab)"></i>
+            <span class="ms text-xs shrink-0" aria-hidden="true">[[ getDeckTabSourceIcon(tab) ]]</span>
             <span class="truncate flex-1 text-left">[[ tab.title ]]</span>
             <button @click.stop="closeDeckTab(tab.id)"
-                    class="w-5 h-5 rounded hover:bg-gray-700 text-gray-500 hover:text-white shrink-0 flex items-center justify-center"
+                    class="w-5 h-5 rounded-full hover:bg-gray-700 text-gray-500 hover:text-white shrink-0 flex items-center justify-center"
                     title="Close tab">
-                <i class="fa-solid fa-xmark text-xs"></i>
+                <span class="ms text-xs" aria-hidden="true">close</span>
             </button>
             <span v-if="tab.dirty" class="text-yellow-400 text-[9px] shrink-0" title="Unsaved">
-                <i class="fa-solid fa-circle"></i>
+                <span class="ms ms-fill" aria-hidden="true">circle</span>
             </span>
             <span class="text-[10px] text-gray-500 shrink-0">[[ tab.deck ? tab.deck.length : 0 ]]</span>
         </div>
@@ -26,13 +26,13 @@
         <div class="min-w-0 flex items-center gap-3">
             <div class="min-w-0">
                 <div class="flex items-center gap-2 min-w-0">
-                    <i class="fa-solid text-blue-300 shrink-0" :class="activeDeckTab ? getDeckTabSourceIcon(activeDeckTab) : 'fa-layer-group'"></i>
+                    <span class="ms text-blue-300 shrink-0" aria-hidden="true">[[ activeDeckTab ? getDeckTabSourceIcon(activeDeckTab) : 'layers' ]]</span>
                     <h2 class="font-bold text-white truncate">[[ currentDeckName || 'Untitled Deck' ]]</h2>
                     <span v-if="activeDeckTab" class="hidden sm:inline text-[10px] uppercase text-gray-400 bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5">
                         [[ getDeckTabSourceLabel(activeDeckTab) ]]
                     </span>
                     <span v-if="hasUnsavedChanges" class="text-yellow-400" title="Unsaved">
-                        <i class="fa-solid fa-circle text-[8px]"></i>
+                        <span class="ms ms-fill text-[8px]" aria-hidden="true">circle</span>
                     </span>
                 </div>
                 <div class="text-xs text-gray-500 truncate">
@@ -42,36 +42,36 @@
         </div>
 
         <div class="flex items-center gap-2 shrink-0">
-            <div class="flex bg-gray-900 rounded border border-gray-700">
+            <div class="flex bg-gray-900 rounded-full border border-gray-600 px-1">
                 <button @click="undo"
                         :disabled="historyIndex <= 0"
-                        class="w-8 h-8 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                        class="w-8 h-8 rounded-full hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
                         title="Undo">
-                    <i class="fa-solid fa-rotate-left"></i>
+                    <span class="ms" aria-hidden="true">undo</span>
                 </button>
                 <div class="w-px bg-gray-700"></div>
                 <button @click="redo"
                         :disabled="historyIndex >= history.length - 1"
-                        class="w-8 h-8 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                        class="w-8 h-8 rounded-full hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
                         title="Redo">
-                    <i class="fa-solid fa-rotate-right"></i>
+                    <span class="ms" aria-hidden="true">redo</span>
                 </button>
             </div>
             <button v-if="activeDeckTab && activeDeckTab.source !== 'workspace'"
                     @click="saveAsNewDeck(null)"
-                    class="hidden sm:flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded text-xs font-bold">
-                <i class="fa-solid fa-folder-plus"></i>
+                    class="hidden sm:flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-full text-xs font-bold">
+                <span class="ms" aria-hidden="true">create_new_folder</span>
                 <span>Save</span>
             </button>
             <button v-else-if="currentItem"
                     @click="saveCurrentDeck"
                     :disabled="!hasUnsavedChanges"
-                    class="hidden sm:flex items-center gap-2 px-3 py-2 rounded text-xs font-bold"
+                    class="hidden sm:flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold"
                     :class="hasUnsavedChanges ? 'bg-green-600 hover:bg-green-500 text-white' : 'bg-gray-700 text-gray-500 cursor-not-allowed'">
-                <i class="fa-solid fa-save"></i>
+                <span class="ms" aria-hidden="true">save</span>
                 <span>Save</span>
             </button>
-            <div class="text-sm font-mono px-3 py-2 rounded bg-gray-900 border border-gray-700" :class="getCountColorClass">
+            <div class="text-sm font-mono px-3 py-2 rounded-full bg-gray-900 border border-gray-700" :class="getCountColorClass">
                 [[ totalCards ]]<span v-if="isStandardMode">/60</span>
             </div>
         </div>
@@ -104,8 +104,8 @@
                              class="rounded w-full bg-gray-950 pointer-events-none select-none aspect-[2.5/3.5] object-cover"
                              @error="handleImageError">
                         <div v-if="selectedCards.has(card.uniqueId)"
-                             class="absolute top-1 right-1 bg-yellow-500 text-black rounded-full w-5 h-5 flex items-center justify-center shadow">
-                            <i class="fa-solid fa-check text-xs"></i>
+                             class="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow">
+                            <span class="ms text-xs" aria-hidden="true">check</span>
                         </div>
                     </div>
                 </div>
@@ -113,7 +113,7 @@
         </div>
 
         <div v-else class="h-full min-h-[360px] flex flex-col items-center justify-center text-center text-gray-500">
-            <i class="fa-solid fa-box-open fa-3x mb-4 opacity-30"></i>
+            <span class="ms ms-3x mb-4 opacity-30" aria-hidden="true">inventory_2</span>
             <p class="text-sm">This tab is empty.</p>
             <p class="text-xs mt-2">Use Search, AI, LimitLess, or imports to add cards.</p>
         </div>
@@ -126,30 +126,30 @@
              @dragleave="handleLeftDragLeave"
              @drop.prevent="handleLeftDrop">
             <div class="flex items-center gap-2 font-bold">
-                <i class="fa-solid fa-trash-can"></i>
+                <span class="ms" aria-hidden="true">delete</span>
                 <span>Drop cards here to remove</span>
             </div>
         </div>
     </div>
 
     <div v-if="deckContextMenu && deckContextMenu.visible"
-         class="fixed z-[100] bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+         class="fixed z-[100] bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-[160px]"
          :style="{ left: deckContextMenu.x + 'px', top: deckContextMenu.y + 'px' }"
          @click.stop>
         <div class="px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700 font-bold truncate mb-1">
             [[ deckContextMenu.card ? deckContextMenu.card.name : '' ]]
         </div>
-        <div @click="handleDeckContextAction('addOne')" class="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center group">
-            <i class="fa-solid fa-plus w-5 text-green-400"></i>
+        <div @click="handleDeckContextAction('addOne')" class="mx-2 rounded-full px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center group">
+            <span class="ms w-5 text-green-400" aria-hidden="true">add</span>
             <span>Add 1</span>
         </div>
-        <div @click="handleDeckContextAction('addMultiple')" class="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center group">
-            <i class="fa-solid fa-layer-group w-5 text-blue-400"></i>
+        <div @click="handleDeckContextAction('addMultiple')" class="mx-2 rounded-full px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center group">
+            <span class="ms w-5 text-blue-400" aria-hidden="true">layers</span>
             <span>Add multiple...</span>
         </div>
         <div class="border-t border-gray-700 my-1"></div>
-        <div @click="handleDeckContextAction('delete')" class="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center text-red-400">
-            <i class="fa-solid fa-trash w-5"></i>
+        <div @click="handleDeckContextAction('delete')" class="mx-2 rounded-full px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm flex items-center text-red-400">
+            <span class="ms w-5" aria-hidden="true">delete</span>
             <span>Delete</span>
         </div>
     </div>

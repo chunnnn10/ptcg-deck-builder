@@ -310,13 +310,13 @@ function useDeckManager() {
     }[tab && tab.source] || 'Deck');
 
     const getDeckTabSourceIcon = (tab) => ({
-        workspace: 'fa-folder-open',
-        scratch: 'fa-file-lines',
-        ai: 'fa-robot',
-        limitless: 'fa-trophy',
-        japanese: 'fa-torii-gate',
-        public: 'fa-globe'
-    }[tab && tab.source] || 'fa-layer-group');
+        workspace: 'folder_open',
+        scratch: 'description',
+        ai: 'smart_toy',
+        limitless: 'emoji_events',
+        japanese: 'temple_buddhist',
+        public: 'public'
+    }[tab && tab.source] || 'layers');
 
     const totalCards = computed(() => deck.value.length);
 

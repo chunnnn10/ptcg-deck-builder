@@ -1,72 +1,124 @@
-/* /Pokemon/public/css/style.css */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #1e1e1e; }
-::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+/* Chun Deck Builder — Material 3 Expressive 樣式層 */
 
+/* ══════════ 字體（自托管，符合 CSP font-src 'self'）══════════ */
+@font-face {
+    font-family: 'Roboto Flex';
+    src: url('/static/fonts/RobotoFlex.woff2') format('woff2');
+    font-weight: 100 1000;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Material Symbols Rounded';
+    src: url('/static/fonts/MaterialSymbolsRounded.woff2') format('woff2');
+    font-weight: 100 700;
+    font-display: block; /* ligature 名稱不可閃現為文字 */
+}
+
+.material-symbols-rounded,
+.ms {
+    font-family: 'Material Symbols Rounded';
+    font-weight: normal;
+    font-style: normal;
+    display: inline-block;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    vertical-align: middle;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    transition: font-variation-settings 0.3s cubic-bezier(0.2, 0, 0, 1);
+}
+.ms-fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+.ms-hover-fill:hover {
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+.ms-lg { font-size: 1.25rem; }
+.ms-2x { font-size: 2em; }
+.ms-3x { font-size: 3em; }
+
+/* ══════════ 動效 token 與全域回饋 ══════════ */
+:root {
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+button:not(:disabled), [role="button"] {
+    transition: transform 0.18s var(--ease-spring),
+                background-color 0.2s var(--ease-standard),
+                color 0.2s var(--ease-standard),
+                border-color 0.2s var(--ease-standard),
+                box-shadow 0.2s var(--ease-standard);
+}
+button:not(:disabled):active { transform: scale(0.95); }
+
+/* Modal 進場動畫 */
+@keyframes m3-modal-in {
+    from { opacity: 0; transform: scale(0.92) translateY(8px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal-panel { animation: m3-modal-in 0.32s var(--ease-spring) both; }
+
+/* Dropdown / menu 彈出（Vue <transition name="pop">）*/
+.pop-enter-active { transition: opacity 0.18s var(--ease-standard), transform 0.22s var(--ease-spring); }
+.pop-leave-active { transition: opacity 0.12s ease-in, transform 0.12s ease-in; }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: scale(0.95) translateY(-4px); }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* ══════════ 捲軸 ══════════ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #131314; }
+::-webkit-scrollbar-thumb { background: #3C4043; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #5F6368; }
+
+/* ══════════ 卡片懸停 ══════════ */
+.card-hover {
+    transition: transform 0.25s var(--ease-spring), box-shadow 0.25s var(--ease-standard);
+}
 .card-hover:hover {
     transform: translateY(-5px);
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
 }
 
-.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.25s var(--ease-standard); }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
 .whitespace-pre-wrap { white-space: pre-wrap; }
 
-/* 右鍵選單樣式 */
-.context-menu {
-    position: fixed;
-    background: #2d3748;
-    border: 1px solid #4a5568;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-    border-radius: 0.5rem;
-    padding: 0.5rem 0;
-    z-index: 100;
-    min-width: 160px;
-}
-.context-menu-item {
-    padding: 0.5rem 1rem;
-    cursor: pointer;
-    color: #e2e8f0;
-    transition: background 0.1s;
-    font-size: 0.875rem;
-    display: flex;
-    align-items: center;
-}
-.context-menu-item:hover {
-    background-color: #4a5568;
-}
-.context-menu-item i {
-    width: 20px;
-    margin-right: 8px;
-    text-align: center;
-}
-
-/* 拖曳中的樣式 */
+/* ══════════ 拖曳狀態 ══════════ */
 .dragging {
     opacity: 0.5;
     transform: scale(0.95);
+    transition: transform 0.15s var(--ease-spring);
 }
 .drop-zone-active {
-    background-color: rgba(59, 130, 246, 0.1);
-    border: 2px dashed #3b82f6;
+    background-color: rgba(53, 116, 240, 0.12);
+    border: 2px dashed #3574F0;
 }
 
-/* 被選中的卡片樣式 */
+/* ══════════ 選取卡片：藍框（黃保留給警告/未存檔語義）══════════ */
 .card-selected {
-    outline: 3px solid #eab308; /* 黃色外框 */
-    box-shadow: 0 0 10px #eab308;
+    outline: 3px solid #3574F0;
+    box-shadow: 0 0 12px rgba(53, 116, 240, 0.45);
 }
 
-/* 獎賞卡背紋路 (簡單的網格或斜線) */
+/* 獎賞卡背紋路（炭黑階）*/
 .bg-prize-pattern {
     background-image: repeating-linear-gradient(
         45deg,
-        #1f2937,
-        #1f2937 10px,
-        #374151 10px,
-        #374151 20px
+        #1E1F22,
+        #1E1F22 10px,
+        #2B2D30 10px,
+        #2B2D30 20px
     );
 }
 
@@ -81,10 +133,7 @@
     transform: rotateY(180deg);
 }
 
-/* Mobile Safe Area */
-.pb-safe {
+/* 手機安全區域 */
+.safe-area-bottom {
     padding-bottom: env(safe-area-inset-bottom);
-}
-.pt-safe {
-    padding-top: env(safe-area-inset-top);
 }
