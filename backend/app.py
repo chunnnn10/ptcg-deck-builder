@@ -144,6 +144,9 @@ def run_jp_deck_auto_update_service():
                 if gsuccess:
                     _wait_for_async_update(get_update_status, "JP Deck Auto Update", poll_seconds=15)
                 save_run_meta('gap_fill', next_run_str)
+
+            # 3) 綁定觸發 LimitLess 牌組庫同步（同一 24h 週期；runner 鎖防重複）
+            _run_limitless_daily_cycle()
         except Exception as e:
             import traceback
             print(f">>> [JP Deck Auto Update] error: {e}", flush=True)
@@ -151,39 +154,45 @@ def run_jp_deck_auto_update_service():
         _sleep_interval(config.JP_DECK_AUTO_UPDATE_INTERVAL_SECONDS)
 
 
+def _run_limitless_daily_cycle():
+    """執行一次 LimitLess 牌組庫同步；獨立服務與 JP 每日服務綁定共用。
+    start_update 內含 runner 鎖，多處同時觸發只會跑一次。"""
+    try:
+        from services.limitless_decks.updater import get_status, start_update
+
+        options = {
+            "mode": "auto-daily",
+            "include_bling": config.LIMITLESS_AUTO_UPDATE_INCLUDE_BLING,
+            "regions": config.LIMITLESS_AUTO_UPDATE_REGIONS,
+            "stale_hours": config.LIMITLESS_AUTO_UPDATE_STALE_HOURS,
+            "max_index_pages_per_region": config.LIMITLESS_AUTO_UPDATE_MAX_INDEX_PAGES_PER_REGION,
+            "max_tournaments_per_region": config.LIMITLESS_AUTO_UPDATE_MAX_TOURNAMENTS_PER_REGION,
+            "max_decks": config.LIMITLESS_AUTO_UPDATE_MAX_DECKS,
+        }
+        print(
+            f">>> [Limitless Auto Update] {time.strftime('%Y-%m-%d %H:%M:%S')} starting daily sync",
+            flush=True,
+        )
+        success, message = start_update(options)
+        print(f">>> [Limitless Auto Update] {message}", flush=True)
+        if success:
+            _wait_for_async_update(get_status, "Limitless Auto Update", poll_seconds=30)
+        else:
+            status = get_status()
+            if status.get('running'):
+                _wait_for_async_update(get_status, "Limitless Auto Update", poll_seconds=30)
+    except Exception as e:
+        import traceback
+        print(f">>> [Limitless Auto Update] error: {e}", flush=True)
+        traceback.print_exc()
+
+
 def run_limitless_auto_update_service():
     print(">>> [Limitless Auto Update] background service enabled", flush=True)
     _initial_delay(extra_seconds=60)
 
     while True:
-        try:
-            from services.limitless_decks.updater import get_status, start_update
-
-            options = {
-                "mode": "auto-daily",
-                "include_bling": config.LIMITLESS_AUTO_UPDATE_INCLUDE_BLING,
-                "regions": config.LIMITLESS_AUTO_UPDATE_REGIONS,
-                "stale_hours": config.LIMITLESS_AUTO_UPDATE_STALE_HOURS,
-                "max_index_pages_per_region": config.LIMITLESS_AUTO_UPDATE_MAX_INDEX_PAGES_PER_REGION,
-                "max_tournaments_per_region": config.LIMITLESS_AUTO_UPDATE_MAX_TOURNAMENTS_PER_REGION,
-                "max_decks": config.LIMITLESS_AUTO_UPDATE_MAX_DECKS,
-            }
-            print(
-                f">>> [Limitless Auto Update] {time.strftime('%Y-%m-%d %H:%M:%S')} starting daily sync",
-                flush=True,
-            )
-            success, message = start_update(options)
-            print(f">>> [Limitless Auto Update] {message}", flush=True)
-            if success:
-                _wait_for_async_update(get_status, "Limitless Auto Update", poll_seconds=30)
-            else:
-                status = get_status()
-                if status.get('running'):
-                    _wait_for_async_update(get_status, "Limitless Auto Update", poll_seconds=30)
-        except Exception as e:
-            import traceback
-            print(f">>> [Limitless Auto Update] error: {e}", flush=True)
-            traceback.print_exc()
+        _run_limitless_daily_cycle()
         _sleep_interval(config.LIMITLESS_AUTO_UPDATE_INTERVAL_SECONDS)
 
 
