@@ -1081,12 +1081,12 @@ def search_cards():
 
     # 基礎 SQL。預設搜尋只回列表需要欄位，詳情由 batch/detail API 補取。
     if full_payload:
-        sql = "SELECT * FROM cards WHERE 1=1"
+        sql = "SELECT * FROM cards WHERE COALESCE(source, 'official') <> 'replaced'"
     else:
         sql = (
             "SELECT card_id, image_file, card_type, name, sub_type, hp, element_type, "
             "rarity, japanese_name, set_code, set_number, set_name, regulation_mark "
-            "FROM cards WHERE 1=1"
+            "FROM cards WHERE COALESCE(source, 'official') <> 'replaced'"
         )
     params = []
 
@@ -2459,6 +2459,81 @@ def get_auto_update_runs():
         limit = 50
     runs = list_runs(service=service, limit=limit)
     return jsonify({'success': True, 'runs': runs, 'note': '時間為 UTC'})
+
+
+@main_bp.route('/api/admin/data-health', methods=['GET'])
+@admin_required
+def get_data_health():
+    from services.data_health import get_status, latest_report
+    report = latest_report()
+    return jsonify({'success': True, 'status': get_status(), 'report': report})
+
+
+@main_bp.route('/api/admin/data-health/scan', methods=['POST'])
+@admin_required
+def start_data_health_scan():
+    from services.data_health import scan_database, get_status
+    report = scan_database(trigger='manual')
+    return jsonify({'success': True, 'report': report, 'status': get_status()})
+
+
+@main_bp.route('/api/admin/data-health/ack', methods=['POST'])
+@admin_required
+def ack_data_health():
+    from services.data_health import acknowledge, latest_report
+    payload = request.get_json(silent=True) or {}
+    acknowledge(payload.get('report_id'))
+    return jsonify({'success': True, 'report': latest_report()})
+
+
+@main_bp.route('/api/admin/data-health/repair', methods=['POST'])
+@admin_required
+def start_data_health_repair():
+    from services.data_health import start_repair, get_status, latest_report
+    ok, message = start_repair(latest_report())
+    return jsonify({'success': ok, 'message': message, 'status': get_status()}), (200 if ok else 409)
+
+
+@main_bp.route('/api/admin/provisional/extract', methods=['POST'])
+@admin_required
+def extract_provisional_card():
+    from services.provisional_cards import extract_from_image, save_provisional
+    if 'image' not in request.files:
+        return jsonify({'success': False, 'error': '請上傳卡圖'}), 400
+    image = request.files['image']
+    raw = image.read()
+    if not raw:
+        return jsonify({'success': False, 'error': '圖片是空的'}), 400
+    mime = image.mimetype or 'image/jpeg'
+    try:
+        parsed = extract_from_image(raw, mime=mime)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+    approve = str(request.form.get('approve', '0')).lower() in ('1', 'true', 'yes')
+    saved = None
+    if approve:
+        ext = os.path.splitext(secure_filename(image.filename or 'card.png'))[1] or '.png'
+        temp_name = f"prov_{uuid.uuid4().hex[:10]}{ext}"
+        os.makedirs(config.IMAGE_FOLDER, exist_ok=True)
+        save_path = os.path.join(config.IMAGE_FOLDER, temp_name)
+        with open(save_path, 'wb') as handle:
+            handle.write(raw)
+        saved = save_provisional(
+            parsed,
+            temp_name,
+            created_by=getattr(current_user, 'username', None),
+            approve=True,
+        )
+        saved['image_url'] = f"/images/{temp_name}"
+    return jsonify({'success': True, 'card': saved, 'parsed': parsed})
+
+
+@main_bp.route('/api/admin/provisional/list', methods=['GET'])
+@admin_required
+def list_provisional_cards_api():
+    from services.provisional_cards import list_provisional
+    return jsonify({'success': True, 'cards': list_provisional()})
 
 
 @main_bp.route('/api/admin/deck-update/clear', methods=['POST'])

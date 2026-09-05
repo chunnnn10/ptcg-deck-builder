@@ -328,6 +328,7 @@ function useAdminUpdate() {
     const openAdminPanel = async () => {
         showAdminPanel.value = true;
         await loadAdminUsers();
+        await loadDataHealth({ promptIfNeeded: true });
     };
 
     const loadAdminUsers = async () => {
@@ -1441,6 +1442,98 @@ function useAdminUpdate() {
         }
     };
 
+    const showDataHealthModal = ref(false);
+    const dataHealthState = reactive({
+        running: false,
+        repairing: false,
+        phase: 'idle',
+        progress: 0,
+        message: '就緒',
+        report: null
+    });
+    const provisionalList = ref([]);
+    let dataHealthTimer = null;
+
+    const openDataHealthModal = async () => {
+        showDataHealthModal.value = true;
+        await loadDataHealth();
+        await loadProvisionalCards();
+    };
+
+    const loadDataHealth = async ({ promptIfNeeded = false } = {}) => {
+        try {
+            const res = await fetch('/api/admin/data-health');
+            const data = await res.json();
+            if (!data.success) return;
+            Object.assign(dataHealthState, data.status || {});
+            dataHealthState.report = data.report || data.status?.report || null;
+            if (dataHealthState.running || dataHealthState.repairing) {
+                if (dataHealthTimer) clearTimeout(dataHealthTimer);
+                dataHealthTimer = setTimeout(() => loadDataHealth(), 2000);
+            }
+            const report = dataHealthState.report;
+            if (promptIfNeeded && report && report.needs_repair && !report.acknowledged) {
+                showDataHealthModal.value = true;
+            }
+        } catch (e) {
+            console.warn('data health load failed', e);
+        }
+    };
+
+    const scanDataHealth = async () => {
+        dataHealthState.running = true;
+        dataHealthState.message = '檢查中...';
+        try {
+            const res = await fetch('/api/admin/data-health/scan', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(dataHealthState, data.status || {});
+                dataHealthState.report = data.report;
+            } else {
+                alert(data.error || '檢查失敗');
+            }
+        } catch (e) {
+            alert('連線錯誤');
+        }
+    };
+
+    const acknowledgeDataHealth = async () => {
+        await fetch('/api/admin/data-health/ack', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ report_id: dataHealthState.report && dataHealthState.report.id })
+        });
+        if (dataHealthState.report) dataHealthState.report.acknowledged = true;
+        showDataHealthModal.value = false;
+    };
+
+    const repairDataHealth = async () => {
+        if (!confirm('確認執行背景更新修復缺漏？過程可隨時喺此視窗查看進度。')) return;
+        try {
+            const res = await fetch('/api/admin/data-health/repair', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(dataHealthState, data.status || {});
+                showDataHealthModal.value = true;
+                loadDataHealth();
+            } else {
+                alert(data.message || '無法開始修復');
+            }
+        } catch (e) {
+            alert('連線錯誤');
+        }
+    };
+
+    const loadProvisionalCards = async () => {
+        try {
+            const res = await fetch('/api/admin/provisional/list');
+            const data = await res.json();
+            if (data.success) provisionalList.value = data.cards || [];
+        } catch (e) {
+            console.warn(e);
+        }
+    };
+
         return {
         // 卡牌更新
         showUpdateModal,
@@ -1545,6 +1638,16 @@ function useAdminUpdate() {
         roleBadgeClass,
         formatCardRoleParams,
         highlightCardRoleEvidence,
+
+        showDataHealthModal,
+        dataHealthState,
+        openDataHealthModal,
+        loadDataHealth,
+        scanDataHealth,
+        acknowledgeDataHealth,
+        repairDataHealth,
+        provisionalList,
+        loadProvisionalCards,
 
         // 每日 + 完整牌組更新
         dailyUpdateBotCount,

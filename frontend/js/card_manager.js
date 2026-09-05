@@ -2,7 +2,7 @@
 
 // 需要傳入 deck 相關的操作方法
 function useCardManager(deckHandlers) {
-    const { ref, reactive, onMounted, onUnmounted } = Vue;
+    const { ref, reactive, computed, onMounted, onUnmounted } = Vue;
     const { addToDeck, removeCardInstance, currentLang } = deckHandlers;
 
     // === 狀態 ===
@@ -29,6 +29,8 @@ function useCardManager(deckHandlers) {
     const showAddCardModal = ref(false);
     const addCardMode = ref('new');
     const isSubmittingCard = ref(false);
+    const isExtractingCard = ref(false);
+    const extractMessage = ref('');
     
     // === 核心資料結構更新 ===
     const newCardData = reactive({
@@ -342,6 +344,68 @@ function useCardManager(deckHandlers) {
         reader.readAsDataURL(file);
     };
 
+    const extractCardWithAI = async () => {
+        if (!newCardData.imageFile) return alert('請先上傳卡圖');
+        isExtractingCard.value = true;
+        extractMessage.value = 'AI 讀圖中...';
+        const formData = new FormData();
+        formData.append('image', newCardData.imageFile);
+        formData.append('approve', '0');
+        try {
+            const res = await fetch('/api/admin/provisional/extract', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (!data.success) {
+                extractMessage.value = data.error || '讀圖失敗';
+                alert(extractMessage.value);
+                return;
+            }
+            const parsed = data.parsed || {};
+            newCardData.name = parsed.name || newCardData.name;
+            newCardData.type = parsed.card_type || newCardData.type;
+            newCardData.subType = parsed.sub_type || newCardData.subType;
+            newCardData.hp = parsed.hp || '';
+            newCardData.element = parsed.element_type || newCardData.element;
+            if (Array.isArray(parsed.skills) && parsed.skills.length) {
+                newCardData.skills = parsed.skills.map(skill => ({
+                    name: skill.name || '',
+                    damage: skill.damage || '',
+                    cost: skill.cost || [],
+                    effect: skill.effect || skill.text || '',
+                    isAbility: skill.type === 'ability'
+                }));
+            }
+            if (!newCardData.id && data.card && data.card.temp_card_id) {
+                newCardData.id = data.card.temp_card_id;
+            }
+            extractMessage.value = '已填入 AI 結果，確認後再新增。正式版同名會自動取代臨時卡。';
+        } catch (e) {
+            extractMessage.value = '伺服器錯誤';
+            alert('伺服器錯誤');
+        } finally {
+            isExtractingCard.value = false;
+        }
+    };
+
+    const saveAsProvisionalCard = async () => {
+        if (!newCardData.imageFile) return alert('請先上傳卡圖');
+        isExtractingCard.value = true;
+        const formData = new FormData();
+        formData.append('image', newCardData.imageFile);
+        formData.append('approve', '1');
+        try {
+            const res = await fetch('/api/admin/provisional/extract', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (!data.success) return alert(data.error || '儲存失敗');
+            extractMessage.value = `已存臨時卡 ${data.card && data.card.temp_card_id}，正式版同名會自動取代。`;
+            if (data.card && data.card.temp_card_id) newCardData.id = data.card.temp_card_id;
+            alert(extractMessage.value);
+        } catch (e) {
+            alert('伺服器錯誤');
+        } finally {
+            isExtractingCard.value = false;
+        }
+    };
+
     const searchSourceCard = async () => {
         if (!sourceSearchQuery.value.trim()) return;
         try {
@@ -416,7 +480,7 @@ function useCardManager(deckHandlers) {
         
         // Add Card
         showAddCardModal, addCardMode, isSubmittingCard, newCardData, sourceSearchQuery, sourceSearchResults, previewImage,
-        openAddCardModal, handleFileUpload, searchSourceCard, selectSourceCard, submitNewCard,
+        openAddCardModal, handleFileUpload, extractCardWithAI, saveAsProvisionalCard, isExtractingCard, extractMessage, searchSourceCard, selectSourceCard, submitNewCard,
         
         // Skills Edit
         addSkill, removeSkill, addSkillCost, removeLastSkillCost, addRuleBox

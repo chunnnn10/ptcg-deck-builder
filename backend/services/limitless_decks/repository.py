@@ -380,6 +380,24 @@ ENERGY_NAME_MAP = {
     "鋼能量": "基本鋼能量",
 }
 
+# Limitless 日／英名 → 繁中官名。set code 對唔上時用呢張表。
+JP_TW_NAME_MAP = {
+    "クラッシュハンマー": "粉碎之錘",
+    "Crushing Hammer": "粉碎之錘",
+    "粉碎之錘": "粉碎之錘",
+    "アンフェアスタンプ": "不公印章",
+    "Unfair Stamp": "不公印章",
+    "不公印章": "不公印章",
+    "不公平印章": "不公印章",
+    "危ない廃墟": "險惡廢墟",
+    "Risky Ruins": "險惡廢墟",
+    "險惡廢墟": "險惡廢墟",
+    "危険な廃墟": "險惡廢墟",
+    "特殊レッドカード": "特殊紅牌",
+    "Special Red Card": "特殊紅牌",
+    "Ace Spec Red Card": "特殊紅牌",
+}
+
 _SECTION_TO_CARD_TYPE = {
     "pokemon": "Pokémon",
     "trainer": "Trainer",
@@ -545,6 +563,76 @@ def _unique_names(*values) -> list[str]:
     return names
 
 
+def _tw_names_from_limitless_mapping(cursor, jp_or_en_name: str) -> list[str]:
+    name = str(jp_or_en_name or "").strip()
+    if not name:
+        return []
+    try:
+        cursor.execute(
+            """
+            SELECT jp_name, en_name
+            FROM limitless_card_mapping
+            WHERE jp_name = %s OR en_name = %s
+            LIMIT 20
+            """,
+            (name, name),
+        )
+        mapped = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            mapped.extend([
+                JP_TW_NAME_MAP.get(item.get("jp_name") or ""),
+                JP_TW_NAME_MAP.get(item.get("en_name") or ""),
+                item.get("en_name"),
+            ])
+        return _unique_names(*mapped)
+    except Exception:
+        return []
+
+
+def _find_tw_row_via_tcgdex_name(cursor, card_name: str, card_type: str | None = None) -> dict | None:
+    name = str(card_name or "").strip()
+    if not name:
+        return None
+    try:
+        client = get_tcgdex_client()
+        source_cards = client.search_cards_full("ja", name) or []
+    except Exception:
+        source_cards = []
+    tw_names = []
+    for source in source_cards[:8]:
+        source_name = str(source.get("name") or "").strip()
+        if source_name:
+            tw_names.append(JP_TW_NAME_MAP.get(source_name) or "")
+        try:
+            target = client.get_card("zh-tw", source.get("id", ""))
+        except Exception:
+            target = None
+        if target and target.get("name"):
+            tw_names.append(target.get("name"))
+    tw_names = _unique_names(*tw_names)
+    if not tw_names:
+        return None
+    params = [tw_names]
+    extra = ""
+    if card_type:
+        extra = "AND card_type = %s"
+        params.append(card_type)
+    cursor.execute(
+        f"""
+        SELECT *
+        FROM cards
+        WHERE name = ANY(%s)
+          {extra}
+        ORDER BY
+            {_TW_CARD_ORDER_SQL}
+        LIMIT 1
+        """,
+        params,
+    )
+    return cursor.fetchone()
+
+
 def find_local_jp_card(cursor, set_code: str | None, set_number: str | None, card_name: str | None = None) -> str | None:
     candidates = set_number_candidates(set_number)
     if set_code and candidates:
@@ -630,7 +718,10 @@ def find_local_tw_card_row_by_name(cursor, card_name: str | None, section: str |
         return None
 
     card_type = _preferred_card_type(section, raw_name)
-    names = _unique_names(raw_name, ENERGY_NAME_MAP.get(raw_name))
+    mapped_tw = JP_TW_NAME_MAP.get(raw_name) or ENERGY_NAME_MAP.get(raw_name)
+    names = _unique_names(raw_name, mapped_tw, ENERGY_NAME_MAP.get(raw_name))
+    mapping_names = _tw_names_from_limitless_mapping(cursor, raw_name)
+    names = _unique_names(*names, *mapping_names)
 
     energy_name = ENERGY_NAME_MAP.get(raw_name)
     if energy_name or card_type == "Energy":
@@ -689,26 +780,29 @@ def find_local_tw_card_row_by_name(cursor, card_name: str | None, section: str |
         (names,),
     )
     chinese_names = _unique_names(*[r.get("chinese_name") for r in cursor.fetchall()])
-    if not chinese_names:
-        return None
-    params = [chinese_names]
-    extra = ""
-    if card_type:
-        extra = "AND card_type = %s"
-        params.append(card_type)
-    cursor.execute(
-        f"""
-        SELECT *
-        FROM cards
-        WHERE name = ANY(%s)
-          {extra}
-        ORDER BY
-            {_TW_CARD_ORDER_SQL}
-        LIMIT 1
-        """,
-        params,
-    )
-    return cursor.fetchone()
+    lookup_names = _unique_names(*chinese_names, mapped_tw)
+    if lookup_names:
+        params = [lookup_names]
+        extra = ""
+        if card_type:
+            extra = "AND card_type = %s"
+            params.append(card_type)
+        cursor.execute(
+            f"""
+            SELECT *
+            FROM cards
+            WHERE name = ANY(%s)
+              {extra}
+            ORDER BY
+                {_TW_CARD_ORDER_SQL}
+            LIMIT 1
+            """,
+            params,
+        )
+        row = cursor.fetchone()
+        if row:
+            return row
+    return _find_tw_row_via_tcgdex_name(cursor, raw_name, card_type)
 
 
 def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:

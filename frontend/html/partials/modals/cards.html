@@ -106,3 +106,34 @@
         </div>
     </div>
 
+    <div v-if="showAddCardModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-xl border border-gray-700 shadow-2xl overflow-hidden">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-lg font-bold text-white">新增／未發售卡</h2>
+                <button @click="showAddCardModal = false" class="text-gray-400 hover:text-white"><span class="ms" aria-hidden="true">close</span></button>
+            </div>
+            <div class="p-5 space-y-3">
+                <input type="file" accept="image/*" @change="handleFileUpload" class="block w-full text-sm text-gray-300">
+                <img v-if="previewImage" :src="previewImage" class="max-h-48 mx-auto rounded">
+                <div class="flex gap-2">
+                    <button @click="extractCardWithAI" :disabled="isExtractingCard" class="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 text-white px-3 py-2 rounded text-sm">AI 讀圖填資料</button>
+                    <button @click="saveAsProvisionalCard" :disabled="isExtractingCard" class="bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 text-white px-3 py-2 rounded text-sm">存成未發售卡</button>
+                </div>
+                <div v-if="extractMessage" class="text-xs text-amber-300">[[ extractMessage ]]</div>
+                <input v-model="newCardData.id" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm" placeholder="卡牌 ID">
+                <input v-model="newCardData.name" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm" placeholder="卡名">
+                <div class="grid grid-cols-2 gap-2">
+                    <select v-model="newCardData.type" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm">
+                        <option>Pokémon</option><option>Trainer</option><option>Energy</option>
+                    </select>
+                    <input v-model="newCardData.subType" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm" placeholder="子類型">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <input v-model="newCardData.hp" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm" placeholder="HP">
+                    <input v-model="newCardData.element" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm" placeholder="屬性">
+                </div>
+                <button @click="submitNewCard" :disabled="isSubmittingCard" class="w-full bg-green-600 hover:bg-green-500 text-white py-2 rounded font-bold">新增到中文牌庫</button>
+            </div>
+        </div>
+    </div>
+

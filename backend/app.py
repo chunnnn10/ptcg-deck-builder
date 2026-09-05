@@ -223,6 +223,9 @@ def start_background_update_threads():
     else:
         print(">>> [Card DB Auto Update] disabled by ENABLE_CARD_DB_AUTO_UPDATE", flush=True)
 
+    from services.data_health import run_startup_scan
+    threading.Thread(target=run_startup_scan, daemon=True).start()
+
 database.init_db()
 app.register_blueprint(main_bp)
 start_background_update_threads()

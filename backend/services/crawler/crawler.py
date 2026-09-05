@@ -769,6 +769,11 @@ def save_card_with_context(data, context):
             data.get('pokedex_category', ''), data.get('height', ''), data.get('weight', '')
         ))
         conn.commit()
+        try:
+            from services.provisional_cards import replace_if_official_match
+            replace_if_official_match(data.get('name'), data.get('card_id'))
+        except Exception as exc:
+            print(f">>> [Crawler] provisional replace skipped: {exc}", flush=True)
 
         # 級聯寫入進化鏈上的中間卡片
         for parent in data.get('evolution_parents', []):

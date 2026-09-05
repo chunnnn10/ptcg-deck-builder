@@ -500,6 +500,8 @@ def init_db():
             weight VARCHAR
         )
         """)
+        cursor.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'official'")
+        cursor.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS replaced_by VARCHAR")
         cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_cards_set_code_number ON cards(set_code, set_number)
         """)
@@ -798,6 +800,55 @@ def init_db():
 
         cursor.execute(LIMITLESS_SCHEMA_SQL)
         cursor.execute(ai_schema_sql())
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS data_health_reports (
+            id SERIAL PRIMARY KEY,
+            trigger VARCHAR(32) DEFAULT 'manual',
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP,
+            summary_json TEXT,
+            needs_repair BOOLEAN DEFAULT FALSE,
+            acknowledged BOOLEAN DEFAULT FALSE,
+            repair_started BOOLEAN DEFAULT FALSE
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_data_health_reports_started
+        ON data_health_reports(started_at DESC)
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS provisional_cards (
+            id SERIAL PRIMARY KEY,
+            temp_card_id VARCHAR UNIQUE NOT NULL,
+            name TEXT,
+            japanese_name TEXT,
+            english_name TEXT,
+            card_type VARCHAR,
+            sub_type VARCHAR,
+            hp INTEGER,
+            element_type VARCHAR,
+            skills_json JSONB,
+            rarity VARCHAR,
+            set_code VARCHAR,
+            set_number VARCHAR,
+            description TEXT,
+            image_file TEXT,
+            raw_ai_json JSONB,
+            status VARCHAR DEFAULT 'pending',
+            replaced_by VARCHAR,
+            created_by VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_provisional_cards_status
+        ON provisional_cards(status)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_provisional_cards_name
+        ON provisional_cards(name)
+        """)
 
         conn.commit()
         print("Database initialized successfully.")

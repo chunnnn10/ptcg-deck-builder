@@ -1,3 +1,40 @@
+<!-- === 資料健康檢查 === -->
+    <div v-if="showDataHealthModal" class="fixed inset-0 z-[90] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
+        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-2xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><span class="ms mr-2 text-amber-400" aria-hidden="true">monitor_heart</span>資料健康檢查</h2>
+                <button @click="showDataHealthModal = false" class="text-gray-400 hover:text-white"><span class="ms ms-lg" aria-hidden="true">close</span></button>
+            </div>
+            <div class="p-5 space-y-4 overflow-y-auto custom-scroll">
+                <div class="flex items-center justify-between text-sm">
+                    <div class="text-gray-300">[[ dataHealthState.message || '就緒' ]]</div>
+                    <div class="text-amber-400 font-mono">[[ Number(dataHealthState.progress || 0).toFixed(0) ]]%</div>
+                </div>
+                <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div class="h-full bg-amber-500 transition-all" :style="{ width: (dataHealthState.progress || 0) + '%' }"></div>
+                </div>
+                <div v-if="dataHealthState.report && dataHealthState.report.issues && dataHealthState.report.issues.length" class="bg-amber-950/40 border border-amber-800 rounded-lg p-3 space-y-1">
+                    <div class="text-amber-300 font-bold text-sm">發現缺漏，重啟後唔會自動狂爬。要唔要背景更新？</div>
+                    <div v-for="issue in dataHealthState.report.issues" :key="issue" class="text-sm text-gray-200">• [[ issue ]]</div>
+                </div>
+                <div v-else class="text-sm text-gray-400">未發現需要立即處理嘅缺漏，或尚未檢查。</div>
+                <div class="flex flex-wrap gap-2">
+                    <button @click="scanDataHealth" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm">立即檢查</button>
+                    <button @click="repairDataHealth" class="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg text-sm font-bold">執行背景更新</button>
+                    <button @click="acknowledgeDataHealth" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-4 py-2 rounded-lg text-sm">稍後處理</button>
+                    <button @click="loadDataHealth" class="text-blue-400 text-sm px-2">刷新進度</button>
+                </div>
+                <div v-if="provisionalList.length" class="border-t border-gray-800 pt-3">
+                    <h3 class="text-sm font-bold text-gray-400 mb-2">未發售／臨時卡</h3>
+                    <div v-for="card in provisionalList.slice(0, 12)" :key="card.temp_card_id" class="text-xs text-gray-300 flex justify-between py-1">
+                        <span>[[ card.name ]] <span class="text-gray-500">[[ card.temp_card_id ]]</span></span>
+                        <span class="text-amber-400">[[ card.status ]]</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
 <!-- === 卡牌大更新彈窗 === -->
 
     <div v-if="showUpdateModal" class="fixed inset-0 z-[80] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
