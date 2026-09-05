@@ -331,14 +331,67 @@ def _tcgdex_image_url(image_value: str | None) -> str:
 
 ENERGY_NAME_MAP = {
     "基本草エネルギー": "基本草能量",
+    "草エネルギー": "基本草能量",
+    "Grass Energy": "基本草能量",
+    "Basic Grass Energy": "基本草能量",
+    "基本草能量": "基本草能量",
+    "草能量": "基本草能量",
     "基本炎エネルギー": "基本火能量",
+    "炎エネルギー": "基本火能量",
+    "Fire Energy": "基本火能量",
+    "Basic Fire Energy": "基本火能量",
+    "基本火能量": "基本火能量",
+    "火能量": "基本火能量",
     "基本水エネルギー": "基本水能量",
+    "水エネルギー": "基本水能量",
+    "Water Energy": "基本水能量",
+    "Basic Water Energy": "基本水能量",
+    "基本水能量": "基本水能量",
+    "水能量": "基本水能量",
     "基本雷エネルギー": "基本雷能量",
+    "雷エネルギー": "基本雷能量",
+    "Lightning Energy": "基本雷能量",
+    "Basic Lightning Energy": "基本雷能量",
+    "基本雷能量": "基本雷能量",
+    "雷能量": "基本雷能量",
     "基本超エネルギー": "基本超能量",
+    "超エネルギー": "基本超能量",
+    "Psychic Energy": "基本超能量",
+    "Basic Psychic Energy": "基本超能量",
+    "基本超能量": "基本超能量",
+    "超能量": "基本超能量",
     "基本闘エネルギー": "基本鬥能量",
+    "闘エネルギー": "基本鬥能量",
+    "Fighting Energy": "基本鬥能量",
+    "Basic Fighting Energy": "基本鬥能量",
+    "基本鬥能量": "基本鬥能量",
+    "鬥能量": "基本鬥能量",
     "基本悪エネルギー": "基本惡能量",
+    "悪エネルギー": "基本惡能量",
+    "Darkness Energy": "基本惡能量",
+    "Basic Darkness Energy": "基本惡能量",
+    "基本惡能量": "基本惡能量",
+    "惡能量": "基本惡能量",
     "基本鋼エネルギー": "基本鋼能量",
+    "鋼エネルギー": "基本鋼能量",
+    "Metal Energy": "基本鋼能量",
+    "Basic Metal Energy": "基本鋼能量",
+    "基本鋼能量": "基本鋼能量",
+    "鋼能量": "基本鋼能量",
 }
+
+_SECTION_TO_CARD_TYPE = {
+    "pokemon": "Pokémon",
+    "trainer": "Trainer",
+    "energy": "Energy",
+}
+
+_TW_CARD_ORDER_SQL = """
+            CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
+            CASE WHEN COALESCE(skills_json::text, '') NOT IN ('', '[]') THEN 0 ELSE 1 END,
+            CASE WHEN card_id ~ '^[0-9]+$' THEN card_id::integer ELSE 0 END DESC,
+            card_id DESC
+"""
 
 
 def log_event(level: str, context: str, message: str, detail: str | None = None, conn=None) -> None:
@@ -470,30 +523,74 @@ def upsert_tournament_deck_entry(cursor, deck: dict, entry_order: int | None = N
     )
 
 
-def find_local_jp_card(cursor, set_code: str | None, set_number: str | None) -> str | None:
+def _preferred_card_type(section: str | None, card_name: str | None = None) -> str | None:
+    mapped = _SECTION_TO_CARD_TYPE.get(str(section or "").strip().lower())
+    if mapped:
+        return mapped
+    tw_energy = ENERGY_NAME_MAP.get(str(card_name or "").strip())
+    if tw_energy:
+        return "Energy"
+    return None
+
+
+def _unique_names(*values) -> list[str]:
+    names = []
+    seen = set()
+    for value in values:
+        name = str(value or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def find_local_jp_card(cursor, set_code: str | None, set_number: str | None, card_name: str | None = None) -> str | None:
     candidates = set_number_candidates(set_number)
-    if not set_code or not candidates:
-        return None
-    placeholders = ",".join(["%s"] * len(candidates))
-    cursor.execute(
-        f"""
-        SELECT card_id FROM jp_cards
-        WHERE set_code = %s
-          AND (
-            set_number IN ({placeholders})
-            OR split_part(set_number, '/', 1) IN ({placeholders})
-          )
-        ORDER BY card_id DESC
-        LIMIT 1
-        """,
-        [set_code] + candidates + candidates,
-    )
-    row = cursor.fetchone()
-    return row["card_id"] if row else None
+    if set_code and candidates:
+        placeholders = ",".join(["%s"] * len(candidates))
+        cursor.execute(
+            f"""
+            SELECT card_id FROM jp_cards
+            WHERE LOWER(set_code) = LOWER(%s)
+              AND (
+                set_number IN ({placeholders})
+                OR split_part(set_number, '/', 1) IN ({placeholders})
+              )
+            ORDER BY card_id DESC
+            LIMIT 1
+            """,
+            [set_code] + candidates + candidates,
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["card_id"]
+    name = str(card_name or "").strip()
+    if name:
+        cursor.execute(
+            """
+            SELECT card_id FROM jp_cards
+            WHERE name = %s
+            ORDER BY
+                CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
+                card_id DESC
+            LIMIT 1
+            """,
+            (name,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["card_id"]
+    return None
 
 
-def find_local_tw_card(cursor, set_code: str | None, set_number: str | None) -> str | None:
-    row = find_local_tw_card_row(cursor, set_code, set_number)
+def find_local_tw_card(cursor, set_code: str | None, set_number: str | None, card_name: str | None = None, section: str | None = None) -> str | None:
+    row = resolve_local_tw_card_row(cursor, {
+        "set_code": set_code,
+        "set_number": set_number,
+        "card_name": card_name,
+        "section": section,
+    })
     return row["card_id"] if row else None
 
 
@@ -506,16 +603,13 @@ def find_local_tw_card_row(cursor, set_code: str | None, set_number: str | None)
         f"""
         SELECT *
         FROM cards
-        WHERE set_code = %s
+        WHERE LOWER(set_code) = LOWER(%s)
           AND (
             set_number IN ({placeholders})
             OR split_part(set_number, '/', 1) IN ({placeholders})
           )
         ORDER BY
-            CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
-            CASE WHEN COALESCE(skills_json::text, '') NOT IN ('', '[]') THEN 0 ELSE 1 END,
-            CASE WHEN card_id ~ '^[0-9]+$' THEN card_id::integer ELSE 0 END DESC,
-            card_id DESC
+            {_TW_CARD_ORDER_SQL}
         LIMIT 1
         """,
         [set_code] + candidates + candidates,
@@ -523,29 +617,169 @@ def find_local_tw_card_row(cursor, set_code: str | None, set_number: str | None)
     return cursor.fetchone()
 
 
-def find_local_tw_candidates(cursor, set_code: str | None, set_number: str | None, limit: int = 5) -> list[dict]:
-    candidates = set_number_candidates(set_number)
-    if not set_code or not candidates:
-        return []
-    placeholders = ",".join(["%s"] * len(candidates))
+def find_local_tw_card_row_by_name(cursor, card_name: str | None, section: str | None = None) -> dict | None:
+    """Match a Traditional Chinese card when JP/EN set codes do not line up.
+
+    Order:
+    1. basic energy aliases (超エネルギー / 超能量 / Psychic Energy)
+    2. cards.japanese_name or cards.name exact
+    3. jp_cards.name -> jp_cards.chinese_name -> cards.name
+    """
+    raw_name = str(card_name or "").strip()
+    if not raw_name:
+        return None
+
+    card_type = _preferred_card_type(section, raw_name)
+    names = _unique_names(raw_name, ENERGY_NAME_MAP.get(raw_name))
+
+    energy_name = ENERGY_NAME_MAP.get(raw_name)
+    if energy_name or card_type == "Energy":
+        target = energy_name or raw_name
+        cursor.execute(
+            f"""
+            SELECT *
+            FROM cards
+            WHERE card_type = 'Energy'
+              AND (
+                    name = %s
+                 OR name LIKE %s
+                 OR japanese_name = ANY(%s)
+              )
+            ORDER BY
+                {_TW_CARD_ORDER_SQL}
+            LIMIT 1
+            """,
+            (target, f"{target}%", names),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row
+
+    type_filter = "AND card_type = %s" if card_type else ""
+    params = [names, names]
+    if card_type:
+        params.append(card_type)
     cursor.execute(
         f"""
-        SELECT card_id, name, image_file, set_code, set_number
+        SELECT *
         FROM cards
-        WHERE set_code = %s
-          AND (
-            set_number IN ({placeholders})
-            OR split_part(set_number, '/', 1) IN ({placeholders})
-          )
+        WHERE (japanese_name = ANY(%s) OR name = ANY(%s))
+          {type_filter}
+        ORDER BY
+            {_TW_CARD_ORDER_SQL}
+        LIMIT 1
+        """,
+        params,
+    )
+    row = cursor.fetchone()
+    if row:
+        return row
+
+    cursor.execute(
+        """
+        SELECT chinese_name
+        FROM jp_cards
+        WHERE name = ANY(%s)
+          AND COALESCE(chinese_name, '') <> ''
         ORDER BY
             CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
-            CASE WHEN card_id ~ '^[0-9]+$' THEN card_id::integer ELSE 0 END DESC,
             card_id DESC
-        LIMIT %s
+        LIMIT 5
         """,
-        [set_code] + candidates + candidates + [limit],
+        (names,),
     )
-    return [dict(row) for row in cursor.fetchall()]
+    chinese_names = _unique_names(*[r.get("chinese_name") for r in cursor.fetchall()])
+    if not chinese_names:
+        return None
+    params = [chinese_names]
+    extra = ""
+    if card_type:
+        extra = "AND card_type = %s"
+        params.append(card_type)
+    cursor.execute(
+        f"""
+        SELECT *
+        FROM cards
+        WHERE name = ANY(%s)
+          {extra}
+        ORDER BY
+            {_TW_CARD_ORDER_SQL}
+        LIMIT 1
+        """,
+        params,
+    )
+    return cursor.fetchone()
+
+
+def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:
+    card = card or {}
+    tw_id = card.get("local_tw_card_id") or card.get("tw_card_id")
+    if tw_id:
+        cursor.execute("SELECT * FROM cards WHERE card_id = %s", (tw_id,))
+        row = cursor.fetchone()
+        if row:
+            return row
+    row = find_local_tw_card_row(cursor, card.get("set_code") or card.get("jp_set_code"), card.get("set_number") or card.get("jp_set_number"))
+    if row:
+        return row
+    return find_local_tw_card_row_by_name(
+        cursor,
+        card.get("card_name") or card.get("jp_card_name") or card.get("jp_name"),
+        card.get("section"),
+    )
+
+
+def persist_local_tw_binding(cursor, card: dict | None, tw_card_id: str | None) -> None:
+    card = card or {}
+    row_id = card.get("id")
+    if not row_id or not tw_card_id:
+        return
+    if card.get("local_tw_card_id") == tw_card_id:
+        return
+    cursor.execute(
+        """
+        UPDATE limitless_deck_cards
+        SET local_tw_card_id = %s
+        WHERE id = %s
+          AND (local_tw_card_id IS NULL OR local_tw_card_id = '')
+        """,
+        (tw_card_id, row_id),
+    )
+    card["local_tw_card_id"] = tw_card_id
+
+
+def find_local_tw_candidates(cursor, set_code: str | None, set_number: str | None, limit: int = 5, card_name: str | None = None, section: str | None = None) -> list[dict]:
+    candidates = set_number_candidates(set_number)
+    rows = []
+    if set_code and candidates:
+        placeholders = ",".join(["%s"] * len(candidates))
+        cursor.execute(
+            f"""
+            SELECT card_id, name, image_file, set_code, set_number
+            FROM cards
+            WHERE LOWER(set_code) = LOWER(%s)
+              AND (
+                set_number IN ({placeholders})
+                OR split_part(set_number, '/', 1) IN ({placeholders})
+              )
+            ORDER BY
+                {_TW_CARD_ORDER_SQL}
+            LIMIT %s
+            """,
+            [set_code] + candidates + candidates + [limit],
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+    if len(rows) < limit and card_name:
+        row = find_local_tw_card_row_by_name(cursor, card_name, section)
+        if row and not any(item.get("card_id") == row.get("card_id") for item in rows):
+            rows.append({
+                "card_id": row.get("card_id"),
+                "name": row.get("name"),
+                "image_file": row.get("image_file"),
+                "set_code": row.get("set_code"),
+                "set_number": row.get("set_number"),
+            })
+    return rows[:limit]
 
 
 def save_decklist(cursor, deck_id: str, parsed: dict) -> None:
@@ -584,10 +818,16 @@ def save_decklist(cursor, deck_id: str, parsed: dict) -> None:
         local_jp_card_id = None
         local_tw_card_id = None
         if language == "jp":
-            local_jp_card_id = find_local_jp_card(cursor, card.get("set_code"), card.get("set_number"))
-            local_tw_card_id = find_local_tw_card(cursor, card.get("set_code"), card.get("set_number"))
+            local_jp_card_id = find_local_jp_card(
+                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"),
+            )
+            local_tw_card_id = find_local_tw_card(
+                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
+            )
         else:
-            local_tw_card_id = find_local_tw_card(cursor, card.get("set_code"), card.get("set_number"))
+            local_tw_card_id = find_local_tw_card(
+                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
+            )
         cursor.execute(
             """
             INSERT INTO limitless_deck_cards (
@@ -1024,35 +1264,21 @@ def list_decks(q: str = "", page: int = 1, sort: str = "date", region: str = "",
 
 
 def _tw_card_from_limitless_card(cursor, card: dict) -> tuple[dict | None, list[dict]]:
-    tw_id = card.get("local_tw_card_id")
-    row = None
-    if tw_id:
-        cursor.execute("SELECT * FROM cards WHERE card_id = %s", (tw_id,))
-        row = cursor.fetchone()
-    if not row:
-        row = find_local_tw_card_row(cursor, card.get("set_code"), card.get("set_number"))
-    candidates = find_local_tw_candidates(cursor, card.get("set_code"), card.get("set_number"))
+    row = resolve_local_tw_card_row(cursor, card)
+    if row:
+        persist_local_tw_binding(cursor, card, row.get("card_id"))
+    candidates = find_local_tw_candidates(
+        cursor,
+        card.get("set_code") or card.get("jp_set_code"),
+        card.get("set_number") or card.get("jp_set_number"),
+        card_name=card.get("card_name") or card.get("jp_card_name"),
+        section=card.get("section"),
+    )
     return (_card_payload_from_row(row, "images") if row else None), candidates
 
 
 def _find_basic_energy_tw_row(cursor, jp_name: str | None) -> dict | None:
-    tw_name = ENERGY_NAME_MAP.get(str(jp_name or "").strip())
-    if not tw_name:
-        return None
-    cursor.execute(
-        """
-        SELECT *
-        FROM cards
-        WHERE name = %s AND card_type = 'Energy'
-        ORDER BY
-            CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
-            CASE WHEN card_id ~ '^[0-9]+$' THEN card_id::integer ELSE 0 END DESC,
-            card_id DESC
-        LIMIT 1
-        """,
-        (tw_name,),
-    )
-    return cursor.fetchone()
+    return find_local_tw_card_row_by_name(cursor, jp_name, "energy")
 
 
 def _copy_limitless_base(card: dict) -> dict:
@@ -1488,6 +1714,7 @@ def get_deck_detail(deck_id: str) -> dict:
 
         for jp_card in jp_rows:
             cards["tw"][jp_card["mode"]].append(_tw_detail_card(cursor, jp_card))
+        conn.commit()
 
         cursor.execute(
             """
