@@ -1632,7 +1632,11 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
     if not detail.get("success"):
         return detail
     deck = detail["deck"]
-    tw_cards = detail["cards"]["tw"].get(mode, [])
+    tw_bucket = (detail.get("cards") or {}).get("tw") or {}
+    if isinstance(tw_bucket, list):
+        tw_cards = tw_bucket
+    else:
+        tw_cards = tw_bucket.get(mode) or tw_bucket.get("normal") or []
     imported = []
     missing = []
     conn = database.get_db_connection()
@@ -1641,20 +1645,37 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
     try:
         cursor = conn.cursor()
         for card in tw_cards:
-            resolved = None
-            if not card.get("missing") and card.get("card_id"):
-                resolved = card
-            else:
-                resolved = _find_tw_by_tcgdex(cursor, card)
-            if resolved and resolved.get("card_id"):
-                count = int(card.get("count") or 0)
-                for _ in range(count):
-                    item = dict(resolved)
-                    item["name"] = item.get("name") or item.get("card_name")
-                    item["card_name"] = item.get("card_name") or item.get("name")
-                    item["logic"] = database.get_card_logic(item.get("card_id"))
-                    imported.append(item)
-            else:
+            try:
+                resolved = None
+                if not card.get("missing") and card.get("card_id"):
+                    resolved = card
+                else:
+                    resolved = find_local_tw_card_row_by_name(
+                        cursor,
+                        card.get("jp_card_name") or card.get("card_name"),
+                        card.get("section"),
+                    )
+                    resolved = _card_payload_from_row(resolved, "images") if resolved else None
+                if resolved and resolved.get("card_id"):
+                    count = int(card.get("count") or 0)
+                    for _ in range(max(count, 0)):
+                        item = dict(resolved)
+                        item["name"] = item.get("name") or item.get("card_name")
+                        item["card_name"] = item.get("card_name") or item.get("name")
+                        try:
+                            item["logic"] = database.get_card_logic(item.get("card_id"))
+                        except Exception:
+                            item["logic"] = None
+                        imported.append(item)
+                else:
+                    missing.append({
+                        "count": card.get("count"),
+                        "jp_name": card.get("jp_card_name") or card.get("card_name"),
+                        "jp_code": f"{card.get('jp_set_code') or card.get('set_code')} {card.get('jp_set_number') or card.get('set_number')}",
+                        "section": card.get("section"),
+                        "limitless_image_url": card.get("limitless_image_url") or card.get("image_url") or "",
+                    })
+            except Exception:
                 missing.append({
                     "count": card.get("count"),
                     "jp_name": card.get("jp_card_name") or card.get("card_name"),

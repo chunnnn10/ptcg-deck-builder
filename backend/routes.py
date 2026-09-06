@@ -2798,15 +2798,15 @@ def get_japanese_decks():
                 alias_groups.append([f"%{alias}%" for alias in aliases if alias])
 
             index_wheres = []
-            live_wheres = []
+            card_wheres = []
             params = []
-            live_params = []
+            card_params = []
             match_parts = []
             for aliases in alias_groups:
                 index_wheres.append("(" + " OR ".join(["dsi.card_name ILIKE %s"] * len(aliases)) + ")")
-                live_wheres.append("(" + " OR ".join(["c.name ILIKE %s OR c.japanese_name ILIKE %s"] * len(aliases)) + ")")
+                card_wheres.append("(" + " OR ".join(["c.name ILIKE %s OR c.japanese_name ILIKE %s"] * len(aliases)) + ")")
                 params.extend(aliases)
-                live_params.extend([item for alias in aliases for item in (alias, alias)])
+                card_params.extend([item for alias in aliases for item in (alias, alias)])
                 match_parts.append("MAX(CASE WHEN " + " OR ".join(["dsi.card_name ILIKE %s"] * len(aliases)) + " THEN 1 ELSE 0 END)")
             match_expr = " + ".join(match_parts)
 
@@ -2815,20 +2815,10 @@ def get_japanese_decks():
                 order_clause = "d.deck_date DESC, matched_card_count DESC, match_count DESC"
 
             live_sql = f"""
-                SELECT DISTINCT d.id
-                FROM imported_decks d
-                JOIN id_mapping m ON m.external_variant_id IN (
-                    SELECT NULLIF(el->>'id', '')::int
-                    FROM json_array_elements(
-                        CASE
-                            WHEN d.card_list IS NULL OR d.card_list = '' THEN '[]'::json
-                            ELSE d.card_list::json
-                        END
-                    ) el
-                    WHERE (el->>'id') ~ '^[0-9]+$'
-                )
-                JOIN cards c ON c.card_id = m.local_card_id
-                WHERE {' AND '.join(live_wheres)}
+                SELECT DISTINCT dc.deck_id AS id
+                FROM deck_cards dc
+                JOIN cards c ON c.card_id = dc.local_card_id
+                WHERE {' AND '.join(card_wheres)}
             """
 
             count_sql = f"""
@@ -2838,7 +2828,7 @@ def get_japanese_decks():
                     {live_sql}
                 ) hits
             """
-            cursor.execute(count_sql, params + live_params)
+            cursor.execute(count_sql, params + card_params)
             total_count = cursor.fetchone()['cnt']
 
             search_sql = f"""
@@ -2864,7 +2854,7 @@ def get_japanese_decks():
             """
             cursor.execute(
                 search_sql,
-                params + params + [len(safe_terms)] + live_params + [per_page, (page - 1) * per_page],
+                params + params + [len(safe_terms)] + card_params + [per_page, (page - 1) * per_page],
             )
             deck_rows = cursor.fetchall()
 
