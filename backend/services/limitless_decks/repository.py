@@ -829,23 +829,12 @@ def _is_reprint_priority_set(row: dict | None) -> bool:
 
 def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:
     card = card or {}
-    from services.card_locale_bindings import get_binding, source_key, upsert_binding
-
     set_code = card.get("set_code") or card.get("jp_set_code")
     set_number = card.get("set_number") or card.get("jp_set_number")
     card_name = card.get("card_name") or card.get("jp_card_name") or card.get("jp_name")
-    key = source_key(card.get("language") or "jp", set_code, set_number)
-    stored = get_binding(cursor, key)
-    if stored and stored.get("status") in ("approved", "pending") and stored.get("tw_card_id"):
-        cursor.execute("SELECT * FROM cards WHERE card_id = %s", (stored["tw_card_id"],))
-        mapped = cursor.fetchone()
-        if mapped:
-            return mapped
-    if stored and stored.get("status") == "unresolved":
-        return None
 
-    bound = None
     tw_id = card.get("local_tw_card_id") or card.get("tw_card_id")
+    bound = None
     if tw_id:
         cursor.execute("SELECT * FROM cards WHERE card_id = %s", (tw_id,))
         bound = cursor.fetchone()
@@ -853,39 +842,10 @@ def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:
             return bound
 
     row = find_local_tw_card_row(cursor, set_code, set_number)
-    method = "set"
     if not row:
         row = find_local_tw_card_row_by_name(cursor, card_name, card.get("section"))
-        method = "name"
-    if not row and key and not stored:
-        # 導入熱路徑唔打 TCGDex，避免一張失敗拖死成副牌
-        method = "miss"
     if row and (not bound or _is_reprint_priority_set(bound)):
-        if key:
-            upsert_binding(
-                cursor,
-                key=key,
-                source_set_code=str(set_code or ""),
-                source_set_number=str(set_number or ""),
-                source_name=str(card_name or ""),
-                tw_card_id=row.get("card_id"),
-                tw_name=row.get("name") or "",
-                tw_set_code=row.get("set_code") or "",
-                tw_set_number=row.get("set_number") or "",
-                status="pending",
-                method=method,
-            )
         return row
-    if key and not stored:
-        upsert_binding(
-            cursor,
-            key=key,
-            source_set_code=str(set_code or ""),
-            source_set_number=str(set_number or ""),
-            source_name=str(card_name or ""),
-            status="unresolved",
-            method=method if row else "miss",
-        )
     return bound or row
 
 
@@ -1650,12 +1610,8 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
                 if not card.get("missing") and card.get("card_id"):
                     resolved = card
                 else:
-                    resolved = find_local_tw_card_row_by_name(
-                        cursor,
-                        card.get("jp_card_name") or card.get("card_name"),
-                        card.get("section"),
-                    )
-                    resolved = _card_payload_from_row(resolved, "images") if resolved else None
+                    row = resolve_local_tw_card_row(cursor, card)
+                    resolved = _card_payload_from_row(row, "images") if row else None
                 if resolved and resolved.get("card_id"):
                     count = int(card.get("count") or 0)
                     for _ in range(max(count, 0)):

@@ -2773,6 +2773,7 @@ def get_japanese_decks():
                 return jsonify({'success': True, 'decks': [], 'total': 0, 'page': page, 'pages': 1, 'suggestion': None})
 
             alias_groups = []
+            variant_ids = set()
             for term in safe_terms:
                 aliases = {term}
                 bare = re.sub(r'(?i)(ex|gx|vstar|vmax|v)$', '', term).strip()
@@ -2785,14 +2786,25 @@ def get_japanese_decks():
                         like_sql.append("name ILIKE %s OR japanese_name ILIKE %s")
                         like_params.extend([f"%{seed}%", f"%{seed}%"])
                     cursor.execute(
-                        f"SELECT name, japanese_name FROM cards WHERE {' OR '.join(like_sql)} LIMIT 40",
+                        f"SELECT card_id, name, japanese_name FROM cards WHERE {' OR '.join(like_sql)} LIMIT 40",
                         like_params,
                     )
+                    card_ids = []
                     for row in cursor.fetchall():
+                        if row.get("card_id"):
+                            card_ids.append(row["card_id"])
                         for name in (row.get("name"), row.get("japanese_name")):
                             text = str(name or "").strip()
                             if text:
                                 aliases.add(text)
+                    if card_ids:
+                        cursor.execute(
+                            "SELECT external_variant_id FROM id_mapping WHERE local_card_id = ANY(%s)",
+                            (card_ids,),
+                        )
+                        for mapped in cursor.fetchall():
+                            if mapped.get("external_variant_id") is not None:
+                                variant_ids.add(int(mapped["external_variant_id"]))
                 except Exception:
                     conn.rollback()
                 alias_groups.append([f"%{alias}%" for alias in aliases if alias])
@@ -2814,12 +2826,16 @@ def get_japanese_decks():
             if sort_mode == 'date':
                 order_clause = "d.deck_date DESC, matched_card_count DESC, match_count DESC"
 
-            live_sql = f"""
-                SELECT DISTINCT dc.deck_id AS id
-                FROM deck_cards dc
-                JOIN cards c ON c.card_id = dc.local_card_id
-                WHERE {' AND '.join(card_wheres)}
-            """
+            list_wheres = []
+            list_params = []
+            for vid in sorted(variant_ids)[:80]:
+                list_wheres.append("d.card_list LIKE %s OR d.card_list LIKE %s")
+                list_params.extend([f'%"id": {vid}%', f'%"id":{vid}%'])
+            live_sql = (
+                "SELECT d.id FROM imported_decks d WHERE " + " OR ".join(list_wheres)
+                if list_wheres else
+                "SELECT NULL::int AS id WHERE FALSE"
+            )
 
             count_sql = f"""
                 SELECT COUNT(*) AS cnt FROM (
@@ -2828,7 +2844,7 @@ def get_japanese_decks():
                     {live_sql}
                 ) hits
             """
-            cursor.execute(count_sql, params + card_params)
+            cursor.execute(count_sql, params + list_params)
             total_count = cursor.fetchone()['cnt']
 
             search_sql = f"""
@@ -2854,7 +2870,7 @@ def get_japanese_decks():
             """
             cursor.execute(
                 search_sql,
-                params + params + [len(safe_terms)] + card_params + [per_page, (page - 1) * per_page],
+                params + params + [len(safe_terms)] + list_params + [per_page, (page - 1) * per_page],
             )
             deck_rows = cursor.fetchall()
 
