@@ -21,14 +21,12 @@ def get_db_connection():
 # 卡牌查詢
 # ==========================================
 
-def get_card_logic(card_id):
-    if not card_id:
-        return None
-    conn = get_db_connection()
-    if not conn:
-        return None
-    try:
-        cursor = conn.cursor()
+# processed_cards 欄位結構唔會喺 process 運行期間變，cache 住免得每次查 information_schema
+_processed_columns_cache = None
+
+def _processed_card_columns(cursor):
+    global _processed_columns_cache
+    if _processed_columns_cache is None:
         cursor.execute(
             """
             SELECT column_name
@@ -41,36 +39,93 @@ def get_card_logic(card_id):
               )
             """
         )
-        columns = {row['column_name'] for row in cursor.fetchall()}
-        select_fields = [("logic_json", "pc.logic_json" if "logic_json" in columns else "NULL::text")]
-        for column in (
-            "predicates",
-            "extractor_version",
-            "source_language",
-            "source_card_id",
-            "source_text_hash",
-            "validation_errors",
-        ):
-            if column in columns:
-                select_fields.append((column, f"pc.{column}"))
-            elif column in ("predicates", "validation_errors"):
-                select_fields.append((column, "'[]'::jsonb"))
-            else:
-                select_fields.append((column, "NULL::text"))
+        result = {row['column_name'] for row in cursor.fetchall()}
+        # table 仲未建（例如 deploy 早期）就唔好 cache 空結果
+        _processed_columns_cache = result or None
+    return _processed_columns_cache
+
+def _logic_select_fields(columns):
+    select_fields = [("logic_json", "pc.logic_json" if "logic_json" in columns else "NULL::text")]
+    for column in (
+        "predicates",
+        "extractor_version",
+        "source_language",
+        "source_card_id",
+        "source_text_hash",
+        "validation_errors",
+    ):
+        if column in columns:
+            select_fields.append((column, f"pc.{column}"))
+        elif column in ("predicates", "validation_errors"):
+            select_fields.append((column, "'[]'::jsonb"))
+        else:
+            select_fields.append((column, "NULL::text"))
+    return select_fields
+
+def _logic_from_row(row):
+    predicates = row.get('predicates') or []
+    if isinstance(predicates, str):
+        try:
+            predicates = json.loads(predicates)
+        except Exception:
+            predicates = []
+    if predicates:
+        return {
+            "version": row.get('extractor_version'),
+            "scope": row.get('extractor_version'),
+            "source_language": row.get('source_language'),
+            "source_card_id": row.get('source_card_id'),
+            "source_text_hash": row.get('source_text_hash'),
+            "predicates": predicates,
+            "validation_errors": row.get('validation_errors') or [],
+        }
+    if row.get('logic_json'):
+        try:
+            return json.loads(row['logic_json'])
+        except Exception:
+            pass
+    return None
+
+def get_card_logic_batch(card_ids):
+    """批次查多張卡嘅 logic，回傳 {card_id: logic_dict}。
+
+    查法同 get_card_logic 一致（先 processed_cards 直查，再經 jp_cards 同 set_number 對應），
+    但全程一條 connection 一個 query，畀匯入牌組等逐張查會好慢嘅場景用。
+    """
+    ids = []
+    seen = set()
+    for card_id in (card_ids or []):
+        value = str(card_id or '').strip()
+        if value and value not in seen:
+            seen.add(value)
+            ids.append(value)
+    if not ids:
+        return {}
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        columns = _processed_card_columns(cursor)
+        select_fields = _logic_select_fields(columns)
         cte_select = ", ".join(f"{expr} AS {name}" for name, expr in select_fields)
         final_select = ", ".join(name for name, _ in select_fields)
-        lookup_ids = [str(card_id)]
-        base_id = str(card_id).rsplit('.', 1)[0] if '.' in str(card_id) else ''
-        if base_id and base_id not in lookup_ids:
-            lookup_ids.append(base_id)
+        # 同單卡版一致：card_id 同佢嘅 base_id（去尾段）都入 SQL 查
+        lookup_ids = []
+        lookup_seen = set()
+        for card_id in ids:
+            for value in (card_id, card_id.rsplit('.', 1)[0] if '.' in card_id else ''):
+                if value and value not in lookup_seen:
+                    lookup_seen.add(value)
+                    lookup_ids.append(value)
         cursor.execute(
             f"""
             WITH candidate_logic AS (
-                SELECT 0 AS priority, {cte_select}
+                SELECT 0 AS priority, pc.card_id AS matched_id, {cte_select}
                 FROM processed_cards pc
                 WHERE pc.card_id = ANY(%s)
                 UNION ALL
-                SELECT 1 AS priority, {cte_select}
+                SELECT 1 AS priority, c.card_id AS matched_id, {cte_select}
                 FROM cards c
                 JOIN jp_cards j
                   ON c.set_code = j.set_code
@@ -80,44 +135,41 @@ def get_card_logic(card_id):
                 JOIN processed_cards pc ON pc.card_id = j.card_id
                 WHERE c.card_id = ANY(%s)
             )
-            SELECT {final_select}
+            SELECT matched_id, priority, {final_select}
             FROM candidate_logic
-            ORDER BY priority
-            LIMIT 1
+            ORDER BY matched_id, priority
             """,
             (lookup_ids, lookup_ids),
         )
-        row = cursor.fetchone()
-        if not row:
-            return None
+        rows_by_id = {}
+        for row in cursor.fetchall():
+            item = dict(row)
+            matched_id = str(item.pop('matched_id') or '')
+            priority = int(item.pop('priority') or 0)
+            rows_by_id.setdefault(matched_id, []).append((priority, item))
 
-        predicates = row.get('predicates') or []
-        if isinstance(predicates, str):
-            try:
-                predicates = json.loads(predicates)
-            except Exception:
-                predicates = []
-        if predicates:
-            return {
-                "version": row.get('extractor_version'),
-                "scope": row.get('extractor_version'),
-                "source_language": row.get('source_language'),
-                "source_card_id": row.get('source_card_id'),
-                "source_text_hash": row.get('source_text_hash'),
-                "predicates": predicates,
-                "validation_errors": row.get('validation_errors') or [],
-            }
-
-        if row.get('logic_json'):
-            try:
-                return json.loads(row['logic_json'])
-            except Exception:
-                pass
+        results = {}
+        for card_id in ids:
+            base_id = card_id.rsplit('.', 1)[0] if '.' in card_id else ''
+            candidates = list(rows_by_id.get(card_id, []))
+            if base_id and base_id != card_id:
+                candidates.extend(rows_by_id.get(base_id, []))
+            # 原單卡版語義：候選按 priority 排（0 先），攞第一個有 logic 嘅
+            for _, row in sorted(candidates, key=lambda pair: pair[0]):
+                logic = _logic_from_row(row)
+                if logic is not None:
+                    results[card_id] = logic
+                    break
+        return results
     except Exception:
-        pass
+        return {}
     finally:
         conn.close()
-    return None
+
+def get_card_logic(card_id):
+    if not card_id:
+        return None
+    return get_card_logic_batch([card_id]).get(str(card_id))
 
 # ==========================================
 # 工作區

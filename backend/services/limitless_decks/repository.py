@@ -1495,6 +1495,18 @@ def _same_set_number(card: dict, set_code: str | None, set_number: str | None) -
     return local_id in set_number_candidates(set_number)
 
 
+def _tcgdex_direct_ids(set_code: str | None, set_number: str | None) -> list[str]:
+    """由 set_code + set_number 組 tcgdex 卡 ID（例如 SV2a-025），命中就免晒 search fan-out。"""
+    code = str(set_code or "").strip()
+    if not code or not re.fullmatch(r"[A-Za-z0-9]+", code):
+        return []
+    ids = []
+    for candidate in set_number_candidates(set_number):
+        if re.fullmatch(r"[0-9A-Za-z]+", candidate):
+            ids.append(f"{code}-{candidate}")
+    return ids
+
+
 def _find_tw_by_tcgdex(cursor, jp_card: dict) -> dict | None:
     energy_row = _find_basic_energy_tw_row(cursor, jp_card.get("jp_card_name") or jp_card.get("card_name"))
     if energy_row:
@@ -1503,10 +1515,22 @@ def _find_tw_by_tcgdex(cursor, jp_card: dict) -> dict | None:
     if not name:
         return None
     client = get_tcgdex_client()
-    try:
-        source_cards = client.search_cards_full("ja", name)
-    except Exception:
-        source_cards = []
+    source_cards = []
+    direct_ids = _tcgdex_direct_ids(jp_card.get("set_code"), jp_card.get("set_number"))
+    for direct_id in direct_ids:
+        direct = client.get_card("ja", direct_id)
+        if direct:
+            source_cards = [direct]
+            break
+        zh_direct = client.get_card("zh-tw", direct_id)
+        if zh_direct:
+            source_cards = [zh_direct]
+            break
+    if not source_cards:
+        try:
+            source_cards = client.search_cards_full("ja", name)
+        except Exception:
+            source_cards = []
     matched_ids = []
     for source in source_cards:
         if _same_set_number(source, jp_card.get("set_code"), jp_card.get("set_number")):
@@ -1550,55 +1574,108 @@ def _find_tw_by_tcgdex(cursor, jp_card: dict) -> dict | None:
     return None
 
 
+def _tw_import_card(cursor, joined_row: dict) -> dict | None:
+    """匯入用嘅對卡：joined query 已對到就直接用，缺先走完整匹配鏈 + tcgdex fallback。"""
+    if joined_row.get("tw_card_id"):
+        # LEFT JOIN 已帶齊 cards 欄位，唔使再逐張 SELECT
+        return _tw_card_from_joined_row(joined_row, include_debug=True)
+    row = resolve_local_tw_card_row(cursor, joined_row)
+    if not row:
+        return None
+    persist_local_tw_binding(cursor, joined_row, row.get("card_id"))
+    return _card_payload_from_row(row, "images")
+
+
 def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dict:
     if language != "tw":
         return {"success": False, "error": "Only Traditional Chinese import is supported"}
+    mode = mode if mode in ("normal", "bling") else "normal"
     try:
-        detail = get_deck_detail(deck_id)
+        ensure_schema()
+        conn = database.get_db_connection()
+        if not conn:
+            return {"success": False, "error": "Database unavailable"}
+        try:
+            cursor = conn.cursor()
+            deck = _fetch_deck_row(cursor, deck_id)
+            if not deck:
+                return {"success": False, "error": "Deck not found"}
+
+            # 一條 joined query 攞指定 mode 嘅 jp 卡線同 tw 對應欄位，唔使撈晒四份語言×mode
+            cursor.execute(
+                """
+                SELECT c.*,
+                       tw.card_id AS tw_card_id,
+                       tw.name AS tw_name,
+                       tw.card_type AS tw_card_type,
+                       tw.sub_type AS tw_sub_type,
+                       tw.hp AS tw_hp,
+                       tw.element_type AS tw_element_type,
+                       tw.image_file AS tw_image_file,
+                       tw.rarity AS tw_rarity,
+                       tw.set_code AS tw_set_code,
+                       tw.set_number AS tw_set_number,
+                       tw.skills_json AS tw_skills_json
+                FROM limitless_deck_cards c
+                LEFT JOIN cards tw ON tw.card_id = c.local_tw_card_id
+                WHERE c.deck_id = %s AND c.language = 'jp' AND c.mode = %s
+                ORDER BY c.line_order
+                """,
+                (deck_id, mode),
+            )
+            joined_rows = [dict(row) for row in cursor.fetchall()]
+
+            # 逐行對卡（先 local_tw_card_id → set/number → 按名 → tcgdex），結果同 logic 都 batch 化
+            resolved = {}
+            logic_ids = []
+            seen_logic_ids = set()
+            for row in joined_rows:
+                tw_card = _tw_import_card(cursor, row)
+                if not tw_card or not tw_card.get("card_id"):
+                    tw_card = _find_tw_by_tcgdex(cursor, row)
+                if tw_card and tw_card.get("card_id"):
+                    resolved[row.get("id")] = tw_card
+                    logic_id = str(tw_card.get("card_id"))
+                    if logic_id not in seen_logic_ids:
+                        seen_logic_ids.add(logic_id)
+                        logic_ids.append(logic_id)
+
+            logic_map = database.get_card_logic_batch(logic_ids)
+
+            imported = []
+            missing = []
+            for row in joined_rows:
+                tw_card = resolved.get(row.get("id"))
+                count = int(row.get("count") or 0)
+                if tw_card:
+                    item = dict(tw_card)
+                    item["name"] = item["name"] or row.get("tw_name") or row.get("card_name")
+                    item["card_name"] = item["card_name"] or item["name"]
+                    item["logic"] = logic_map.get(str(item.get("card_id")))
+                    for _ in range(max(0, count)):
+                        imported.append(dict(item))
+                else:
+                    missing.append({
+                        "count": row.get("count"),
+                        "jp_name": row.get("card_name"),
+                        "jp_code": f"{row.get('set_code')} {row.get('set_number')}".strip(),
+                        "section": row.get("section"),
+                        "limitless_image_url": row.get("limitless_image_url") or row.get("image_url") or "",
+                    })
+
+            conn.commit()
+            deck_payload = _localized_deck(cursor, deck)
+            return {
+                "success": True,
+                "name": deck_payload.get("archetype_zh") or deck_payload.get("title_zh") or deck_payload.get("archetype") or deck_payload.get("title") or deck_id,
+                "deck": imported,
+                "missing": missing,
+                "imported_count": len(imported),
+            }
+        finally:
+            conn.close()
     except Exception as exc:
         return {"success": False, "error": f"讀取牌表失敗：{exc}"}
-    if not detail.get("success"):
-        return detail
-    deck = detail["deck"]
-    tw_cards = detail["cards"]["tw"].get(mode, [])
-    imported = []
-    missing = []
-    conn = database.get_db_connection()
-    if not conn:
-        return {"success": False, "error": "Database unavailable"}
-    try:
-        cursor = conn.cursor()
-        for card in tw_cards:
-            resolved = None
-            if not card.get("missing") and card.get("card_id"):
-                resolved = card
-            else:
-                resolved = _find_tw_by_tcgdex(cursor, card)
-            if resolved and resolved.get("card_id"):
-                count = int(card.get("count") or 0)
-                for _ in range(count):
-                    item = dict(resolved)
-                    item["name"] = item.get("name") or item.get("card_name")
-                    item["card_name"] = item.get("card_name") or item.get("name")
-                    item["logic"] = database.get_card_logic(item.get("card_id"))
-                    imported.append(item)
-            else:
-                missing.append({
-                    "count": card.get("count"),
-                    "jp_name": card.get("jp_card_name") or card.get("card_name"),
-                    "jp_code": f"{card.get('jp_set_code') or card.get('set_code')} {card.get('jp_set_number') or card.get('set_number')}",
-                    "section": card.get("section"),
-                    "limitless_image_url": card.get("limitless_image_url") or card.get("image_url") or "",
-                })
-        return {
-            "success": True,
-            "name": deck.get("archetype_zh") or deck.get("title_zh") or deck.get("archetype") or deck.get("title") or deck_id,
-            "deck": imported,
-            "missing": missing,
-            "imported_count": len(imported),
-        }
-    finally:
-        conn.close()
 
 
 def _serialize_deck_row(deck: dict) -> dict:
