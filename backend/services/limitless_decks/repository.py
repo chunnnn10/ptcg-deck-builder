@@ -1650,8 +1650,8 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
                 count = int(row.get("count") or 0)
                 if tw_card:
                     item = dict(tw_card)
-                    item["name"] = item["name"] or row.get("tw_name") or row.get("card_name")
-                    item["card_name"] = item["card_name"] or item["name"]
+                    item["name"] = item.get("name") or row.get("tw_name") or row.get("card_name")
+                    item["card_name"] = item.get("card_name") or item.get("name")
                     item["logic"] = logic_map.get(str(item.get("card_id")))
                     for _ in range(max(0, count)):
                         imported.append(dict(item))
