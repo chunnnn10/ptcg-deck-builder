@@ -382,6 +382,7 @@ ENERGY_NAME_MAP = {
 
 # Limitless 日／英名 → 繁中官名。set code 對唔上時用呢張表。
 JP_TW_NAME_MAP = {
+    "ポケモンセンターのお姉さん": "寶可夢中心的姐姐",
     "クラッシュハンマー": "粉碎之錘",
     "Crushing Hammer": "粉碎之錘",
     "粉碎之錘": "粉碎之錘",
