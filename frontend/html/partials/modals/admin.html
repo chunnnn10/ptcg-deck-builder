@@ -1034,6 +1034,35 @@
                         </div>
                     </div>
                     <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 bg-emerald-900/50 rounded-lg flex items-center justify-center"><span class="ms text-emerald-400 text-lg" aria-hidden="true">sync_alt</span></div>
+                            <div><h3 class="text-lg font-bold text-white">缺卡重新對卡</h3><p class="text-xs text-gray-400">用最新匹配邏輯重掃「中文牌庫缺卡」的牌表行。只補 NULL 綁定，不會覆蓋任何現有對應。</p></div>
+                        </div>
+                        <div v-if="limitlessRematchStats" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-center">
+                            <div class="bg-gray-900/70 rounded-lg p-3"><div class="text-xl font-bold text-red-400">[[ limitlessRematchStats.total_missing ]]</div><div class="text-xs text-gray-500">缺卡行（JP+EN）</div></div>
+                            <div class="bg-gray-900/70 rounded-lg p-3"><div class="text-xl font-bold text-white">[[ limitlessRematchStats.affected_decks ]]</div><div class="text-xs text-gray-500">受影響牌組</div></div>
+                            <div class="col-span-2 bg-gray-900/70 rounded-lg p-3 text-left"><div class="text-xs text-gray-500 mb-1">缺卡最多的系列（Top 5）</div><div class="text-xs font-mono text-gray-300 truncate">[[ (limitlessRematchStats.top_sets || []).slice(0, 5).map(s => s.set_code + ' ×' + s.cnt).join('　') || '-' ]]</div></div>
+                        </div>
+                        <div v-if="!limitlessRematchState.running" class="flex flex-wrap items-center gap-4">
+                            <div><label class="block text-xs text-gray-500 mb-1">Limit（0 = 全部）</label><input v-model.number="limitlessRematchLimit" type="number" min="0" class="w-32 bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="全部"></div>
+                            <label class="flex items-center gap-2 text-sm text-gray-300 mt-4"><input type="checkbox" v-model="limitlessRematchTcgdex" class="accent-emerald-500"> 用 tcgdex 對 SQL 匹配不到的殘餘卡（較慢）</label>
+                            <button @click="startLimitlessRematch" class="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-full font-bold text-sm flex items-center mt-1"><span class="ms mr-2" aria-hidden="true">sync_alt</span>開始重新對卡</button>
+                        </div>
+                        <div v-else class="space-y-3">
+                            <div class="flex justify-between text-sm"><span class="font-bold text-gray-300"><span class="ms text-emerald-400 mr-2 animate-spin" aria-hidden="true">progress_activity</span>[[ limitlessRematchState.message ]]</span><span class="text-emerald-400 font-mono">[[ limitlessRematchState.progress ]]%</span></div>
+                            <div class="w-full bg-gray-900 rounded-full h-3 overflow-hidden border border-gray-700"><div class="bg-emerald-500 h-full transition-all duration-300" :style="{ width: limitlessRematchState.progress + '%' }"></div></div>
+                            <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-center text-sm">
+                                <div><span class="text-gray-500">處理</span> <span class="text-white font-bold">[[ limitlessRematchState.processed ]]/[[ limitlessRematchState.total ]]</span></div>
+                                <div><span class="text-gray-500">修好</span> <span class="text-green-400 font-bold">[[ limitlessRematchState.matched ]]</span></div>
+                                <div><span class="text-gray-500">仍缺</span> <span class="text-red-400 font-bold">[[ limitlessRematchState.still_missing ]]</span></div>
+                                <div><span class="text-gray-500">錯誤</span> <span class="text-amber-400 font-bold">[[ limitlessRematchState.errors ]]</span></div>
+                                <div><span class="text-gray-500">tcgdex</span> <span class="text-gray-300 font-bold">[[ limitlessRematchState.use_tcgdex ? 'ON' : 'OFF' ]]</span></div>
+                                <div><span class="text-gray-500">時間</span> <span class="text-gray-300 font-bold">[[ limitlessRematchState.elapsed ]]</span></div>
+                            </div>
+                            <button @click="stopLimitlessRematch" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded font-bold text-sm">停止</button>
+                        </div>
+                    </div>
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
                         <h3 class="text-lg font-bold text-white mb-4">Manual update</h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="space-y-2"><label class="block text-xs text-gray-500">Tournament ID</label><div class="flex gap-2"><input v-model="limitlessManualTournament" class="flex-1 bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="567 or jp-4827"><button @click="updateLimitlessTournament" class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded font-bold text-sm">Update</button></div></div>

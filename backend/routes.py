@@ -2747,6 +2747,52 @@ def update_limitless_deck(deck_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@main_bp.route('/api/admin/limitless/rematch/stats')
+@admin_required
+def limitless_rematch_stats():
+    from services.limitless_decks.rematcher import missing_stats
+
+    try:
+        return jsonify({'success': True, 'stats': missing_stats()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/admin/limitless/rematch/start', methods=['POST'])
+@admin_required
+def start_limitless_rematch():
+    from services.limitless_decks.rematcher import start_rematch
+
+    data = request.json or {}
+    try:
+        success, message, status = start_rematch(
+            deck_ids=data.get('deck_ids'),
+            limit=data.get('limit'),
+            use_tcgdex=bool(data.get('use_tcgdex', False)),
+            languages=data.get('languages'),
+        )
+        return jsonify({'success': success, 'message': message, 'status': status})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/admin/limitless/rematch/status')
+@admin_required
+def limitless_rematch_status():
+    from services.limitless_decks.rematcher import get_status
+
+    return jsonify({'success': True, 'status': get_status()})
+
+
+@main_bp.route('/api/admin/limitless/rematch/stop', methods=['POST'])
+@admin_required
+def stop_limitless_rematch():
+    from services.limitless_decks.rematcher import stop_rematch, get_status
+
+    success, message = stop_rematch()
+    return jsonify({'success': success, 'message': message, 'status': get_status()})
+
+
 @main_bp.route('/api/decks/japanese/list')
 def get_japanese_decks():
     """

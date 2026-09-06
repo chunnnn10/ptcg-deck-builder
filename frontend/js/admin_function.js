@@ -769,6 +769,91 @@ function useAdminUpdate() {
     });
     let limitlessPollTimer = null;
 
+    // === Limitless 缺卡重新對卡 ===
+    const limitlessRematchState = reactive({
+        running: false,
+        message: "idle",
+        total: 0,
+        processed: 0,
+        matched: 0,
+        tcgdex_only: 0,
+        still_missing: 0,
+        errors: 0,
+        progress: 0,
+        elapsed: "",
+        use_tcgdex: false
+    });
+    const limitlessRematchLimit = ref(null);
+    const limitlessRematchTcgdex = ref(false);
+    const limitlessRematchStats = ref(null);
+    let limitlessRematchPollTimer = null;
+
+    const loadRematchStats = async () => {
+        try {
+            const res = await fetch('/api/admin/limitless/rematch/stats');
+            const data = await res.json();
+            if (data.success) limitlessRematchStats.value = data.stats;
+        } catch (e) { console.error('Rematch stats error:', e); }
+    };
+
+    const pollRematchStatus = async () => {
+        if (limitlessRematchPollTimer) clearTimeout(limitlessRematchPollTimer);
+        try {
+            const res = await fetch('/api/admin/limitless/rematch/status');
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(limitlessRematchState, data.status);
+                if (data.status.running) {
+                    limitlessRematchPollTimer = setTimeout(pollRematchStatus, 2000);
+                } else {
+                    loadRematchStats();
+                }
+            }
+        } catch (e) {
+            limitlessRematchPollTimer = setTimeout(pollRematchStatus, 3000);
+        }
+    };
+
+    const startLimitlessRematch = async () => {
+        if (limitlessRematchState.running) return;
+        try {
+            const body = {
+                limit: limitlessRematchLimit.value || null,
+                use_tcgdex: limitlessRematchTcgdex.value,
+                languages: ['jp']
+            };
+            const res = await fetch('/api/admin/limitless/rematch/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(limitlessRematchState, data.status);
+                pollRematchStatus();
+            } else {
+                alert(data.message || data.error || '重新對卡啟動失敗');
+            }
+        } catch (e) {
+            alert('重新對卡請求失敗');
+        }
+    };
+
+    const stopLimitlessRematch = async () => {
+        try {
+            const res = await fetch('/api/admin/limitless/rematch/stop', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                Object.assign(limitlessRematchState, data.status);
+                pollRematchStatus();
+            } else {
+                alert(data.message || '停止失敗');
+            }
+        } catch (e) {
+            alert('停止請求失敗');
+        }
+    };
+
     const mappingState = reactive({
         running: false,
         total: 0,
@@ -806,6 +891,8 @@ function useAdminUpdate() {
         deckAdminTab.value = 'cl';
         loadDbStats();
         pollLimitlessUpdate();
+        loadRematchStats();
+        pollRematchStatus();
     };
 
     const clearAllDecks = async () => {
@@ -1706,6 +1793,13 @@ function useAdminUpdate() {
         pollLimitlessUpdate,
         updateLimitlessTournament,
         updateLimitlessDeck,
+        limitlessRematchState,
+        limitlessRematchLimit,
+        limitlessRematchTcgdex,
+        limitlessRematchStats,
+        startLimitlessRematch,
+        stopLimitlessRematch,
+        loadRematchStats,
 
         // ========== JP 卡牌更新 (Limitless) ==========
         jpUpdateState,

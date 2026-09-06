@@ -1634,6 +1634,12 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
                 tw_card = _tw_import_card(cursor, row)
                 if not tw_card or not tw_card.get("card_id"):
                     tw_card = _find_tw_by_tcgdex(cursor, row)
+                    # tcgdex 對到而 cards 表真係有呢張卡，先寫入綁定；
+                    # 純 tcgdex payload（cards 表冇）唔寫，避免 JOIN 唔到的死綁定
+                    if tw_card and tw_card.get("card_id") and tw_card.get("source") == "tcgdex":
+                        cursor.execute("SELECT 1 FROM cards WHERE card_id = %s", (str(tw_card["card_id"]),))
+                        if cursor.fetchone():
+                            persist_local_tw_binding(cursor, row, tw_card["card_id"])
                 if tw_card and tw_card.get("card_id"):
                     resolved[row.get("id")] = tw_card
                     logic_id = str(tw_card.get("card_id"))
