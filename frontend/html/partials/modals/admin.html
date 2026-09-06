@@ -17,12 +17,53 @@
                     <div class="text-amber-300 font-bold text-sm">發現缺漏，重啟後唔會自動狂爬。要唔要背景更新？</div>
                     <div v-for="issue in dataHealthState.report.issues" :key="issue" class="text-sm text-gray-200">• [[ issue ]]</div>
                 </div>
-                <div v-else class="text-sm text-gray-400">未發現需要立即處理嘅缺漏，或尚未檢查。</div>
+                <div v-else class="text-sm text-gray-400">未發現需要立即處理嘅牌庫缺漏，或尚未檢查。</div>
+                <div v-if="dataHealthState.report && dataHealthState.report.counts" class="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                    <div>日文牌組本地：[[ dataHealthState.report.counts.jp_deck_local || dataHealthState.report.counts.jp_deck_total || 0 ]]　來源約 [[ dataHealthState.report.counts.jp_source_est || 0 ]]（[[ dataHealthState.report.counts.jp_source_pages || 0 ]] 頁）</div>
+                    <div>Limitless 牌組：[[ dataHealthState.report.counts.limitless_deck_total || 0 ]]　比賽 [[ dataHealthState.report.counts.limitless_tournament_total || 0 ]]</div>
+                    <div>空牌表：日文 [[ dataHealthState.report.counts.empty_imported_decks || 0 ]]　Limitless [[ dataHealthState.report.counts.limitless_empty_decks || 0 ]]</div>
+                    <div>待批准對卡：[[ dataHealthState.report.counts.pending_bindings || 0 ]]</div>
+                </div>
                 <div class="flex flex-wrap gap-2">
                     <button @click="scanDataHealth" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm">立即檢查</button>
                     <button @click="repairDataHealth" class="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg text-sm font-bold">執行背景更新</button>
                     <button @click="acknowledgeDataHealth" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-4 py-2 rounded-lg text-sm">稍後處理</button>
                     <button @click="loadDataHealth" class="text-blue-400 text-sm px-2">刷新進度</button>
+                </div>
+                <div class="border-t border-gray-800 pt-3">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-sm font-bold text-gray-400">自動對卡紀錄</h3>
+                        <button @click="loadCardBindings" class="text-xs text-blue-400">刷新</button>
+                    </div>
+                    <div v-if="!cardBindings.length" class="text-xs text-gray-500">尚未有自動對卡紀錄。</div>
+                    <div v-for="item in cardBindings.slice(0, 20)" :key="item.id" class="text-xs text-gray-300 border border-gray-800 rounded p-2 mb-2">
+                        <div class="flex gap-3">
+                            <a v-if="item.jp_image_url" :href="item.jp_image_url" target="_blank" class="shrink-0" title="日文卡">
+                                <img :src="item.jp_image_url" class="w-12 h-16 object-cover rounded border border-gray-700">
+                            </a>
+                            <a v-if="item.tw_image_url" :href="item.tw_image_url" target="_blank" class="shrink-0" title="中文卡">
+                                <img :src="item.tw_image_url" class="w-12 h-16 object-cover rounded border border-amber-700">
+                            </a>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex justify-between gap-2">
+                                    <div>
+                                        <span class="text-white">[[ item.source_name || item.source_key ]]</span>
+                                        <span class="text-gray-500">[[ item.source_set_code ]] [[ item.source_set_number ]]</span>
+                                        <span class="text-gray-500">→</span>
+                                        <span class="text-amber-300">[[ item.tw_name || '未對上' ]]</span>
+                                        <span class="text-gray-500">[[ item.tw_set_code ]] [[ item.tw_set_number ]]</span>
+                                    </div>
+                                    <span class="text-amber-400">[[ item.status ]] / [[ item.method ]]</span>
+                                </div>
+                                <div class="text-gray-500 mt-1">批准前都會暫用呢張中文卡；同一來源 ID 唔會再上網對。</div>
+                                <div class="mt-2 flex gap-2">
+                                    <button @click="reviewCardBinding(item, 'approve')" class="px-2 py-1 bg-green-700 rounded text-white">批准</button>
+                                    <button @click="reviewCardBinding(item, 'reassign')" class="px-2 py-1 bg-blue-800 rounded text-white">手動換卡</button>
+                                    <button @click="reviewCardBinding(item, 'reject')" class="px-2 py-1 bg-gray-700 rounded text-gray-200">否決</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div v-if="provisionalList.length" class="border-t border-gray-800 pt-3">
                     <h3 class="text-sm font-bold text-gray-400 mb-2">未發售／臨時卡</h3>

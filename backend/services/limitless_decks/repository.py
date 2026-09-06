@@ -405,6 +405,13 @@ _SECTION_TO_CARD_TYPE = {
 }
 
 _TW_CARD_ORDER_SQL = """
+            CASE
+                WHEN UPPER(COALESCE(set_code, '')) ~ '^(AC|SD)' THEN 4
+                WHEN UPPER(COALESCE(set_code, '')) LIKE '%-P' THEN 3
+                WHEN UPPER(COALESCE(set_name, '')) LIKE '%起始%' OR UPPER(COALESCE(set_name, '')) LIKE '%牌組%' THEN 3
+                WHEN UPPER(COALESCE(set_code, '')) ~ '^(SVI|SV[0-9]|M[0-9]|TWM|TEF|PAR|OBF|PAL|SVi)' THEN 0
+                ELSE 1
+            END,
             CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
             CASE WHEN COALESCE(skills_json::text, '') NOT IN ('', '[]') THEN 0 ELSE 1 END,
             CASE WHEN card_id ~ '^[0-9]+$' THEN card_id::integer ELSE 0 END DESC,
@@ -802,25 +809,84 @@ def find_local_tw_card_row_by_name(cursor, card_name: str | None, section: str |
         row = cursor.fetchone()
         if row:
             return row
-    return _find_tw_row_via_tcgdex_name(cursor, raw_name, card_type)
+    # 牌庫載入路徑只查本地庫，避免同步打 TCGDex 拖到十幾秒
+    return None
+
+
+def _is_reprint_priority_set(row: dict | None) -> bool:
+    if not row:
+        return False
+    set_code = str(row.get("set_code") or "").upper()
+    set_name = str(row.get("set_name") or "")
+    return bool(
+        set_code.startswith("AC")
+        or set_code.startswith("SD")
+        or set_code.endswith("-P")
+        or "起始" in set_name
+        or "牌組" in set_name
+    )
 
 
 def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:
     card = card or {}
+    from services.card_locale_bindings import get_binding, source_key, upsert_binding
+
+    set_code = card.get("set_code") or card.get("jp_set_code")
+    set_number = card.get("set_number") or card.get("jp_set_number")
+    card_name = card.get("card_name") or card.get("jp_card_name") or card.get("jp_name")
+    key = source_key(card.get("language") or "jp", set_code, set_number)
+    stored = get_binding(cursor, key)
+    if stored and stored.get("status") in ("approved", "pending") and stored.get("tw_card_id"):
+        cursor.execute("SELECT * FROM cards WHERE card_id = %s", (stored["tw_card_id"],))
+        mapped = cursor.fetchone()
+        if mapped:
+            return mapped
+    if stored and stored.get("status") == "unresolved":
+        return None
+
+    bound = None
     tw_id = card.get("local_tw_card_id") or card.get("tw_card_id")
     if tw_id:
         cursor.execute("SELECT * FROM cards WHERE card_id = %s", (tw_id,))
-        row = cursor.fetchone()
-        if row:
-            return row
-    row = find_local_tw_card_row(cursor, card.get("set_code") or card.get("jp_set_code"), card.get("set_number") or card.get("jp_set_number"))
-    if row:
+        bound = cursor.fetchone()
+        if bound and not _is_reprint_priority_set(bound):
+            return bound
+
+    row = find_local_tw_card_row(cursor, set_code, set_number)
+    method = "set"
+    if not row:
+        row = find_local_tw_card_row_by_name(cursor, card_name, card.get("section"))
+        method = "name"
+    if not row and key and not stored:
+        row = _find_tw_row_via_tcgdex_name(cursor, card_name, _preferred_card_type(card.get("section"), card_name or ""))
+        method = "tcgdex"
+    if row and (not bound or _is_reprint_priority_set(bound)):
+        if key:
+            upsert_binding(
+                cursor,
+                key=key,
+                source_set_code=str(set_code or ""),
+                source_set_number=str(set_number or ""),
+                source_name=str(card_name or ""),
+                tw_card_id=row.get("card_id"),
+                tw_name=row.get("name") or "",
+                tw_set_code=row.get("set_code") or "",
+                tw_set_number=row.get("set_number") or "",
+                status="pending",
+                method=method,
+            )
         return row
-    return find_local_tw_card_row_by_name(
-        cursor,
-        card.get("card_name") or card.get("jp_card_name") or card.get("jp_name"),
-        card.get("section"),
-    )
+    if key and not stored:
+        upsert_binding(
+            cursor,
+            key=key,
+            source_set_code=str(set_code or ""),
+            source_set_number=str(set_number or ""),
+            source_name=str(card_name or ""),
+            status="unresolved",
+            method=method if row else "miss",
+        )
+    return bound or row
 
 
 def persist_local_tw_binding(cursor, card: dict | None, tw_card_id: str | None) -> None:
@@ -835,7 +901,6 @@ def persist_local_tw_binding(cursor, card: dict | None, tw_card_id: str | None) 
         UPDATE limitless_deck_cards
         SET local_tw_card_id = %s
         WHERE id = %s
-          AND (local_tw_card_id IS NULL OR local_tw_card_id = '')
         """,
         (tw_card_id, row_id),
     )

@@ -61,7 +61,7 @@ def extract_from_image(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
         ],
     }]
-    content = chat_completion(messages, temperature=0.1)
+    content = chat_completion(messages, temperature=0.1, role="vision")
     parsed = _parse_json_object(content)
     if not parsed:
         raise ValueError("AI 未能從圖片抽出卡牌資料")

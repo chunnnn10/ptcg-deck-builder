@@ -849,6 +849,31 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_provisional_cards_name
         ON provisional_cards(name)
         """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS card_locale_bindings (
+            id SERIAL PRIMARY KEY,
+            source_key VARCHAR UNIQUE NOT NULL,
+            source_lang VARCHAR DEFAULT 'jp',
+            source_set_code VARCHAR,
+            source_set_number VARCHAR,
+            source_name TEXT,
+            tw_card_id VARCHAR,
+            tw_name TEXT,
+            tw_set_code VARCHAR,
+            tw_set_number VARCHAR,
+            status VARCHAR DEFAULT 'pending',
+            method VARCHAR DEFAULT 'auto',
+            context TEXT,
+            reviewed_by VARCHAR,
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_card_locale_bindings_status
+        ON card_locale_bindings(status)
+        """)
 
         conn.commit()
         print("Database initialized successfully.")

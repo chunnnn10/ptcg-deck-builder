@@ -2498,35 +2498,49 @@ def start_data_health_repair():
 @admin_required
 def extract_provisional_card():
     from services.provisional_cards import extract_from_image, save_provisional
-    if 'image' not in request.files:
+    files = request.files.getlist('images') or request.files.getlist('image')
+    if not files:
         return jsonify({'success': False, 'error': '請上傳卡圖'}), 400
-    image = request.files['image']
-    raw = image.read()
-    if not raw:
-        return jsonify({'success': False, 'error': '圖片是空的'}), 400
-    mime = image.mimetype or 'image/jpeg'
-    try:
-        parsed = extract_from_image(raw, mime=mime)
-    except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 400
-
     approve = str(request.form.get('approve', '0')).lower() in ('1', 'true', 'yes')
-    saved = None
-    if approve:
-        ext = os.path.splitext(secure_filename(image.filename or 'card.png'))[1] or '.png'
-        temp_name = f"prov_{uuid.uuid4().hex[:10]}{ext}"
-        os.makedirs(config.IMAGE_FOLDER, exist_ok=True)
-        save_path = os.path.join(config.IMAGE_FOLDER, temp_name)
-        with open(save_path, 'wb') as handle:
-            handle.write(raw)
-        saved = save_provisional(
-            parsed,
-            temp_name,
-            created_by=getattr(current_user, 'username', None),
-            approve=True,
-        )
-        saved['image_url'] = f"/images/{temp_name}"
-    return jsonify({'success': True, 'card': saved, 'parsed': parsed})
+    results = []
+    for image in files:
+        raw = image.read()
+        item = {'filename': image.filename or 'card.png', 'success': False}
+        if not raw:
+            item['error'] = '圖片是空的'
+            results.append(item)
+            continue
+        mime = image.mimetype or 'image/jpeg'
+        try:
+            parsed = extract_from_image(raw, mime=mime)
+        except Exception as exc:
+            item['error'] = str(exc)
+            results.append(item)
+            continue
+        saved = None
+        if approve:
+            ext = os.path.splitext(secure_filename(image.filename or 'card.png'))[1] or '.png'
+            temp_name = f"prov_{uuid.uuid4().hex[:10]}{ext}"
+            os.makedirs(config.IMAGE_FOLDER, exist_ok=True)
+            with open(os.path.join(config.IMAGE_FOLDER, temp_name), 'wb') as handle:
+                handle.write(raw)
+            saved = save_provisional(
+                parsed,
+                temp_name,
+                created_by=getattr(current_user, 'username', None),
+                approve=True,
+            )
+            saved['image_url'] = f"/images/{temp_name}"
+        item.update({'success': True, 'card': saved, 'parsed': parsed})
+        results.append(item)
+    first = next((row for row in results if row.get('success')), results[0])
+    return jsonify({
+        'success': any(row.get('success') for row in results),
+        'results': results,
+        'card': first.get('card'),
+        'parsed': first.get('parsed'),
+        'error': None if any(row.get('success') for row in results) else (first.get('error') or '全部失敗'),
+    })
 
 
 @main_bp.route('/api/admin/provisional/list', methods=['GET'])
@@ -2534,6 +2548,28 @@ def extract_provisional_card():
 def list_provisional_cards_api():
     from services.provisional_cards import list_provisional
     return jsonify({'success': True, 'cards': list_provisional()})
+
+
+@main_bp.route('/api/admin/card-bindings', methods=['GET'])
+@admin_required
+def list_card_bindings():
+    from services.card_locale_bindings import list_bindings
+    status = request.args.get('status') or None
+    return jsonify({'success': True, 'bindings': list_bindings(status=status)})
+
+
+@main_bp.route('/api/admin/card-bindings/review', methods=['POST'])
+@admin_required
+def review_card_binding():
+    from services.card_locale_bindings import review_binding
+    payload = request.get_json(silent=True) or {}
+    ok, message = review_binding(
+        int(payload.get('id') or 0),
+        action=str(payload.get('action') or 'approve'),
+        tw_card_id=payload.get('tw_card_id'),
+        reviewer=getattr(current_user, 'username', '') or '',
+    )
+    return jsonify({'success': ok, 'message': message}), (200 if ok else 400)
 
 
 @main_bp.route('/api/admin/deck-update/clear', methods=['POST'])
@@ -3262,6 +3298,9 @@ def admin_update_user(user_id):
 
 _AI_SETTING_KEYS = [
     'AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL',
+    'AI_PROVIDER',
+    'AI_CHAT_PROVIDER', 'AI_CHAT_BASE_URL', 'AI_CHAT_API_KEY', 'AI_CHAT_MODEL', 'AI_CHAT_TIMEOUT',
+    'AI_VISION_PROVIDER', 'AI_VISION_BASE_URL', 'AI_VISION_API_KEY', 'AI_VISION_MODEL', 'AI_VISION_TIMEOUT',
     'AI_EMBEDDING_BASE_URL', 'AI_EMBEDDING_API_KEY', 'AI_EMBEDDING_MODEL',
     'AI_EMBEDDING_DIMENSIONS', 'AI_TIMEOUT',
     'AI_THINKING_ENABLED', 'AI_REASONING_EFFORT',

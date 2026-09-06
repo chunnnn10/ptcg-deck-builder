@@ -1458,6 +1458,7 @@ function useAdminUpdate() {
         showDataHealthModal.value = true;
         await loadDataHealth();
         await loadProvisionalCards();
+        await loadCardBindings();
     };
 
     const loadDataHealth = async ({ promptIfNeeded = false } = {}) => {
@@ -1531,6 +1532,38 @@ function useAdminUpdate() {
             if (data.success) provisionalList.value = data.cards || [];
         } catch (e) {
             console.warn(e);
+        }
+    };
+
+    const cardBindings = ref([]);
+    const loadCardBindings = async () => {
+        try {
+            const res = await fetch('/api/admin/card-bindings');
+            const data = await res.json();
+            if (data.success) cardBindings.value = data.bindings || [];
+        } catch (e) {
+            console.warn(e);
+        }
+    };
+
+    const reviewCardBinding = async (item, action) => {
+        let twCardId = item.tw_card_id;
+        if (action === 'reassign') {
+            twCardId = prompt('輸入要改綁的中文 card_id', item.tw_card_id || '');
+            if (!twCardId) return;
+            action = 'approve';
+        }
+        try {
+            const res = await fetch('/api/admin/card-bindings/review', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: item.id, action, tw_card_id: twCardId })
+            });
+            const data = await res.json();
+            if (!data.success) return alert(data.message || '更新失敗');
+            await loadCardBindings();
+        } catch (e) {
+            alert('連線錯誤');
         }
     };
 
@@ -1648,6 +1681,9 @@ function useAdminUpdate() {
         repairDataHealth,
         provisionalList,
         loadProvisionalCards,
+        cardBindings,
+        loadCardBindings,
+        reviewCardBinding,
 
         // 每日 + 完整牌組更新
         dailyUpdateBotCount,

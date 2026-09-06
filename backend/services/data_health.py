@@ -137,6 +137,15 @@ def scan_database(trigger: str = "manual") -> dict:
                OR COALESCE(set_code, '') = ''
             """,
         )
+        jp_pages = 0
+        jp_source_est = 0
+        try:
+            from services.deck_importer.deck_updater import detect_total_pages
+            jp_pages = int(detect_total_pages("DJ") or 0)
+            jp_source_est = jp_pages * 20
+        except Exception as exc:
+            _log(f"讀取日文牌組來源頁數失敗：{exc}")
+
         HEALTH_STATE["progress"] = 55
         empty_decks = _safe_count(
             cursor,
@@ -147,6 +156,35 @@ def scan_database(trigger: str = "manual") -> dict:
                OR card_list = '[]'
             """,
         )
+        jp_deck_total = _safe_count(cursor, "SELECT COUNT(*) FROM imported_decks")
+        jp_deck_local = _safe_count(cursor, "SELECT COUNT(*) FROM imported_decks WHERE COALESCE(source,'jp') IN ('jp','DJ','dj')")
+        if not jp_deck_local:
+            jp_deck_local = jp_deck_total
+        limitless_deck_total = _safe_count(cursor, "SELECT COUNT(*) FROM limitless_decks")
+        limitless_tournament_total = _safe_count(cursor, "SELECT COUNT(*) FROM limitless_tournaments")
+        limitless_empty_decks = _safe_count(
+            cursor,
+            """
+            SELECT COUNT(*) FROM limitless_decks d
+            WHERE NOT EXISTS (
+                SELECT 1 FROM limitless_deck_cards c WHERE c.deck_id = d.deck_id
+            )
+            """,
+        )
+        limitless_unmapped_decks = _safe_count(
+            cursor,
+            """
+            SELECT COUNT(*) FROM (
+                SELECT c.deck_id
+                FROM limitless_deck_cards c
+                WHERE c.language = 'jp'
+                GROUP BY c.deck_id
+                HAVING COUNT(*) FILTER (
+                    WHERE c.local_tw_card_id IS NULL OR c.local_tw_card_id = ''
+                ) >= 3
+            ) missing_decks
+            """,
+        )
         limitless_unmapped = _safe_count(
             cursor,
             """
@@ -154,6 +192,10 @@ def scan_database(trigger: str = "manual") -> dict:
             WHERE language = 'jp'
               AND (local_tw_card_id IS NULL OR local_tw_card_id = '')
             """,
+        )
+        pending_bindings = _safe_count(
+            cursor,
+            "SELECT COUNT(*) FROM card_locale_bindings WHERE status = 'pending'",
         )
         provisional_open = _safe_count(
             cursor,
@@ -168,8 +210,17 @@ def scan_database(trigger: str = "manual") -> dict:
             "tw_incomplete_cards": tw_incomplete,
             "jp_empty_sets": len(jp_empty_sets),
             "jp_incomplete_cards": jp_incomplete,
+            "jp_deck_total": jp_deck_total,
+            "jp_deck_local": jp_deck_local,
+            "jp_source_pages": jp_pages,
+            "jp_source_est": jp_source_est,
             "empty_imported_decks": empty_decks,
+            "limitless_deck_total": limitless_deck_total,
+            "limitless_tournament_total": limitless_tournament_total,
+            "limitless_empty_decks": limitless_empty_decks,
+            "limitless_unmapped_decks": limitless_unmapped_decks,
             "limitless_unmapped": limitless_unmapped,
+            "pending_bindings": pending_bindings,
             "provisional_open": provisional_open,
         }
         report["counts"] = counts
@@ -179,24 +230,27 @@ def scan_database(trigger: str = "manual") -> dict:
         }
 
         issues = []
-        if tw_empty_sets:
-            issues.append(f"中文系列未收錄卡牌：{len(tw_empty_sets)} 個")
-        if tw_incomplete:
-            issues.append(f"中文卡資料不完整：{tw_incomplete} 張")
-        if jp_empty_sets:
-            issues.append(f"日文系列未收錄卡牌：{len(jp_empty_sets)} 個")
-        if jp_incomplete:
-            issues.append(f"日文卡資料不完整：{jp_incomplete} 張")
+        jp_lag = max(0, jp_source_est - jp_deck_local) if jp_source_est else 0
+        if jp_source_est and jp_deck_local < int(jp_source_est * 0.9):
+            issues.append(
+                f"日文牌組庫落後來源站：本地 {jp_deck_local} 副，來源約 {jp_source_est} 副（{jp_pages} 頁）"
+            )
         if empty_decks:
-            issues.append(f"日本／國際牌組缺詳情：{empty_decks} 副")
-        if limitless_unmapped:
-            issues.append(f"Limitless 未配中文卡：{limitless_unmapped} 張")
+            issues.append(f"日文牌組缺詳情／空牌表：{empty_decks} / {jp_deck_total} 副")
+        if limitless_empty_decks:
+            issues.append(f"Limitless 牌組沒有牌表：{limitless_empty_decks} / {limitless_deck_total} 副")
+        if pending_bindings:
+            issues.append(f"自動對卡待批准：{pending_bindings} 筆")
+        if tw_empty_sets:
+            issues.append(f"中文系列未收錄卡牌：{len(tw_empty_sets)} 個（參考，唔會單靠呢項觸發狂爬）")
+        if jp_empty_sets:
+            issues.append(f"日文系列未收錄卡牌：{len(jp_empty_sets)} 個（參考，唔會單靠呢項觸發狂爬）")
         if provisional_open:
             issues.append(f"未發售臨時卡待處理：{provisional_open} 張")
 
         report["issues"] = issues
         report["issue_count"] = len(issues)
-        report["needs_repair"] = bool(issues)
+        report["needs_repair"] = bool(jp_lag or empty_decks or limitless_empty_decks)
         report["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
 
         cursor.execute(
@@ -354,17 +408,16 @@ def _run_repair(report: dict) -> None:
     counts = (report or {}).get("counts") or {}
 
     try:
-        if counts.get("tw_empty_sets") or counts.get("jp_empty_sets") or counts.get("tw_incomplete_cards"):
-            HEALTH_STATE["progress"] = 15
-            _log("同步卡牌庫新系列")
-            from services.card_db_auto_update import run_daily_sync
-            run_daily_sync(skip_images=True)
-
+        HEALTH_STATE["progress"] = 20
+        _log("同步日文／國際牌組庫（對來源站落差）")
+        from services.deck_importer.deck_updater import run_daily_update, run_detail_backfill
+        try:
+            run_daily_update(pages_per_source={"DJ": 40, "DE": 8})
+        except TypeError:
+            run_daily_update()
+        except Exception as exc:
+            _log(f"牌組庫更新略過：{exc}")
         if counts.get("empty_imported_decks"):
-            HEALTH_STATE["progress"] = 45
-            _log("補日本／國際牌組缺漏")
-            from services.deck_importer.deck_updater import run_gap_fill_update, run_detail_backfill
-            run_gap_fill_update()
             try:
                 run_detail_backfill()
             except TypeError:
@@ -372,14 +425,13 @@ def _run_repair(report: dict) -> None:
             except Exception as exc:
                 _log(f"牌組詳情補齊略過：{exc}")
 
-        if counts.get("limitless_unmapped"):
-            HEALTH_STATE["progress"] = 75
-            _log("重跑 Limitless 配對／增量更新")
-            try:
-                from services.limitless_decks.updater import start_update
-                start_update({"mode": "auto-daily"})
-            except Exception as exc:
-                _log(f"Limitless 更新略過：{exc}")
+        HEALTH_STATE["progress"] = 70
+        _log("同步 Limitless 比賽／牌組索引")
+        try:
+            from services.limitless_decks.updater import start_update
+            start_update({"mode": "auto-daily"})
+        except Exception as exc:
+            _log(f"Limitless 更新略過：{exc}")
 
         HEALTH_STATE["progress"] = 95
         scan_database(trigger="post_repair")
