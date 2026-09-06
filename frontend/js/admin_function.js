@@ -21,7 +21,7 @@ function useAdminUpdate() {
     const selectedExpansions = ref([]);
     const selectedRegulations = ref([1, 2]); 
     const updateJapanese = ref(false); // [新增] 日文更新開關
-    const skipImages = ref(false); // [新增] 跳過圖片更新
+    const skipImages = ref(true);
     const loadingExpansions = ref(false);
 
     const updateState = reactive({

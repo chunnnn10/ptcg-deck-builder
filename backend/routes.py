@@ -1728,7 +1728,7 @@ def start_update():
     target_expansion_codes = data.get('target_expansion_codes', []) # e.g. ['M3', 'AS6b']
     target_regulations = data.get('target_regulations', [1, 2])     # e.g. [1, 2]
     update_japanese = data.get('update_japanese', False)            # default False
-    skip_images = data.get('skip_images', False)                    # default False (update images)
+    skip_images = data.get('skip_images', True)                     # 預設唔下載圖，只補缺卡
 
     # 舊版更新方法：自定義列表 URL（修復指定 URL 卻被強制要求選系列的問題）
     custom_url = (data.get('custom_url') or '').strip()

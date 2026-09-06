@@ -932,6 +932,66 @@ def _detect_total_pages(first_url):
     return 1
 
 
+def _extract_list_ids(list_url):
+    ids = []
+    try:
+        resp = requests.get(list_url, headers=config.HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return ids
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        for item in soup.find_all('li', class_='card'):
+            link = item.find('a')
+            if not link:
+                continue
+            match = re.search(r'/detail/(\d+)/', link.get('href', ''))
+            if match:
+                ids.append(match.group(1))
+    except Exception as e:
+        log_update(f"列表掃描錯誤: {e}")
+    return ids
+
+
+def collect_official_ids(base_list_url, expansion_code, regulations):
+    """只掃官方列表頁，收集 card_id，唔打詳情。"""
+    found = []
+    seen = set()
+    for reg in regulations or [None]:
+        first_url = construct_filtered_url(base_list_url, 1, expansion_code, reg)
+        pages = _detect_total_pages(first_url)
+        for page in range(1, pages + 1):
+            list_url = construct_filtered_url(base_list_url, page, expansion_code, reg)
+            for card_id in _extract_list_ids(list_url):
+                if card_id in seen:
+                    continue
+                seen.add(card_id)
+                found.append(card_id)
+    return found
+
+
+def _existing_card_ids(card_ids):
+    if not card_ids:
+        return set()
+    conn = database.get_db_connection()
+    if not conn:
+        return set()
+    have = set()
+    try:
+        cursor = conn.cursor()
+        for start in range(0, len(card_ids), 500):
+            chunk = card_ids[start:start + 500]
+            cursor.execute("SELECT card_id FROM cards WHERE card_id = ANY(%s)", (chunk,))
+            for row in cursor.fetchall():
+                have.add(str(row['card_id'] if isinstance(row, dict) else row[0]))
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+    return have
+
+
 def _scan_list_page(list_url, task_queue, found_ids, task_payload_template):
     """掃描單頁卡牌列表，把符合的 card_id 推入 task_queue。
     task_payload_template 提供 set_code/set_name/regulation/skip_images，本函式只填 id。
@@ -967,7 +1027,7 @@ def _scan_list_page(list_url, task_queue, found_ids, task_payload_template):
 
 
 def run_update_process(target_expansion_codes=None, target_regulations=None,
-                      update_japanese=True, skip_images=False,
+                      update_japanese=True, skip_images=True,
                       custom_url=None, custom_set_code=None, custom_set_name=None):
     """
     Args:
@@ -1040,30 +1100,37 @@ def run_update_process(target_expansion_codes=None, target_regulations=None,
             exp_name = exp_info_obj.get('name', 'Unknown Set')
             effective_code = exp_code
 
-        for reg in target_regulations:
-            if not UPDATE_STATE['running']:
-                break
-
-            log_update(f"正在掃描: [{effective_code}] {exp_name} (Regulation {reg})...")
-
-            # 偵測該組合的總頁數；自定義模式不覆寫 expansionCodes
-            scan_exp_code = None if use_custom_mode else exp_code
-            first_url = construct_filtered_url(base_list_url, 1, scan_exp_code, reg)
-            current_total_pages = _detect_total_pages(first_url)
-
-            task_template = {
-                'set_code': effective_code,
-                'set_name': exp_name,
-                'regulation': reg if reg is not None else 1,
-                'skip_images': skip_images,
-            }
-
-            # 開始翻頁
-            for page in range(1, current_total_pages + 1):
-                if not UPDATE_STATE['running']:
-                    break
-                list_url = construct_filtered_url(base_list_url, page, scan_exp_code, reg)
-                _scan_list_page(list_url, task_queue, found_ids_in_batch, task_template)
+        if not UPDATE_STATE['running']:
+            break
+        scan_exp_code = None if use_custom_mode else exp_code
+        log_update(f"對照官方列表: [{effective_code}] {exp_name}")
+        official_ids = collect_official_ids(base_list_url, scan_exp_code, target_regulations)
+        local_ids = _existing_card_ids(official_ids)
+        missing_ids = [card_id for card_id in official_ids if card_id not in local_ids]
+        log_update(
+            f"[{effective_code}] 官方 {len(official_ids)} 張，本地已有 {len(local_ids)} 張，缺 {len(missing_ids)} 張"
+        )
+        if not official_ids:
+            log_update(f"[{effective_code}] 官方列表係空，略過")
+            continue
+        if not missing_ids:
+            log_update(f"[{effective_code}] 數量齊，唔打詳情、唔下載圖")
+            continue
+        task_template = {
+            'set_code': effective_code,
+            'set_name': exp_name,
+            'regulation': (target_regulations[0] if target_regulations else 1) or 1,
+            'skip_images': skip_images,
+        }
+        for card_id in missing_ids:
+            if card_id in found_ids_in_batch:
+                continue
+            found_ids_in_batch.add(card_id)
+            payload = dict(task_template)
+            payload['id'] = card_id
+            task_queue.put(payload)
+            with update_lock:
+                UPDATE_STATE['total_tasks'] += 1
 
     log_update(f"掃描完成，共發現 {task_queue.qsize()} 張卡片需處理。")
 

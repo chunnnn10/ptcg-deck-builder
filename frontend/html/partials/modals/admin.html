@@ -155,9 +155,9 @@
                             <div class="mt-2">
                                 <label class="flex items-center text-white cursor-pointer select-none hover:bg-gray-700/50 p-1 rounded -ml-1 transition">
                                     <input type="checkbox" v-model="skipImages" class="w-4 h-4 mr-2 rounded bg-gray-700 border-gray-500 text-blue-500">
-                                    <span :class="skipImages ? 'text-blue-400 font-bold' : 'text-gray-400'">不更新/下載圖片 (急速模式)</span>
+                                    <span :class="skipImages ? 'text-blue-400 font-bold' : 'text-gray-400'">不下載圖片（預設）</span>
                                 </label>
-                                <p class="text-xs text-gray-500 mt-1 ml-7">勾選後將略過圖片下載檢查，由卡面文字更新為主。適合快速同步。</p>
+                                <p class="text-xs text-gray-500 mt-1 ml-7">預設只對官方張數同本地缺卡；有落差先拉詳情。取消勾選先會下載缺卡圖片。</p>
                             </div>
                         </div>
                     </div>
