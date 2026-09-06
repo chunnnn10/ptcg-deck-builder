@@ -30,6 +30,11 @@
                     <button @click="acknowledgeDataHealth" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-4 py-2 rounded-lg text-sm">稍後處理</button>
                     <button @click="loadDataHealth" class="text-blue-400 text-sm px-2">刷新進度</button>
                 </div>
+                <div v-if="dataHealthState.logs && dataHealthState.logs.length" class="bg-gray-950 border border-gray-800 rounded-lg p-3 max-h-40 overflow-y-auto custom-scroll text-xs text-gray-400 space-y-1">
+                    <div v-for="(log, idx) in dataHealthState.logs.slice().reverse().slice(0, 30)" :key="idx">
+                        <span class="text-gray-600">[[ log.ts ]]</span> [[ log.message ]]
+                    </div>
+                </div>
                 <div class="border-t border-gray-800 pt-3">
                     <div class="flex items-center justify-between mb-2">
                         <h3 class="text-sm font-bold text-gray-400">自動對卡紀錄</h3>
@@ -929,7 +934,7 @@
                             </div>
                             <div>
                                 <h3 class="text-lg font-bold text-white">牌組列表完整更新</h3>
-                                <p class="text-xs text-gray-400">重新爬取全部牌組列表（約 1980 頁），更新 imported_decks 資料</p>
+                                <p class="text-xs text-gray-400">先打開來源最後一頁確認真實頁數同末頁張數，再由第 1 頁掃到最後一頁</p>
                             </div>
                         </div>
 

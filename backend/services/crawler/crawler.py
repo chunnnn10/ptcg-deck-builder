@@ -300,7 +300,7 @@ def fetch_expansion_meta():
             cursor.execute(
                 """INSERT INTO expansion_sets (set_code, set_name, series)
                    VALUES (%s, %s, %s)
-                   ON CONFLICT (set_code) DO UPDATE
+                   ON CONFLICT ON CONSTRAINT expansion_sets_pkey DO UPDATE
                    SET set_name = EXCLUDED.set_name,
                        series = EXCLUDED.series,
                        last_updated = CURRENT_TIMESTAMP""",
@@ -309,6 +309,10 @@ def fetch_expansion_meta():
             count += 1
         except Exception as e:
             log_update(f"寫入擴充包 {code} 失敗: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     conn.commit()
     conn.close()

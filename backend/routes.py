@@ -2400,7 +2400,7 @@ def start_daily_update():
 @main_bp.route('/api/admin/deck-update/full', methods=['POST'])
 @admin_required
 def start_full_update():
-    """啟動完整牌組列表更新（掃描全部 ~1980 頁）"""
+    """啟動完整牌組列表更新（先探測來源最後一頁，再由第 1 頁掃到最後一頁）"""
     from services.deck_importer.deck_updater import run_full_update, get_update_status
     data = request.json or {}
     bot_count = int(data.get('bot_count', 5))

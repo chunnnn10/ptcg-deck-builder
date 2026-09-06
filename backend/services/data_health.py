@@ -139,10 +139,29 @@ def scan_database(trigger: str = "manual") -> dict:
         )
         jp_pages = 0
         jp_source_est = 0
+        jp_missing_newest = []
+        jp_page1_count = 0
+        jp_last_count = 0
         try:
-            from services.deck_importer.deck_updater import detect_total_pages
-            jp_pages = int(detect_total_pages("DJ") or 0)
-            jp_source_est = jp_pages * 20
+            from services.deck_importer.deck_updater import count_source_decks, BASE_URL, _fetch_with_retry, parse_deck_articles
+            snapshot = count_source_decks("DJ")
+            jp_pages = int(snapshot.get("pages") or 0)
+            jp_page1_count = int(snapshot.get("per_page") or 0)
+            jp_last_count = int(snapshot.get("last_page_count") or 0)
+            jp_source_est = int(snapshot.get("total") or 0)
+            page1_html = _fetch_with_retry("GET", f"{BASE_URL}/DJ?path=DJ&page=1")
+            page1_decks = parse_deck_articles(page1_html.text) if page1_html else []
+            newest_codes = [item.get("code") for item in page1_decks if item.get("code")]
+            if newest_codes:
+                cursor.execute(
+                    "SELECT deck_code FROM imported_decks WHERE deck_code = ANY(%s)",
+                    (newest_codes,),
+                )
+                have = {
+                    row["deck_code"] if isinstance(row, dict) else row[0]
+                    for row in cursor.fetchall()
+                }
+                jp_missing_newest = [code for code in newest_codes if code not in have]
         except Exception as exc:
             _log(f"讀取日文牌組來源頁數失敗：{exc}")
 
@@ -214,6 +233,9 @@ def scan_database(trigger: str = "manual") -> dict:
             "jp_deck_local": jp_deck_local,
             "jp_source_pages": jp_pages,
             "jp_source_est": jp_source_est,
+            "jp_page1_count": jp_page1_count,
+            "jp_last_count": jp_last_count,
+            "jp_missing_newest": len(jp_missing_newest),
             "empty_imported_decks": empty_decks,
             "limitless_deck_total": limitless_deck_total,
             "limitless_tournament_total": limitless_tournament_total,
@@ -230,10 +252,14 @@ def scan_database(trigger: str = "manual") -> dict:
         }
 
         issues = []
-        jp_lag = max(0, jp_source_est - jp_deck_local) if jp_source_est else 0
-        if jp_source_est and jp_deck_local < int(jp_source_est * 0.9):
+        jp_lag = max(0, (jp_source_est - jp_deck_local) if jp_source_est else 0)
+        if jp_missing_newest:
             issues.append(
-                f"日文牌組庫落後來源站：本地 {jp_deck_local} 副，來源約 {jp_source_est} 副（{jp_pages} 頁）"
+                f"日文來源最新頁有 {len(jp_missing_newest)} 副未入庫（例如 {', '.join(jp_missing_newest[:5])}）"
+            )
+        if jp_source_est and jp_deck_local < jp_source_est:
+            issues.append(
+                f"日文牌組庫少於來源：本地 {jp_deck_local} 副，來源 {jp_source_est} 副（{jp_pages} 頁 × 首頁 {jp_page1_count} + 末頁 {jp_last_count}）"
             )
         if empty_decks:
             issues.append(f"日文牌組缺詳情／空牌表：{empty_decks} / {jp_deck_total} 副")
@@ -387,6 +413,84 @@ def _mark_repair_started(report_id: int | None) -> None:
         conn.close()
 
 
+def _sync_jp_newest_pages(max_pages: int = 60) -> int:
+    from services.deck_importer.deck_updater import crawl_list_page, detect_total_pages
+    total_pages = min(max_pages, int(detect_total_pages("DJ") or max_pages))
+    added = 0
+    conn = database.get_db_connection()
+    if not conn:
+        return 0
+    try:
+        cursor = conn.cursor()
+        for page in range(1, total_pages + 1):
+            HEALTH_STATE["progress"] = 20 + min(30, page)
+            _log(f"同步日文列表第 {page} 頁")
+            before = _safe_count(cursor, "SELECT COUNT(*) FROM imported_decks")
+            crawl_list_page("DJ", page)
+            after = _safe_count(cursor, "SELECT COUNT(*) FROM imported_decks")
+            gained = max(0, after - before)
+            added += gained
+            if page >= 3 and gained == 0:
+                _log(f"第 {page} 頁已無新日文牌組，停止往後掃")
+                break
+        return added
+    finally:
+        conn.close()
+
+
+def _fill_limitless_empty_decks(limit: int = 80) -> tuple[int, int]:
+    conn = database.get_db_connection()
+    if not conn:
+        return 0, 0
+    try:
+        cursor = conn.cursor()
+        rows = _safe_rows(
+            cursor,
+            """
+            SELECT d.deck_id
+            FROM limitless_decks d
+            WHERE NOT EXISTS (
+                SELECT 1 FROM limitless_deck_cards c WHERE c.deck_id = d.deck_id
+            )
+            ORDER BY d.updated_at DESC NULLS LAST
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        if not rows:
+            rows = _safe_rows(
+                cursor,
+                """
+                SELECT d.deck_id
+                FROM limitless_decks d
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM limitless_deck_cards c WHERE c.deck_id = d.deck_id
+                )
+                LIMIT %s
+                """,
+                (limit,),
+            )
+    finally:
+        conn.close()
+
+    if not rows:
+        return 0, 0
+    from services.limitless_decks.updater import update_deck
+    filled = 0
+    failed = 0
+    for index, row in enumerate(rows, start=1):
+        deck_id = row.get("deck_id")
+        HEALTH_STATE["progress"] = 55 + min(20, index)
+        _log(f"補 Limitless 牌表 {index}/{len(rows)}：{deck_id}")
+        try:
+            update_deck(deck_id)
+            filled += 1
+        except Exception as exc:
+            failed += 1
+            _log(f"{deck_id} 失敗：{exc}")
+    return filled, failed
+
+
 def start_repair(report: dict | None = None) -> tuple[bool, str]:
     if HEALTH_STATE.get("repairing") or HEALTH_STATE.get("running"):
         return False, "已有健康檢查或修復任務進行中"
@@ -409,29 +513,24 @@ def _run_repair(report: dict) -> None:
 
     try:
         HEALTH_STATE["progress"] = 20
-        _log("同步日文／國際牌組庫（對來源站落差）")
-        from services.deck_importer.deck_updater import run_daily_update, run_detail_backfill
+        _log("啟動牌組列表完整更新（探測最後一頁後由第 1 頁掃到尾）")
+        from services.deck_importer.deck_updater import run_full_update, get_update_status
         try:
-            run_daily_update(pages_per_source={"DJ": 40, "DE": 8})
-        except TypeError:
-            run_daily_update()
+            ok, message = run_full_update()
+            _log(str(message))
+            if ok:
+                for _ in range(240):
+                    status = get_update_status() or {}
+                    HEALTH_STATE["message"] = status.get("message") or "牌組完整更新進行中"
+                    if not status.get("running"):
+                        break
+                    time.sleep(5)
         except Exception as exc:
-            _log(f"牌組庫更新略過：{exc}")
-        if counts.get("empty_imported_decks"):
-            try:
-                run_detail_backfill()
-            except TypeError:
-                run_detail_backfill(worker_count=3)
-            except Exception as exc:
-                _log(f"牌組詳情補齊略過：{exc}")
+            _log(f"牌組完整更新失敗：{exc}")
 
         HEALTH_STATE["progress"] = 70
-        _log("同步 Limitless 比賽／牌組索引")
-        try:
-            from services.limitless_decks.updater import start_update
-            start_update({"mode": "auto-daily"})
-        except Exception as exc:
-            _log(f"Limitless 更新略過：{exc}")
+        filled, failed = _fill_limitless_empty_decks(limit=80)
+        _log(f"Limitless 空牌表補完：成功 {filled}，失敗 {failed}")
 
         HEALTH_STATE["progress"] = 95
         scan_database(trigger="post_repair")

@@ -302,17 +302,70 @@ def parse_deck_articles(html_content):
     return decks
 
 
+def _count_decks_on_page(source_path, page_num):
+    """打開指定列表頁，回傳該頁實際牌組數。請求失敗回傳 None。"""
+    resp = _fetch_with_retry('GET', f"{BASE_URL}/{source_path}?path={source_path}&page={page_num}")
+    if not resp:
+        return None
+    return len(parse_deck_articles(resp.text))
+
+
 def detect_total_pages(source_path):
-    """動態偵測某來源（DJ/DE）的總頁數，失敗回退 fallback 常數。"""
+    """用真實列表頁探測最後一頁，唔好信分頁器上寫死嘅 1980。
+
+    1. 先讀第 1 頁 HTML 入面出現過嘅最大 page=
+    2. 打開嗰頁：有牌就繼續 +1 直到空頁
+    3. 冇牌就往回減直到有牌
+    """
+    hinted = 1
     try:
         resp = _fetch_with_retry('GET', f"{BASE_URL}/{source_path}?path={source_path}&page=1")
         if resp:
             nums = [int(m) for m in re.findall(r'page=(\d+)', resp.text)]
             if nums:
-                return max(nums)
+                hinted = max(nums)
     except Exception:
-        pass
-    return FALLBACK_PAGES.get(source_path, 2060)
+        hinted = FALLBACK_PAGES.get(source_path, 1)
+
+    hinted = max(1, hinted)
+    count = _count_decks_on_page(source_path, hinted)
+    if count and count > 0:
+        last = hinted
+        page = hinted + 1
+        while page <= hinted + 400:
+            nxt = _count_decks_on_page(source_path, page)
+            if not nxt:
+                break
+            last = page
+            page += 1
+        return last
+
+    page = hinted - 1
+    while page >= 1:
+        nxt = _count_decks_on_page(source_path, page)
+        if nxt:
+            return page
+        page -= 1
+        if hinted - page > 400:
+            break
+    return FALLBACK_PAGES.get(source_path, hinted)
+
+
+def count_source_decks(source_path):
+    """準確來源總數 = (最後頁-1)*第1頁數量 + 最後頁數量。"""
+    total_pages = detect_total_pages(source_path)
+    first = _count_decks_on_page(source_path, 1) or 0
+    last = _count_decks_on_page(source_path, total_pages) or 0 if total_pages else 0
+    if total_pages <= 1:
+        exact = last or first
+    else:
+        exact = first * (total_pages - 1) + last
+    return {
+        "pages": total_pages,
+        "per_page": first,
+        "last_page_count": last,
+        "total": exact,
+    }
 
 
 # ── 列表頁 UPSERT（輕量） ──
