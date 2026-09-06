@@ -405,13 +405,6 @@ _SECTION_TO_CARD_TYPE = {
 }
 
 _TW_CARD_ORDER_SQL = """
-            CASE
-                WHEN UPPER(COALESCE(set_code, '')) ~ '^(AC|SD)' THEN 4
-                WHEN UPPER(COALESCE(set_code, '')) LIKE '%-P' THEN 3
-                WHEN UPPER(COALESCE(set_name, '')) LIKE '%起始%' OR UPPER(COALESCE(set_name, '')) LIKE '%牌組%' THEN 3
-                WHEN UPPER(COALESCE(set_code, '')) ~ '^(SVI|SV[0-9]|M[0-9]|TWM|TEF|PAR|OBF|PAL|SVi)' THEN 0
-                ELSE 1
-            END,
             CASE WHEN COALESCE(image_file, '') <> '' THEN 0 ELSE 1 END,
             CASE WHEN COALESCE(skills_json::text, '') NOT IN ('', '[]') THEN 0 ELSE 1 END,
             CASE WHEN card_id ~ '^[0-9]+$' THEN card_id::integer ELSE 0 END DESC,
@@ -809,44 +802,25 @@ def find_local_tw_card_row_by_name(cursor, card_name: str | None, section: str |
         row = cursor.fetchone()
         if row:
             return row
-    # 牌庫載入路徑只查本地庫，避免同步打 TCGDex 拖到十幾秒
-    return None
-
-
-def _is_reprint_priority_set(row: dict | None) -> bool:
-    if not row:
-        return False
-    set_code = str(row.get("set_code") or "").upper()
-    set_name = str(row.get("set_name") or "")
-    return bool(
-        set_code.startswith("AC")
-        or set_code.startswith("SD")
-        or set_code.endswith("-P")
-        or "起始" in set_name
-        or "牌組" in set_name
-    )
+    return _find_tw_row_via_tcgdex_name(cursor, raw_name, card_type)
 
 
 def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:
     card = card or {}
-    set_code = card.get("set_code") or card.get("jp_set_code")
-    set_number = card.get("set_number") or card.get("jp_set_number")
-    card_name = card.get("card_name") or card.get("jp_card_name") or card.get("jp_name")
-
     tw_id = card.get("local_tw_card_id") or card.get("tw_card_id")
-    bound = None
     if tw_id:
         cursor.execute("SELECT * FROM cards WHERE card_id = %s", (tw_id,))
-        bound = cursor.fetchone()
-        if bound and not _is_reprint_priority_set(bound):
-            return bound
-
-    row = find_local_tw_card_row(cursor, set_code, set_number)
-    if not row:
-        row = find_local_tw_card_row_by_name(cursor, card_name, card.get("section"))
-    if row and (not bound or _is_reprint_priority_set(bound)):
+        row = cursor.fetchone()
+        if row:
+            return row
+    row = find_local_tw_card_row(cursor, card.get("set_code") or card.get("jp_set_code"), card.get("set_number") or card.get("jp_set_number"))
+    if row:
         return row
-    return bound or row
+    return find_local_tw_card_row_by_name(
+        cursor,
+        card.get("card_name") or card.get("jp_card_name") or card.get("jp_name"),
+        card.get("section"),
+    )
 
 
 def persist_local_tw_binding(cursor, card: dict | None, tw_card_id: str | None) -> None:
@@ -861,6 +835,7 @@ def persist_local_tw_binding(cursor, card: dict | None, tw_card_id: str | None) 
         UPDATE limitless_deck_cards
         SET local_tw_card_id = %s
         WHERE id = %s
+          AND (local_tw_card_id IS NULL OR local_tw_card_id = '')
         """,
         (tw_card_id, row_id),
     )
@@ -936,21 +911,17 @@ def save_decklist(cursor, deck_id: str, parsed: dict) -> None:
     for card in parsed.get("cards", []):
         local_jp_card_id = None
         local_tw_card_id = None
-        try:
-            if language == "jp":
-                local_jp_card_id = find_local_jp_card(
-                    cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"),
-                )
-                local_tw_card_id = find_local_tw_card(
-                    cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
-                )
-            else:
-                local_tw_card_id = find_local_tw_card(
-                    cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
-                )
-        except Exception:
-            local_jp_card_id = local_jp_card_id
-            local_tw_card_id = None
+        if language == "jp":
+            local_jp_card_id = find_local_jp_card(
+                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"),
+            )
+            local_tw_card_id = find_local_tw_card(
+                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
+            )
+        else:
+            local_tw_card_id = find_local_tw_card(
+                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
+            )
         cursor.execute(
             """
             INSERT INTO limitless_deck_cards (
@@ -1412,10 +1383,7 @@ def _copy_limitless_base(card: dict) -> dict:
 
 
 def _tw_detail_card(cursor, jp_card: dict) -> dict:
-    try:
-        tw_card, candidates = _tw_card_from_limitless_card(cursor, jp_card)
-    except Exception:
-        tw_card, candidates = None, []
+    tw_card, candidates = _tw_card_from_limitless_card(cursor, jp_card)
     if not tw_card:
         energy_row = _find_basic_energy_tw_row(cursor, jp_card.get("card_name"))
         tw_card = _card_payload_from_row(energy_row, "images") if energy_row else None
@@ -1592,11 +1560,7 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
     if not detail.get("success"):
         return detail
     deck = detail["deck"]
-    tw_bucket = (detail.get("cards") or {}).get("tw") or {}
-    if isinstance(tw_bucket, list):
-        tw_cards = tw_bucket
-    else:
-        tw_cards = tw_bucket.get(mode) or tw_bucket.get("normal") or []
+    tw_cards = detail["cards"]["tw"].get(mode, [])
     imported = []
     missing = []
     conn = database.get_db_connection()
@@ -1605,33 +1569,20 @@ def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dic
     try:
         cursor = conn.cursor()
         for card in tw_cards:
-            try:
-                resolved = None
-                if not card.get("missing") and card.get("card_id"):
-                    resolved = card
-                else:
-                    row = resolve_local_tw_card_row(cursor, card)
-                    resolved = _card_payload_from_row(row, "images") if row else None
-                if resolved and resolved.get("card_id"):
-                    count = int(card.get("count") or 0)
-                    for _ in range(max(count, 0)):
-                        item = dict(resolved)
-                        item["name"] = item.get("name") or item.get("card_name")
-                        item["card_name"] = item.get("card_name") or item.get("name")
-                        try:
-                            item["logic"] = database.get_card_logic(item.get("card_id"))
-                        except Exception:
-                            item["logic"] = None
-                        imported.append(item)
-                else:
-                    missing.append({
-                        "count": card.get("count"),
-                        "jp_name": card.get("jp_card_name") or card.get("card_name"),
-                        "jp_code": f"{card.get('jp_set_code') or card.get('set_code')} {card.get('jp_set_number') or card.get('set_number')}",
-                        "section": card.get("section"),
-                        "limitless_image_url": card.get("limitless_image_url") or card.get("image_url") or "",
-                    })
-            except Exception:
+            resolved = None
+            if not card.get("missing") and card.get("card_id"):
+                resolved = card
+            else:
+                resolved = _find_tw_by_tcgdex(cursor, card)
+            if resolved and resolved.get("card_id"):
+                count = int(card.get("count") or 0)
+                for _ in range(count):
+                    item = dict(resolved)
+                    item["name"] = item.get("name") or item.get("card_name")
+                    item["card_name"] = item.get("card_name") or item.get("name")
+                    item["logic"] = database.get_card_logic(item.get("card_id"))
+                    imported.append(item)
+            else:
                 missing.append({
                     "count": card.get("count"),
                     "jp_name": card.get("jp_card_name") or card.get("card_name"),
@@ -1848,39 +1799,18 @@ def get_deck_detail(deck_id: str) -> dict:
             card = dict(row)
             jp_row = {"image_file": card.pop("jp_image_file", None)}
             tw_row = {"image_file": card.pop("tw_image_file", None)}
-            language = card.get("language") or "jp"
-            mode = card.get("mode") or "normal"
-            if language not in cards:
-                cards[language] = {"normal": [], "bling": []}
-            cards[language].setdefault(mode, [])
-            if language == "jp":
+            if card["language"] == "jp":
                 card["image_url"] = _image_url_for(jp_row, "images_jp") or card.get("limitless_image_url") or ""
-            elif language == "en":
+            elif card["language"] == "en":
                 card["image_url"] = card.get("limitless_image_url") or _image_url_for(tw_row, "images")
             else:
                 card["image_url"] = _image_url_for(tw_row, "images") or card.get("limitless_image_url") or ""
-            cards[language][mode].append(card)
-            if language == "jp":
+            cards[card["language"]][card["mode"]].append(card)
+            if card["language"] == "jp":
                 jp_rows.append(card)
 
         for jp_card in jp_rows:
-            mode = jp_card.get("mode") or "normal"
-            cards["tw"].setdefault(mode, [])
-            try:
-                cards["tw"][mode].append(_tw_detail_card(cursor, jp_card))
-            except Exception as exc:
-                log_event("error", deck_id, f"TW resolve failed line {jp_card.get('line_order')}", str(exc))
-                stub = dict(jp_card)
-                stub.update({
-                    "language": "tw",
-                    "missing": True,
-                    "card_id": None,
-                    "local_tw_card_id": None,
-                    "jp_card_name": jp_card.get("card_name"),
-                    "jp_set_code": jp_card.get("set_code"),
-                    "jp_set_number": jp_card.get("set_number"),
-                })
-                cards["tw"][mode].append(stub)
+            cards["tw"][jp_card["mode"]].append(_tw_detail_card(cursor, jp_card))
         conn.commit()
 
         cursor.execute(
