@@ -310,7 +310,13 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ language: "tw", mode: limitlessMode.value })
             });
-            const data = await res.json();
+            const raw = await res.text();
+            let data = {};
+            try {
+                data = JSON.parse(raw);
+            } catch (parseErr) {
+                throw new Error(`導入失敗 HTTP ${res.status}`);
+            }
             if (data.success) {
                 const title = data.name || selectedLimitlessDeck.value.deck.title || "LimitLess Deck";
                 openDeckInTab({

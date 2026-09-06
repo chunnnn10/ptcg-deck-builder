@@ -976,17 +976,21 @@ def save_decklist(cursor, deck_id: str, parsed: dict) -> None:
     for card in parsed.get("cards", []):
         local_jp_card_id = None
         local_tw_card_id = None
-        if language == "jp":
-            local_jp_card_id = find_local_jp_card(
-                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"),
-            )
-            local_tw_card_id = find_local_tw_card(
-                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
-            )
-        else:
-            local_tw_card_id = find_local_tw_card(
-                cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
-            )
+        try:
+            if language == "jp":
+                local_jp_card_id = find_local_jp_card(
+                    cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"),
+                )
+                local_tw_card_id = find_local_tw_card(
+                    cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
+                )
+            else:
+                local_tw_card_id = find_local_tw_card(
+                    cursor, card.get("set_code"), card.get("set_number"), card.get("card_name"), card.get("section"),
+                )
+        except Exception:
+            local_jp_card_id = local_jp_card_id
+            local_tw_card_id = None
         cursor.execute(
             """
             INSERT INTO limitless_deck_cards (

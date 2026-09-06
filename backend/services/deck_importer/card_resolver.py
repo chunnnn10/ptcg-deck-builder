@@ -18,6 +18,47 @@ DEFAULT_HEADERS = {
 }
 SIMILARITY_THRESHOLD = 0.85
 
+JP_TW_NAME_MAP = {
+    "ポケモンセンターのお姉さん": "寶可夢中心的大姐姐",
+    "基本草エネルギー": "基本草能量",
+    "基本炎エネルギー": "基本火能量",
+    "基本水エネルギー": "基本水能量",
+    "基本雷エネルギー": "基本雷能量",
+    "基本超エネルギー": "基本超能量",
+    "基本闘エネルギー": "基本鬥能量",
+    "基本悪エネルギー": "基本惡能量",
+    "基本鋼エネルギー": "基本鋼能量",
+    "基本妖エネルギー": "基本妖能量",
+    "基本エネルギー": "基本能量",
+}
+
+ENERGY_NAME_MAP = {
+    "基本草エネルギー": "基本草能量",
+    "基本炎エネルギー": "基本火能量",
+    "基本水エネルギー": "基本水能量",
+    "基本雷エネルギー": "基本雷能量",
+    "基本超エネルギー": "基本超能量",
+    "基本闘エネルギー": "基本鬥能量",
+    "基本悪エネルギー": "基本惡能量",
+    "基本鋼エネルギー": "基本鋼能量",
+    "草エネルギー": "基本草能量",
+    "炎エネルギー": "基本火能量",
+    "水エネルギー": "基本水能量",
+    "雷エネルギー": "基本雷能量",
+    "超エネルギー": "基本超能量",
+    "闘エネルギー": "基本鬥能量",
+    "悪エネルギー": "基本惡能量",
+    "鋼エネルギー": "基本鋼能量",
+    "基本草能量": "基本草能量",
+    "基本火能量": "基本火能量",
+    "基本水能量": "基本水能量",
+    "基本雷能量": "基本雷能量",
+    "基本超能量": "基本超能量",
+    "基本鬥能量": "基本鬥能量",
+    "基本惡能量": "基本惡能量",
+    "基本鋼能量": "基本鋼能量",
+}
+
 _MAPPING_COLUMNS_READY = False
 
 
@@ -195,25 +236,119 @@ def _fetch_mapping(cursor, variant_id):
 
 
 def _find_by_set_number(cursor, set_code, set_no):
-    if not set_code or not set_no:
+    if not set_no:
         return None
     candidates = _set_number_candidates(set_no)
     if not candidates:
         return None
-    cursor.execute("""
+    set_codes = [code for code in {
+        str(set_code or "").strip(),
+        str(set_code or "").strip().upper(),
+        str(set_no or "").split("/")[-1].strip() if "/" in str(set_no or "") else "",
+    } if code]
+    if set_codes:
+        cursor.execute("""
+            SELECT *
+            FROM cards
+            WHERE UPPER(set_code) = ANY(%s)
+              AND (
+                  set_number = ANY(%s)
+                  OR split_part(set_number, '/', 1) = ANY(%s)
+              )
+            ORDER BY
+              CASE WHEN image_file IS NULL OR image_file = '' THEN 1 ELSE 0 END,
+              CASE WHEN skills_json IS NULL THEN 1 ELSE 0 END,
+              card_id DESC
+            LIMIT 1
+        """, ([code.upper() for code in set_codes], candidates, candidates))
+        row = cursor.fetchone()
+        if row:
+            return row
+    return None
+
+
+def _candidate_names(ptcgtw_card):
+    names = [
+        ptcgtw_card.get("name_tw"),
+        ptcgtw_card.get("name_jp"),
+        ptcgtw_card.get("name"),
+        JP_TW_NAME_MAP.get(ptcgtw_card.get("name_jp") or ""),
+        JP_TW_NAME_MAP.get(ptcgtw_card.get("name_tw") or ""),
+        ENERGY_NAME_MAP.get(ptcgtw_card.get("name_jp") or ""),
+        ENERGY_NAME_MAP.get(ptcgtw_card.get("name_tw") or ""),
+    ]
+    seen = []
+    for name in names:
+        text = str(name or "").strip()
+        if text and text not in seen:
+            seen.append(text)
+    return seen
+
+
+def _find_energy_by_name(cursor, ptcgtw_card):
+    names = _candidate_names(ptcgtw_card)
+    raw = " ".join(names)
+    if "エネルギー" not in raw and "能量" not in raw:
+        return None
+    cursor.execute(
+        """
         SELECT *
         FROM cards
-        WHERE set_code = %s
+        WHERE card_type = 'Energy'
           AND (
-              set_number = ANY(%s)
-              OR split_part(set_number, '/', 1) = ANY(%s)
+                name = ANY(%s)
+             OR japanese_name = ANY(%s)
+             OR name LIKE '基本%能量'
           )
+        ORDER BY
+          CASE WHEN name = ANY(%s) THEN 0 ELSE 1 END,
+          CASE WHEN image_file IS NULL OR image_file = '' THEN 1 ELSE 0 END,
+          card_id DESC
+        LIMIT 1
+        """,
+        (names, names, names),
+    )
+    row = cursor.fetchone()
+    if row:
+        return row
+    for name in names:
+        key = name.replace("基本", "")
+        if "能量" in name or "エネルギー" in name:
+            cursor.execute(
+                """
+                SELECT *
+                FROM cards
+                WHERE card_type = 'Energy'
+                  AND (name LIKE %s OR japanese_name LIKE %s)
+                ORDER BY CASE WHEN image_file IS NULL OR image_file = '' THEN 1 ELSE 0 END
+                LIMIT 1
+                """,
+                (f"%{name}%", f"%{name}%"),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row
+    return None
+
+
+def _find_exact_name(cursor, ptcgtw_card):
+    names = _candidate_names(ptcgtw_card)
+    if not names:
+        return None
+    cursor.execute(
+        """
+        SELECT *
+        FROM cards
+        WHERE name = ANY(%s)
+           OR japanese_name = ANY(%s)
         ORDER BY
           CASE WHEN image_file IS NULL OR image_file = '' THEN 1 ELSE 0 END,
           CASE WHEN skills_json IS NULL THEN 1 ELSE 0 END,
           card_id DESC
         LIMIT 1
-    """, (set_code, candidates, candidates))
+        """,
+        (names, names),
+    )
     return cursor.fetchone()
 
 
@@ -321,7 +456,7 @@ def resolve_variant(cursor, variant_id, session=None, write_mapping=True):
 
     set_match = _find_by_set_number(
         cursor,
-        (ptcgtw_card.get("set_name") or "").strip(),
+        (ptcgtw_card.get("set_code") or ptcgtw_card.get("set_name") or "").strip(),
         (ptcgtw_card.get("set_no") or "").strip(),
     )
     if set_match:
@@ -343,6 +478,46 @@ def resolve_variant(cursor, variant_id, session=None, write_mapping=True):
             "local_card_id": set_match["card_id"],
             "card_row": set_match,
             "source": "set_number_fallback",
+            "ptcgtw_card": ptcgtw_card,
+            "missing": None,
+        }
+
+    energy_match = _find_energy_by_name(cursor, ptcgtw_card)
+    if energy_match:
+        if write_mapping:
+            upsert_mapping(
+                cursor,
+                variant_id,
+                energy_match["card_id"],
+                confidence="HIGH",
+                score=100,
+                source="energy_name",
+                detail={"name_jp": ptcgtw_card.get("name_jp"), "name_tw": ptcgtw_card.get("name_tw")},
+            )
+        return {
+            "local_card_id": energy_match["card_id"],
+            "card_row": energy_match,
+            "source": "energy_name",
+            "ptcgtw_card": ptcgtw_card,
+            "missing": None,
+        }
+
+    exact_match = _find_exact_name(cursor, ptcgtw_card)
+    if exact_match:
+        if write_mapping:
+            upsert_mapping(
+                cursor,
+                variant_id,
+                exact_match["card_id"],
+                confidence="HIGH",
+                score=100,
+                source="exact_name",
+                detail={"name_jp": ptcgtw_card.get("name_jp"), "name_tw": ptcgtw_card.get("name_tw")},
+            )
+        return {
+            "local_card_id": exact_match["card_id"],
+            "card_row": exact_match,
+            "source": "exact_name",
             "ptcgtw_card": ptcgtw_card,
             "missing": None,
         }

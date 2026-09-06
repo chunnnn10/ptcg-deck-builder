@@ -301,19 +301,32 @@ def update_deck(deck_id: str, include_bling: bool = False, client: LimitlessClie
         conn.commit()
 
         parsed_count = 0
+        last_error = None
         for mode, mode_param in modes:
             for language in ("jp", "en"):
                 params = {"lang": language}
                 if mode_param:
                     params["mode"] = mode_param
-                html = client.get_text(base_url, params=params)
-                parsed = parser.parse_decklist(html, language=language, mode=mode)
+                try:
+                    html = client.get_text(base_url, params=params)
+                    parsed = parser.parse_decklist(html, language=language, mode=mode)
+                except Exception as exc:
+                    last_error = exc
+                    log_event("error", deck_id, f"Parse failed {language} {mode}", str(exc))
+                    continue
                 if not parsed.get("cards"):
-                    raise RuntimeError(f"No cards parsed for {deck_id} {language} {mode}")
+                    last_error = RuntimeError(f"No cards parsed for {deck_id} {language} {mode}")
+                    log_event("warning", deck_id, str(last_error))
+                    continue
                 save_decklist(cursor, deck_id, parsed)
                 parsed_count += len(parsed.get("cards", []))
-            create_mappings_for_deck(cursor, deck_id, mode)
+            try:
+                create_mappings_for_deck(cursor, deck_id, mode)
+            except Exception as exc:
+                log_event("warning", deck_id, "Mapping skipped", str(exc))
         conn.commit()
+        if parsed_count == 0 and last_error:
+            raise last_error
         return {"deck_id": deck_id, "cards": parsed_count}
     except Exception:
         conn.rollback()

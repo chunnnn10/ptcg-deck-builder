@@ -171,18 +171,19 @@ def parse_tournament_detail(html: str, url: str, source_region: str | None = Non
     if not decks:
         for row in soup.select("table.data-table tr"):
             cells = row.select("td")
-            if len(cells) < 4:
+            if len(cells) < 2:
                 continue
             link = row.select_one('a[href*="/decks/list"]')
             deck_id = deck_id_from_url(link.get("href") if link else None)
             if not deck_id:
                 continue
             tags = [img.get("alt") for img in row.select("img.pokemon") if img.get("alt")]
-            player_link = cells[1].select_one("a")
+            player_cell = cells[1] if len(cells) > 1 else cells[0]
+            player_link = player_cell.select_one("a")
             decks.append({
                 "deck_id": deck_id,
                 "tournament_id": tournament_id,
-                "player_name": _clean_text(player_link.get_text(" ", strip=True) if player_link else cells[1].get_text(" ", strip=True)),
+                "player_name": _clean_text(player_link.get_text(" ", strip=True) if player_link else player_cell.get_text(" ", strip=True)),
                 "placement": _int_or_none(cells[0].get_text(" ", strip=True)),
                 "archetype": " ".join(tags),
                 "title": " ".join(tags),

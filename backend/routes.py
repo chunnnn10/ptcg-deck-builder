@@ -2672,11 +2672,14 @@ def import_limitless_deck(deck_id):
     from services.limitless_decks.repository import import_deck
 
     data = request.json or {}
-    result = import_deck(
-        deck_id,
-        language=data.get('language', 'tw'),
-        mode=data.get('mode', 'normal'),
-    )
+    try:
+        result = import_deck(
+            deck_id,
+            language=data.get('language', 'tw'),
+            mode=data.get('mode', 'normal'),
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': f'導入失敗：{exc}'}), 500
     return jsonify(result), 200 if result.get('success') else 400
 
 
