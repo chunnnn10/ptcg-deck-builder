@@ -858,8 +858,8 @@ def resolve_local_tw_card_row(cursor, card: dict | None) -> dict | None:
         row = find_local_tw_card_row_by_name(cursor, card_name, card.get("section"))
         method = "name"
     if not row and key and not stored:
-        row = _find_tw_row_via_tcgdex_name(cursor, card_name, _preferred_card_type(card.get("section"), card_name or ""))
-        method = "tcgdex"
+        # 導入熱路徑唔打 TCGDex，避免一張失敗拖死成副牌
+        method = "miss"
     if row and (not bound or _is_reprint_priority_set(bound)):
         if key:
             upsert_binding(
@@ -1452,7 +1452,10 @@ def _copy_limitless_base(card: dict) -> dict:
 
 
 def _tw_detail_card(cursor, jp_card: dict) -> dict:
-    tw_card, candidates = _tw_card_from_limitless_card(cursor, jp_card)
+    try:
+        tw_card, candidates = _tw_card_from_limitless_card(cursor, jp_card)
+    except Exception:
+        tw_card, candidates = None, []
     if not tw_card:
         energy_row = _find_basic_energy_tw_row(cursor, jp_card.get("card_name"))
         tw_card = _card_payload_from_row(energy_row, "images") if energy_row else None
@@ -1622,7 +1625,10 @@ def _find_tw_by_tcgdex(cursor, jp_card: dict) -> dict | None:
 def import_deck(deck_id: str, language: str = "tw", mode: str = "normal") -> dict:
     if language != "tw":
         return {"success": False, "error": "Only Traditional Chinese import is supported"}
-    detail = get_deck_detail(deck_id)
+    try:
+        detail = get_deck_detail(deck_id)
+    except Exception as exc:
+        return {"success": False, "error": f"讀取牌表失敗：{exc}"}
     if not detail.get("success"):
         return detail
     deck = detail["deck"]
@@ -1865,18 +1871,39 @@ def get_deck_detail(deck_id: str) -> dict:
             card = dict(row)
             jp_row = {"image_file": card.pop("jp_image_file", None)}
             tw_row = {"image_file": card.pop("tw_image_file", None)}
-            if card["language"] == "jp":
+            language = card.get("language") or "jp"
+            mode = card.get("mode") or "normal"
+            if language not in cards:
+                cards[language] = {"normal": [], "bling": []}
+            cards[language].setdefault(mode, [])
+            if language == "jp":
                 card["image_url"] = _image_url_for(jp_row, "images_jp") or card.get("limitless_image_url") or ""
-            elif card["language"] == "en":
+            elif language == "en":
                 card["image_url"] = card.get("limitless_image_url") or _image_url_for(tw_row, "images")
             else:
                 card["image_url"] = _image_url_for(tw_row, "images") or card.get("limitless_image_url") or ""
-            cards[card["language"]][card["mode"]].append(card)
-            if card["language"] == "jp":
+            cards[language][mode].append(card)
+            if language == "jp":
                 jp_rows.append(card)
 
         for jp_card in jp_rows:
-            cards["tw"][jp_card["mode"]].append(_tw_detail_card(cursor, jp_card))
+            mode = jp_card.get("mode") or "normal"
+            cards["tw"].setdefault(mode, [])
+            try:
+                cards["tw"][mode].append(_tw_detail_card(cursor, jp_card))
+            except Exception as exc:
+                log_event("error", deck_id, f"TW resolve failed line {jp_card.get('line_order')}", str(exc))
+                stub = dict(jp_card)
+                stub.update({
+                    "language": "tw",
+                    "missing": True,
+                    "card_id": None,
+                    "local_tw_card_id": None,
+                    "jp_card_name": jp_card.get("card_name"),
+                    "jp_set_code": jp_card.get("set_code"),
+                    "jp_set_number": jp_card.get("set_number"),
+                })
+                cards["tw"][mode].append(stub)
         conn.commit()
 
         cursor.execute(

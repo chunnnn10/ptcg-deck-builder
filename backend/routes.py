@@ -2768,46 +2768,107 @@ def get_japanese_decks():
         search_terms = [t for t in re.split(r'[\s\u3000]+', search_query) if t] if search_query else []
 
         if search_terms:
-            # 多詞搜索：用 Python 格式化 LIKE（避免 psycopg2 %s 參數順序地獄）
-            safe_terms = [t.replace("%", "").replace("_", "") for t in search_terms]
-            like_terms = [f"%{t}%" for t in safe_terms if t]
-            if not like_terms:
+            safe_terms = [t.replace("%", "").replace("_", "") for t in search_terms if t.replace("%", "").replace("_", "")]
+            if not safe_terms:
                 return jsonify({'success': True, 'decks': [], 'total': 0, 'page': page, 'pages': 1, 'suggestion': None})
-            where_clause = " OR ".join(["dsi.card_name ILIKE %s"] * len(like_terms))
-            match_parts = ["MAX(CASE WHEN dsi.card_name ILIKE %s THEN 1 ELSE 0 END)" for _ in like_terms]
+
+            alias_groups = []
+            for term in safe_terms:
+                aliases = {term}
+                bare = re.sub(r'(?i)(ex|gx|vstar|vmax|v)$', '', term).strip()
+                if bare:
+                    aliases.update({bare, f"{bare}ex", f"{bare}EX"})
+                try:
+                    like_params = []
+                    like_sql = []
+                    for seed in {term, bare} if bare else {term}:
+                        like_sql.append("name ILIKE %s OR japanese_name ILIKE %s")
+                        like_params.extend([f"%{seed}%", f"%{seed}%"])
+                    cursor.execute(
+                        f"SELECT name, japanese_name FROM cards WHERE {' OR '.join(like_sql)} LIMIT 40",
+                        like_params,
+                    )
+                    for row in cursor.fetchall():
+                        for name in (row.get("name"), row.get("japanese_name")):
+                            text = str(name or "").strip()
+                            if text:
+                                aliases.add(text)
+                except Exception:
+                    conn.rollback()
+                alias_groups.append([f"%{alias}%" for alias in aliases if alias])
+
+            index_wheres = []
+            live_wheres = []
+            params = []
+            live_params = []
+            match_parts = []
+            for aliases in alias_groups:
+                index_wheres.append("(" + " OR ".join(["dsi.card_name ILIKE %s"] * len(aliases)) + ")")
+                live_wheres.append("(" + " OR ".join(["c.name ILIKE %s OR c.japanese_name ILIKE %s"] * len(aliases)) + ")")
+                params.extend(aliases)
+                live_params.extend([item for alias in aliases for item in (alias, alias)])
+                match_parts.append("MAX(CASE WHEN " + " OR ".join(["dsi.card_name ILIKE %s"] * len(aliases)) + " THEN 1 ELSE 0 END)")
             match_expr = " + ".join(match_parts)
 
             order_clause = "matched_card_count DESC, match_count DESC, d.deck_date DESC"
             if sort_mode == 'date':
                 order_clause = "d.deck_date DESC, matched_card_count DESC, match_count DESC"
 
-            # 總數
-            count_sql = f"SELECT COUNT(DISTINCT dsi.deck_id) as cnt FROM deck_search_index dsi WHERE {where_clause}"
-            cursor.execute(count_sql, like_terms)
+            live_sql = f"""
+                SELECT DISTINCT d.id
+                FROM imported_decks d
+                JOIN id_mapping m ON m.external_variant_id IN (
+                    SELECT NULLIF(el->>'id', '')::int
+                    FROM json_array_elements(
+                        CASE
+                            WHEN d.card_list IS NULL OR d.card_list = '' THEN '[]'::json
+                            ELSE d.card_list::json
+                        END
+                    ) el
+                    WHERE (el->>'id') ~ '^[0-9]+$'
+                )
+                JOIN cards c ON c.card_id = m.local_card_id
+                WHERE {' AND '.join(live_wheres)}
+            """
+
+            count_sql = f"""
+                SELECT COUNT(*) AS cnt FROM (
+                    SELECT dsi.deck_id FROM deck_search_index dsi WHERE {' AND '.join(index_wheres)}
+                    UNION
+                    {live_sql}
+                ) hits
+            """
+            cursor.execute(count_sql, params + live_params)
             total_count = cursor.fetchone()['cnt']
 
-            # 主查詢
             search_sql = f"""
                 WITH matched_decks AS (
                     SELECT dsi.deck_id,
                            ({match_expr}) as match_count,
                            COALESCE(SUM(dsi.count), 0) as matched_card_count
                     FROM deck_search_index dsi
-                    WHERE {where_clause}
+                    WHERE {' AND '.join(index_wheres)}
                     GROUP BY dsi.deck_id
+                    UNION
+                    SELECT live.id AS deck_id, %s AS match_count, 1 AS matched_card_count
+                    FROM ({live_sql}) live
                 )
                 SELECT d.id, d.deck_code, d.title, d.deck_date, d.image_url, d.card_list, d.tags,
-                       matched_decks.match_count,
-                       matched_decks.matched_card_count
+                       MAX(matched_decks.match_count) AS match_count,
+                       MAX(matched_decks.matched_card_count) AS matched_card_count
                 FROM matched_decks
                 JOIN imported_decks d ON d.id = matched_decks.deck_id
+                GROUP BY d.id, d.deck_code, d.title, d.deck_date, d.image_url, d.card_list, d.tags
                 ORDER BY {order_clause}
                 LIMIT %s OFFSET %s
             """
-            cursor.execute(search_sql, like_terms + like_terms + [per_page, (page - 1) * per_page])
+            cursor.execute(
+                search_sql,
+                params + params + [len(safe_terms)] + live_params + [per_page, (page - 1) * per_page],
+            )
             deck_rows = cursor.fetchall()
 
-            has_full_match = any(r['match_count'] >= len(search_terms) for r in deck_rows)
+            has_full_match = bool(deck_rows) and any((r['match_count'] or 0) >= len(search_terms) for r in deck_rows)
         else:
             # 無搜索：顯示最新牌組
             cursor.execute("SELECT COUNT(*) as cnt FROM imported_decks")

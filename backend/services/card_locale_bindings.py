@@ -41,6 +41,10 @@ def get_binding(cursor, key: str | None) -> dict | None:
         return _row_to_dict(cursor.fetchone())
     except Exception:
         try:
+            cursor.connection.rollback()
+        except Exception:
+            pass
+        try:
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS card_locale_bindings (
