@@ -1060,7 +1060,7 @@ def _compact_catalog(catalog: Any, limit: int = 60) -> list[str]:
         text = str(line or "").strip()
         if not text:
             continue
-        compact.append(text[:280])
+        compact.append(text[:500])
         if len(compact) >= limit:
             break
     return compact
@@ -1235,13 +1235,13 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     append_annotate_log("roles", f"步驟 1／3：分類主打手同工具寵（{brief.get('label_zh') or combo_key}）")
     roles, raw1, err1 = _ai_json(
         (
-            "你係 PTCG 牌組角色分類員。只根據輸入目錄同張數分類每張寶可夢。"
-            "只回 JSON：{roles:[{name, role, reason}], main_attackers:[], tools:[], engines:[], techs:[]}。"
-            "role 只能係 main_attacker / engine / tool / tech / setup / tank。"
-            "main_attacker = 主要輸出。tool = 工具寵（點傷、濾牌、上傷、擋槍、 complementary 30點等），即使有傷害都唔係主炮。"
-            "例子：胡地 30 傷可以收含羞苞，所以係 tool，唔係 main_attacker。"
-            "進化線幼體通常係 setup。萬金油單張（喵喵ex、含羞苞、願增猿）多數係 tool/tech。"
-            "唔好發明目錄沒有嘅卡。"
+            "你係 PTCG 牌組角色分類員。先讀完整特性同招式效果，禁止只睇印刷傷害數字。"
+            "combo_key／牌組名只係按張數起名，唔等於主炮。"
+            "判斷順序：1) 特性上能量＝engine，即使招式只有20-30傷（碧草面具係引擎不是30點傷tool）。"
+            "2) 招式棄能量／按數量加傷＝用有效傷害。猛雷鼓印刷70、棄4能就係主炮，唔好寫70傷次要輸出。"
+            "3) 印刷180-200但無加傷、費用高＝副攻。超級袋獸200、拉帝亞斯無限之刃200，若牌組已有棄能加傷主軸就唔是主炮。"
+            "4) 喵喵ex／含羞苞／願增猿／吉雉雞＝tool/tech。5) 低傷對血線＝utility tool。"
+            "main_attackers 只放真正決定輸出曲線嗰1-2隻。reason 必須引用效果原文，禁止只寫「200傷主炮」。"
         ),
         base,
         ROLE_TOOL,
@@ -1261,14 +1261,11 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     append_annotate_log("kills", "步驟 2／3：整理主炮、補傷同工具便利線")
     lines, raw2, err2 = _ai_json(
         (
-            "你係 PTCG 斬殺線分析員。輸入有完整招式目錄、HP、以及上一步角色分類。"
-            "只回 JSON：{kill_lines:[{attacker, role, attack, damage, kind, breaks, note}]}。"
-            "kind 只能係 primary / chip / utility。"
-            "primary = 主打手主炮；chip = 主線補傷；utility = 工具便利線。"
-            "一定要包括工具便利線：例如胡地 30 剛剛好含羞苞 30 血，即使胡地唔係主打手。"
-            "breaks 寫具體血量同典型目標，例如「30 含羞苞」「60 土龍節節細體」「310 Mega ex」。"
-            "傷害數字只能用目錄出現過嘅印刷值，可寫組合公式但每段都要來自目錄。"
-            "同一張工具寵可以有多條 utility。"
+            "你係 PTCG 斬殺線分析員。先用角色分類，再按招式效果計有效傷害。"
+            "印刷傷害只係基數。如果效果寫棄 X 個能量／按數量加傷，要寫「印刷70＋棄4能→有效280」呢類公式，並且 kind=primary。"
+            "唔好把固定 200 傷但無加傷嘅副攻寫成 primary。"
+            "utility 仍然要包括低傷對血線：30 含羞苞、60/70 土龍細體。"
+            "breaks 寫具體血量。傷害每段都要能喺目錄效果搵到，唔好發明基數。"
         ),
         {**base, "roles": roles},
         KILL_TOOL,
@@ -1282,11 +1279,9 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     append_annotate_log("writeup", "步驟 3／3：寫打法、優勢、弱點")
     writeup, raw3, err3 = _ai_json(
         (
-            "你係 PTCG 牌組評論員。輸入已有角色分類同斬殺線，請寫完整整理。"
-            "只回 JSON：{gameplan, advantages, weaknesses, tempo_note, reply}。"
-            "gameplan 3-8 句，講點展開、主炮點輸出、工具寵點配合（包括 30 收含羞苞呢類便利線）。"
-            "advantages / weaknesses 用 string array，每點綁返目錄或斬殺線，唔好空講節奏快。"
-            "主打手同工具寵要分得清。reply 一句總結。"
+            "你係 PTCG 牌組評論員。打法必須跟角色分類同有效傷害，唔好跟牌組名。"
+            "如果主炮係猛雷鼓棄能加傷，就寫點灌能（碧草面具引擎）同點棄能打出有效傷害，唔好寫超級袋獸／拉帝亞斯 200 主軸。"
+            "gameplan 3-8 句。advantages／weaknesses 每點綁效果或斬殺線。"
         ),
         {**base, "roles": roles, "kill_lines": lines.get("kill_lines") if isinstance(lines, dict) else lines},
         WRITEUP_TOOL,
