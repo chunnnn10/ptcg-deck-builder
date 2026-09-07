@@ -9,6 +9,8 @@ from collections import Counter
 from typing import Any
 
 from .client import AIClientError, AIConfigError, chat_completion, chat_message
+from .matchup_sheet import get_matchup_sheet
+from .skills import get_skill, list_skills, skill_catalog_text
 from .tools import (
     STANDARD_MARKS,
     analyze_current_deck,
@@ -28,40 +30,41 @@ _JOBS: dict[str, dict[str, Any]] = {}
 _JOB_TTL_SECONDS = 20 * 60
 
 
-SYSTEM_PROMPT = """You are a high-agency Pokemon TCG deck-building agent for a Traditional Chinese deck builder.
+SYSTEM_PROMPT = """You are a Pokemon TCG agent for a Traditional Chinese deck builder.
+
+You work like a minimal LangChain agent: look at the skill catalog, pick one skill, then call only the tools that skill needs. Do not run a fixed pipeline.
 
 Rules:
-- Use only tool results as factual card text and meta evidence.
-- Standard format is limited to regulation marks H, I, J. Do not recommend older regulation cards unless the user explicitly asks for non-standard, and even then flag it.
-- Never invent card effects, HP, types, retreat costs, or tournament data.
-- You may call tools freely and in multiple steps, but final deck edits must be structured as deck_actions/deck_diff only. The user must confirm before the frontend applies changes.
-- Prefer Traditional Chinese in user-facing text.
-- Include concise reasoning and cite relevant meta references when recommending an archetype or card package.
-- When a requested card cannot be resolved, say so and propose a search/refinement instead of guessing.
-- If the task is a deck recommendation, inspect concrete Limitless decklists when available and return an actual list, not only a strategy paragraph.
-- In DeepThink mode, compare multiple tool results and explain the practical deck-building conclusion without exposing hidden chain-of-thought.
-- Do not use your memory or general Pokemon TCG knowledge as evidence. If a card role, combo, matchup, or counter is not supported by tool results, say it is not verified instead of inventing it.
-- Do not include a full 60-card decklist or markdown decklist tables in answer text when decklists is populated. The frontend renders the decklist visually; answer should focus on why the deck is recommended, how it plays, and what to adjust.
-- When referenced_tabs or referenced_cards are provided, treat them as user-selected context. Inspect those decks/cards before giving tab comparison, upgrade, or import advice, and name which tabs/cards were considered in the concise answer.
-- When referenced_tab_analysis or deck_play_analysis is provided, use that play-pattern analysis as the starting point for searches and recommendations. Do not contradict it unless later tool evidence clearly shows why.
-- When the user asks for tournament decks containing a card at a minimum count, use search_japanese_decks_by_card with min_count instead of approximating from general search text."""
+- First decide the skill. Simple questions use plain_chat or card_lookup. Do not search Limitless or H/I/J unless the skill needs it.
+- Card text, HP, energy cost, regulation, and tournament facts must come from tools. If missing, say 未驗證.
+- You MAY compose numbers already returned by tools (200+130=330, 120 vs 130 HP). Show the formula.
+- You MAY use get_matchup_sheet seed rows, but they are verified=false until confirmed by get_card_detail.
+- Standard format is H/I/J unless the user asks otherwise.
+- Prefer Traditional Chinese.
+- Deck edits only as deck_actions/deck_diff; user must confirm.
+- Full 60-card lists belong in decklists, never in answer text.
+- referenced_tabs / referenced_cards are user-selected context, not a command to search meta.
+- Do not invent matchup kill lines. List setup / quirks / breakpoints first, then analysis sentences that point at those rows."""
 
 
 FINAL_JSON_INSTRUCTIONS = """Return one JSON object only with this shape:
 {
+  "skill": "plain_chat",
   "answer": "Traditional Chinese concise response",
   "cards": [],
   "meta_references": [],
   "decklists": [],
   "deck_actions": [],
-  "deck_diff": {"current_total": 0, "projected_total": 0, "additions": [], "removals": [], "warnings": []}
+  "deck_diff": {"current_total": 0, "projected_total": 0, "additions": [], "removals": [], "warnings": []},
+  "matchup_sheet": null
 }
 
-cards should contain real cards from tool results. meta_references should contain Limitless references from tool results. decklists should contain concrete visual decklists from get_meta_deck_cards results or a proposed 60-card skeleton. deck_actions must be proposed changes only, not already-applied changes.
-
-If the user asks for a deck recommendation, do not stop at strategic description. You must return at least one concrete decklist or proposed deck skeleton, with card counts and sections when enough data is available.
-
-Important: answer must not contain a full decklist, markdown card-count table, or raw JSON. Put complete decklists only in decklists. Keep answer to recommendation rationale, game plan, evidence checked, and notable tech choices."""
+Fill only fields the chosen skill needs. empty arrays are fine.
+cards / meta_references / decklists must come from tools.
+decklists only for recommend_archetype, or when the user asked for a full list.
+deck_actions only for patch_deck.
+matchup_sheet only for matchup_analysis / explain_gameplan when a sheet was fetched.
+answer must not contain a full decklist or raw JSON."""
 
 
 TOOL_SCHEMAS = [
@@ -229,6 +232,40 @@ TOOL_SCHEMAS = [
                     "language": {"type": "string", "enum": ["tw", "jp"]},
                 },
                 "required": ["intent", "deck"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "List available agent skills and which tools each skill may use. Call this when unsure which flow to run.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_skill",
+            "description": "Load one skill playbook: when to use, tool order, stop condition, output contract.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_matchup_sheet",
+            "description": "Get matchup sheet schema and seed rows (setup / quirks / breakpoints / vs_archetype). Seed rows are unverified user notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_archetype": {"type": "string"},
+                    "opponent_archetype": {"type": "string"},
+                },
             },
         },
     },
@@ -675,7 +712,7 @@ def _result_count(result: Any) -> int:
     if isinstance(result, list):
         return len(result)
     if isinstance(result, dict):
-        for key in ("cards", "sample_decks", "meta_references", "deck_actions", "tabs", "analyses", "deck_analyses"):
+        for key in ("cards", "sample_decks", "meta_references", "deck_actions", "tabs", "analyses", "deck_analyses", "skills", "sheets", "available"):
             if isinstance(result.get(key), list):
                 return len(result.get(key) or [])
         return 1 if result else 0
@@ -707,6 +744,12 @@ def _tool_step_message(item: dict[str, Any]) -> str:
         return f"分析引用 tab 玩法（{count}）"
     if tool == "analyze_meta_deck_play_plan":
         return f"分析 Limitless 樣本玩法：{args.get('deck_id') or ''}"
+    if tool == "list_skills":
+        return f"讀取 Skill catalog（{count}）"
+    if tool == "get_skill":
+        return f"讀取 Skill：{args.get('name') or ''}"
+    if tool == "get_matchup_sheet":
+        return f"讀取對局表：{args.get('user_archetype') or ''} vs {args.get('opponent_archetype') or ''}（{count}）"
     return f"{tool} returned {count} result(s)"
 
 
@@ -834,7 +877,13 @@ def _publish_new_steps(context: dict[str, Any], tool_results: list[dict[str, Any
 
 
 def _prefetch_context(user_text: str, context: dict[str, Any], deep_think: bool, deck_request: bool) -> list[dict[str, Any]]:
+    """Legacy prefetch. Disabled unless context.force_prefetch is true.
+
+    The agent must choose semantic search / Limitless itself via skills.
+    """
     if not user_text:
+        return []
+    if not context.get("force_prefetch"):
         return []
 
     language = str(context.get("language") or "tw")
@@ -960,6 +1009,15 @@ def _run_tool(name: str, args: dict[str, Any], context: dict[str, Any]) -> Any:
             args.get("retrieved_context") if isinstance(args.get("retrieved_context"), dict) else {},
             language,
         )
+    if name == "list_skills":
+        return {"skills": list_skills()}
+    if name == "get_skill":
+        skill = get_skill(str(args.get("name") or ""))
+        if not skill:
+            return {"error": "unknown skill", "available": [item["name"] for item in list_skills()]}
+        return skill
+    if name == "get_matchup_sheet":
+        return get_matchup_sheet(str(args.get("user_archetype") or ""), str(args.get("opponent_archetype") or ""))
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -1310,12 +1368,14 @@ def _normalize_final(
 
     return {
         "success": True,
+        "skill": str(final_data.get("skill") or ""),
         "answer": answer,
         "cards": merged_cards[:20],
         "meta_references": merged_meta[:10],
         "decklists": merged_decklists[:3],
         "deck_actions": actions,
         "deck_diff": diff,
+        "matchup_sheet": final_data.get("matchup_sheet") if isinstance(final_data.get("matchup_sheet"), dict) else None,
         "tool_trace": [
             {
                 "tool": item.get("tool"),
@@ -1343,25 +1403,20 @@ def _normalize_final(
 def _deterministic_fallback(messages: list[dict[str, Any]], context: dict[str, Any], error: str = "") -> dict[str, Any]:
     user_text = _last_user_message(messages)
     language = str(context.get("language") or "tw")
-    deck = context.get("deck") if isinstance(context.get("deck"), list) else []
-    prefetch_results = _prefetch_context(user_text, context, bool(context.get("deep_think")), _is_deck_request(user_text))
-    cards = semantic_search_cards(user_text, 10, {"language": language, "standard_marks": list(STANDARD_MARKS)})
-    meta = search_meta_decks(user_text, 5)
-    patch = propose_deck_patch(user_text, deck, {"cards": cards, "meta_references": meta}, language)
-    answer = "AI 模型暫時無法完成完整 Agent 流程，我先用本地檢索整理可用結果。"
+    cards = semantic_search_cards(user_text, 8, {"language": language, "standard_marks": list(STANDARD_MARKS)})
+    answer = "AI 模型暫時無法完成 Agent 流程，我只做咗一次標準卡檢索。"
     if error:
         answer += f" 錯誤：{error}"
 
-    tool_results = list(prefetch_results)
+    tool_results: list[dict[str, Any]] = []
     _append_tool_result(tool_results, "semantic_search_cards", {"query": user_text}, cards)
-    _append_tool_result(tool_results, "search_meta_decks", {"archetype_or_query": user_text}, meta)
-    _append_tool_result(tool_results, "propose_deck_patch", {"intent": user_text}, patch)
     final = {
+        "skill": "card_lookup",
         "answer": answer,
         "cards": cards,
-        "meta_references": meta,
-        "deck_actions": patch.get("deck_actions", []),
-        "deck_diff": patch.get("deck_diff", {}),
+        "meta_references": [],
+        "deck_actions": [],
+        "deck_diff": {},
     }
     result = _normalize_final(final, context, tool_results)
     result["warning"] = error
@@ -1404,21 +1459,13 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
     context["standard_marks"] = [mark for mark in context.get("standard_marks") or list(STANDARD_MARKS) if mark in STANDARD_MARKS] or list(STANDARD_MARKS)
     deep_think = bool(context.get("deep_think"))
     is_deck_request = _is_deck_request(user_text)
-    tool_results: list[dict[str, Any]] = _analyze_referenced_tabs(context)
-    tool_results.extend(_prefetch_context(user_text, context, deep_think, is_deck_request))
-    prefetched_context = {
-        "cards": _collect_cards_from_value([item.get("result") for item in tool_results])[:16],
-        "meta_references": _collect_meta_from_value([item.get("result") for item in tool_results])[:8],
-        "decklists": _collect_decklists_from_value([item.get("result") for item in tool_results])[:2],
-        "deck_play_analysis": _collect_play_analysis_from_value([item.get("result") for item in tool_results])[:8],
-        "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
-        "meta_deck_analysis": context.get("meta_deck_analysis") or [],
-        "referenced_tabs": context.get("referenced_tabs") or [],
-        "referenced_cards": context.get("referenced_cards") or [],
-    }
+    tool_results: list[dict[str, Any]] = []
+    if context.get("force_prefetch"):
+        tool_results.extend(_analyze_referenced_tabs(context))
+        tool_results.extend(_prefetch_context(user_text, context, deep_think, is_deck_request))
 
     agent_messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + skill_catalog_text()},
         *[
             {"role": item.get("role", "user"), "content": str(item.get("content") or "")}
             for item in (messages or [])[-10:]
@@ -1433,16 +1480,17 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
                     "current_deck": context.get("deck") or [],
                     "referenced_tabs": context.get("referenced_tabs") or [],
                     "referenced_cards": context.get("referenced_cards") or [],
-                    "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
-                    "meta_deck_analysis": context.get("meta_deck_analysis") or [],
                     "standard_marks": context["standard_marks"],
                     "language": language,
                     "deep_think": deep_think,
-                    "prefetched_context": prefetched_context,
                     "instruction": (
-                        "DeepThink mode: start from referenced_tab_analysis/deck_play_analysis when present, then investigate broadly, compare meta decks, inspect concrete decklists, and provide a visual decklist/deck_actions. Tell the user which evidence was checked, but do not reveal hidden chain-of-thought."
-                        if deep_think else
-                        "Use prefetched context and tools as needed, then provide final structured JSON."
+                        "Pick one skill. Call list_skills or get_skill if needed. "
+                        "Then call tools yourself. Simple questions must not search Limitless. "
+                        + (
+                            "DeepThink: you may use more tool steps and compare evidence, but still pick tools per skill."
+                            if deep_think else
+                            "Prefer the shortest tool path."
+                        )
                     ),
                     "deck_request": is_deck_request,
                     "final_json_contract": FINAL_JSON_INSTRUCTIONS,
