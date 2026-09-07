@@ -286,9 +286,12 @@
                         </label>
                         <div class="bg-gray-800 border border-gray-700 rounded-xl p-3">
                             <div class="text-xs font-bold text-gray-300 mb-2">同 AI 對話修正</div>
-                            <div class="space-y-2 max-h-36 overflow-y-auto custom-scroll mb-2">
+                            <div class="space-y-2 max-h-56 overflow-y-auto custom-scroll mb-2">
                                 <div v-if="!briefChatLog.length" class="text-xs text-gray-500">例如：「330 唔應該算入夜巡靈，改返印刷 200」</div>
-                                <div v-for="(msg, idx) in briefChatLog" :key="idx" class="text-sm" :class="msg.role === 'user' ? 'text-yellow-300' : 'text-gray-200'">[[ msg.role === 'user' ? '你：' : 'AI：' ]][[ msg.text ]]</div>
+                                <div v-for="(msg, idx) in briefChatLog" :key="idx" class="text-xs sm:text-sm whitespace-pre-wrap break-words" :class="msg.role === 'user' ? 'text-yellow-300' : (msg.error ? 'text-red-300' : 'text-gray-200')">
+                                    [[ msg.role === 'user' ? '你：' : 'AI：' ]][[ msg.text ]]
+                                    <pre v-if="msg.raw" class="mt-1 text-[10px] leading-snug text-gray-500 bg-black/40 rounded p-2 overflow-x-auto custom-scroll">[[ msg.raw ]]</pre>
+                                </div>
                             </div>
                             <div class="flex gap-2">
                                 <input v-model="briefChatInput" @keyup.enter="sendBriefRevision" class="flex-1 bg-gray-900 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm" placeholder="話俾 AI 知要改咩">

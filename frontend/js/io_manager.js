@@ -905,20 +905,36 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
                 briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.error || data.message || "無法開始整理" }];
                 return;
             }
-            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "已背景開始三步整理，唔使留住呢個請求。整理緊…" }];
-            const deadline = Date.now() + 6 * 60 * 1000;
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "已背景開始三步整理。下面會即時出步驟、輸出同 error。" }];
+            const seenLog = new Set();
+            const pushStatusLogs = (status) => {
+                for (const entry of status.log || []) {
+                    const id = [entry.at, entry.step, entry.text, entry.error].join("|");
+                    if (seenLog.has(id)) continue;
+                    seenLog.add(id);
+                    const bits = [];
+                    if (entry.step) bits.push("[" + entry.step + "]");
+                    bits.push(entry.text || "");
+                    if (entry.error && entry.error !== entry.text) bits.push("ERROR: " + entry.error);
+                    briefChatLog.value = [...briefChatLog.value, {
+                        role: "assistant",
+                        text: bits.join(" "),
+                        raw: entry.raw || "",
+                        error: entry.error || "",
+                    }];
+                }
+            };
+            const deadline = Date.now() + 12 * 60 * 1000;
             while (Date.now() < deadline) {
                 await new Promise((resolve) => setTimeout(resolve, 2000));
                 const statusRes = await fetch("/api/admin/limitless-meta/annotate/status");
                 const statusData = await statusRes.json();
                 const status = statusData.status || {};
-                if (status.message) {
-                    briefChatLog.value = [...briefChatLog.value.slice(0, -1), { role: "assistant", text: status.message }];
-                }
+                pushStatusLogs(status);
                 const finishedThis = status.last_key === comboKey && (!status.running || status.current !== comboKey);
                 if (finishedThis && (status.last_ok || status.last_error)) {
                     if (!status.last_ok) {
-                        briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: status.last_error || "整理失敗" }];
+                        briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: status.last_error || "整理失敗", error: status.last_error || "" }];
                         return;
                     }
                     const briefRes = await fetch(`/api/limitless-meta/briefs/${encodeURIComponent(comboKey)}`);
@@ -931,7 +947,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
                     return;
                 }
             }
-            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "整理逾時。請稍後再開呢套 brief 睇係唔係已經寫入。" }];
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "前端停止自動刷新（12 分鐘）。背景可能仲跑緊，上面 log 係目前睇到嘅步驟／輸出／error。稍後再開 brief 睇有冇寫入。" }];
         } catch (e) {
             briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "整理連線失敗" }];
         } finally {

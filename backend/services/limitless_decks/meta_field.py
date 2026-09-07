@@ -949,6 +949,7 @@ _ANNOTATE_JOB: dict[str, Any] = {
     "last_error": "",
     "last_reply": "",
     "message": "就緒",
+    "log": [],
 }
 
 
@@ -986,6 +987,7 @@ def start_brief_annotations(combo_keys: list[str]) -> dict[str, Any]:
             "last_error": "",
             "last_reply": "",
             "message": f"準備整理 {len(keys)} 份 brief",
+            "log": [{"at": datetime.utcnow().isoformat(timespec="seconds") + "Z", "step": "start", "text": f"開始整理 {len(keys)} 套", "error": "", "raw": ""}],
         })
     threading.Thread(target=_annotate_worker, args=(keys,), daemon=True).start()
     status = get_annotate_status()
@@ -1021,6 +1023,21 @@ def _annotate_worker(combo_keys: list[str]) -> None:
         )
 
 
+def append_annotate_log(step: str, text: str, error: str = "", raw: str = "") -> None:
+    entry = {
+        "at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "step": step,
+        "text": text,
+        "error": error,
+        "raw": str(raw or "")[:800],
+    }
+    with _ANNOTATE_LOCK:
+        logs = list(_ANNOTATE_JOB.get("log") or [])
+        logs.append(entry)
+        _ANNOTATE_JOB["log"] = logs[-40:]
+        _ANNOTATE_JOB["message"] = error or text
+
+
 def _compact_catalog(catalog: Any, limit: int = 60) -> list[str]:
     lines = catalog if isinstance(catalog, list) else [str(catalog or "")]
     compact = []
@@ -1047,6 +1064,7 @@ def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | Non
     raw_text = ""
     last_error = ""
     for attempt in range(3):
+        append_annotate_log("request", f"第 {attempt + 1} 次請求模型…")
         try:
             msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=120)
             raw_text = _message_text(msg)
@@ -1054,8 +1072,10 @@ def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | Non
             if parsed:
                 return parsed, raw_text, ""
             last_error = "AI 沒有返回可用 JSON"
+            append_annotate_log("parse", last_error, last_error, raw_text)
         except (AIConfigError, AIClientError) as exc:
             last_error = str(exc)
+            append_annotate_log("error", last_error, last_error, raw_text)
             if "401" in last_error or "402" in last_error or "未設定" in last_error:
                 break
         time.sleep(1.5 * (attempt + 1))
@@ -1082,6 +1102,7 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
         "common_hp": [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 220, 230, 240, 250, 270, 280, 300, 310, 330, 340],
     }
 
+    append_annotate_log("roles", f"步驟 1／3：分類主打手同工具寵（{brief.get('label_zh') or combo_key}）")
     roles, raw1, err1 = _ai_json(
         (
             "你係 PTCG 牌組角色分類員。只根據輸入目錄同張數分類每張寶可夢。"
@@ -1095,8 +1116,18 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
         base,
     )
     if not roles:
-        return {"success": False, "error": err1 or "角色分類失敗", "combo_key": combo_key, "raw": raw1[:400]}
+        append_annotate_log("roles", "步驟 1 失敗", err1 or "角色分類失敗", raw1)
+        return {"success": False, "error": err1 or "角色分類失敗", "combo_key": combo_key, "raw": raw1[:800]}
+    append_annotate_log(
+        "roles",
+        "步驟 1 完成：主打 "
+        + "、".join(str(x) for x in (roles.get("main_attackers") or [])[:6])
+        + "／工具 "
+        + "、".join(str(x) for x in (roles.get("tools") or [])[:6]),
+        raw=json.dumps(roles, ensure_ascii=False, default=str)[:800],
+    )
 
+    append_annotate_log("kills", "步驟 2／3：整理主炮、補傷同工具便利線")
     lines, raw2, err2 = _ai_json(
         (
             "你係 PTCG 斬殺線分析員。輸入有完整招式目錄、HP、以及上一步角色分類。"
@@ -1111,8 +1142,12 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
         {**base, "roles": roles},
     )
     if not lines:
-        return {"success": False, "error": err2 or "斬殺線整理失敗", "combo_key": combo_key, "raw": raw2[:400], "roles": roles}
+        append_annotate_log("kills", "步驟 2 失敗", err2 or "斬殺線整理失敗", raw2)
+        return {"success": False, "error": err2 or "斬殺線整理失敗", "combo_key": combo_key, "raw": raw2[:800], "roles": roles}
+    kill_rows = lines.get("kill_lines") if isinstance(lines, dict) else lines
+    append_annotate_log("kills", f"步驟 2 完成：{len(kill_rows or [])} 條斬殺／便利線", raw=json.dumps(lines, ensure_ascii=False, default=str)[:800])
 
+    append_annotate_log("writeup", "步驟 3／3：寫打法、優勢、弱點")
     writeup, raw3, err3 = _ai_json(
         (
             "你係 PTCG 牌組評論員。輸入已有角色分類同斬殺線，請寫完整整理。"
@@ -1124,7 +1159,9 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
         {**base, "roles": roles, "kill_lines": lines.get("kill_lines") if isinstance(lines, dict) else lines},
     )
     if not writeup:
-        return {"success": False, "error": err3 or "打法整理失敗", "combo_key": combo_key, "raw": raw3[:400], "roles": roles, "kill_lines": lines}
+        append_annotate_log("writeup", "步驟 3 失敗", err3 or "打法整理失敗", raw3)
+        return {"success": False, "error": err3 or "打法整理失敗", "combo_key": combo_key, "raw": raw3[:800], "roles": roles, "kill_lines": lines}
+    append_annotate_log("writeup", str(writeup.get("reply") or "步驟 3 完成"), raw=json.dumps(writeup, ensure_ascii=False, default=str)[:800])
 
     merged = dict(analysis)
     merged["pokemon_roles"] = roles.get("roles") if isinstance(roles, dict) else roles
@@ -1141,6 +1178,8 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     merged["pipeline"] = ["roles", "kill_lines", "writeup"]
     merged["source"] = "catalog+role+kill+writeup"
     merged["annotated"] = True
+    with _ANNOTATE_LOCK:
+        merged["pipeline_log"] = list(_ANNOTATE_JOB.get("log") or [])[-20:]
     saved = update_brief(combo_key, analysis=merged, label_zh=brief.get("label_zh"), note="ai pipeline roles/kills/writeup")
     saved["reply"] = writeup.get("reply") or "已完成三角色分類、斬殺線同打法整理"
     return saved
