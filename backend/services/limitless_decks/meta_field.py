@@ -1212,6 +1212,83 @@ def _ai_json(system: str, payload: dict[str, Any], tool: dict[str, Any] | None =
     return None, raw_text, last_error
 
 
+
+def _infer_roles_from_kits(profile: dict[str, Any]) -> dict[str, Any]:
+    """Lock engines and scaling attackers from card text before the LLM speaks."""
+    kits = profile.get("pokemon_kits") or profile.get("attackers") or []
+    inferred = []
+    scalers = []
+    engines = []
+    flats = []
+    for kit in kits:
+        name = str(kit.get("name") or "").strip()
+        if not name:
+            continue
+        ability_text = " ".join(str(item.get("effect") or "") + str(item.get("name") or "") for item in (kit.get("abilities") or []))
+        attacks = kit.get("attacks") or kit.get("printed_lines") or []
+        scale = None
+        flat = None
+        for attack in attacks:
+            effect = str(attack.get("effect") or "")
+            printed = str(attack.get("damage") or attack.get("damage_value") or "")
+            printed_n = attack.get("damage_value")
+            try:
+                printed_n = int(printed_n or 0) or int(re.search(r"(\d+)", printed).group(1)) if re.search(r"(\d+)", printed) else 0
+            except Exception:
+                printed_n = 0
+            bonus = None
+            bonus_m = re.search(r"(?:增加|＋|\+|多[造成受])\s*(\d{2,3})", effect)
+            if bonus_m:
+                bonus = int(bonus_m.group(1))
+            discard = bool(re.search(r"棄.{0,12}能量", effect))
+            if discard and bonus:
+                max_discards = 4
+                scale = {
+                    "attack": attack.get("name") or "",
+                    "printed": printed_n,
+                    "bonus_each": bonus,
+                    "effective_at_4": printed_n + bonus * max_discards,
+                    "effect": effect[:180],
+                }
+            elif printed_n and (flat is None or printed_n > flat["printed"]):
+                flat = {"attack": attack.get("name") or "", "printed": printed_n, "effect": effect[:180]}
+        engine = bool(re.search(r"(附[上在於].{0,8}能量|從手牌.{0,12}能量|能量.{0,8}附|視為所有屬性|當作.{0,6}能量)", ability_text + " " + " ".join(str(a.get("effect") or "") for a in attacks)))
+        staple = any(token in name for token in ("喵喵", "含羞", "願增猿", "吉雉雞", "Fezandipiti", "Shaymin"))
+        role = "tech"
+        reason = ""
+        if engine:
+            role = "engine"
+            reason = "卡文特性／招式負責貼能或轉能，先鎖 engine。"
+            engines.append(name)
+        elif scale:
+            role = "main_attacker"
+            reason = f"{scale['attack']} 印刷{scale['printed']}，棄能每枚+{scale['bonus_each']}，棄4有效{scale['effective_at_4']}。"
+            scalers.append({**scale, "name": name})
+        elif staple:
+            role = "tool"
+            reason = "環境萬金油單張，鎖 tool。"
+        elif flat and flat["printed"] >= 150:
+            role = "secondary"
+            reason = f"{flat['attack']} 固定{flat['printed']}，無棄能加傷，先標副攻。"
+            flats.append({**flat, "name": name})
+        inferred.append({
+            "name": name,
+            "locked_role": role if role != "secondary" else "tech",
+            "reason": reason or "未見加速或加傷效果。",
+            "scale": scale,
+            "flat": flat,
+        })
+    main = [row["name"] for row in scalers]
+    if not main:
+        main = [row["name"] for row in sorted(flats, key=lambda r: r.get("printed") or 0, reverse=True)[:1]]
+    return {
+        "locked_roles": inferred,
+        "locked_main_attackers": main,
+        "locked_engines": engines,
+        "rule": "有棄能加傷就只准呢啲做 main_attacker；固定200不能壓過棄能加傷。引擎唔准降成30傷tool。",
+    }
+
+
 def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     """3-step pipeline: roles -> kill/utility lines -> gameplan writeup."""
     current = get_brief(combo_key)
@@ -1230,6 +1307,7 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
         "hp_table": profile.get("hp_table") or [],
         "families": profile.get("families") or [],
         "common_hp": [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 220, 230, 240, 250, 270, 280, 300, 310, 330, 340],
+        "locked_from_card_text": _infer_roles_from_kits(profile),
     }
 
     append_annotate_log("roles", f"步驟 1／3：分類主打手同工具寵（{brief.get('label_zh') or combo_key}）")
@@ -1241,7 +1319,9 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
             "2) 招式棄能量／按數量加傷＝用有效傷害。猛雷鼓印刷70、棄4能就係主炮，唔好寫70傷次要輸出。"
             "3) 印刷180-200但無加傷、費用高＝副攻。超級袋獸200、拉帝亞斯無限之刃200，若牌組已有棄能加傷主軸就唔是主炮。"
             "4) 喵喵ex／含羞苞／願增猿／吉雉雞＝tool/tech。5) 低傷對血線＝utility tool。"
-            "main_attackers 只放真正決定輸出曲線嗰1-2隻。reason 必須引用效果原文，禁止只寫「200傷主炮」。"
+            "必須遵守 locked_from_card_text：locked_main_attackers 先至係主炮，locked_engines 一定係 engine。"
+            "唔可以將棄能加傷降成 tech，亦唔可以將固定200（袋獸／拉帝亞斯）升做收頭主炮。"
+            "你只負責寫 reason 同微調 tool/tech，唔好推翻鎖定主炮同引擎。"
         ),
         base,
         ROLE_TOOL,
@@ -1249,6 +1329,17 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     if not roles:
         append_annotate_log("roles", "步驟 1 失敗", err1 or "角色分類失敗", raw1)
         return {"success": False, "error": err1 or "角色分類失敗", "combo_key": combo_key, "raw": raw1[:800]}
+    locked = base.get("locked_from_card_text") or {}
+    if locked.get("locked_main_attackers"):
+        roles["main_attackers"] = list(locked["locked_main_attackers"])
+    if locked.get("locked_engines"):
+        roles["engines"] = list(locked["locked_engines"])
+        tools = [name for name in (roles.get("tools") or []) if name not in roles["engines"]]
+        roles["tools"] = tools
+    # Keep locked scaler names out of tech.
+    locked_mains = set(roles.get("main_attackers") or [])
+    roles["techs"] = [name for name in (roles.get("techs") or []) if name not in locked_mains]
+
     append_annotate_log(
         "roles",
         "步驟 1 完成：主打 "
