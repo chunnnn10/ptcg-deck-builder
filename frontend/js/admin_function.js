@@ -785,6 +785,27 @@ function useAdminUpdate() {
     });
     const formatBriefRunning = ref(false);
     const formatBriefRun = ref(null);
+    const formatMetaResetting = ref(false);
+    const formatMetaResetMessage = ref("");
+    const formatMetaResetOk = ref(false);
+    const resetFormatMetaData = async () => {
+        if (formatMetaResetting.value) return;
+        if (!confirm('確定完全重設 Meta data？會刪晒所有 brief、人手／AI 修正同 30 日統計快取。Limitless 牌表同比賽唔會刪。')) return;
+        formatMetaResetting.value = true;
+        formatMetaResetMessage.value = "";
+        try {
+            const res = await fetch('/api/admin/limitless-meta/reset', { method: 'POST' });
+            const data = await res.json();
+            formatMetaResetOk.value = !!data.success;
+            formatMetaResetMessage.value = data.message || data.error || (data.success ? '已重設' : '重設失敗');
+            if (data.success) formatBriefRun.value = null;
+        } catch (e) {
+            formatMetaResetOk.value = false;
+            formatMetaResetMessage.value = '重設連線失敗';
+        } finally {
+            formatMetaResetting.value = false;
+        }
+    };
     const runMonthlyFormatBriefs = async () => {
         if (formatBriefRunning.value) return;
         formatBriefRunning.value = true;
@@ -1822,6 +1843,10 @@ function useAdminUpdate() {
         formatBriefRunning,
         formatBriefRun,
         runMonthlyFormatBriefs,
+        formatMetaResetting,
+        formatMetaResetMessage,
+        formatMetaResetOk,
+        resetFormatMetaData,
         loadRematchStats,
 
         // ========== JP 卡牌更新 (Limitless) ==========

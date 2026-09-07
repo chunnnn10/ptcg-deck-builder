@@ -867,3 +867,31 @@ def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -
         return {"success": False, "error": str(exc)}
     finally:
         conn.close()
+
+
+def reset_meta_data() -> dict[str, Any]:
+    """Wipe cached field stats and all stored briefs. Limitless decklists stay."""
+    ensure_schema()
+    conn = database.get_db_connection()
+    if not conn:
+        return {"success": False, "error": "database unavailable"}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) AS n FROM format_archetype_briefs")
+        briefs = int((cursor.fetchone() or {}).get("n") or 0)
+        cursor.execute("SELECT COUNT(*) AS n FROM format_window_cache")
+        caches = int((cursor.fetchone() or {}).get("n") or 0)
+        cursor.execute("TRUNCATE format_archetype_briefs")
+        cursor.execute("TRUNCATE format_window_cache")
+        conn.commit()
+        return {
+            "success": True,
+            "deleted_briefs": briefs,
+            "deleted_caches": caches,
+            "message": f"已清空 {briefs} 份 brief 同 {caches} 份統計快取。Limitless 牌表未刪。",
+        }
+    except Exception as exc:
+        conn.rollback()
+        return {"success": False, "error": str(exc)}
+    finally:
+        conn.close()

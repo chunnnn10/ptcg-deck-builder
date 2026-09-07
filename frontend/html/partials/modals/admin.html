@@ -1093,9 +1093,15 @@
                             今次新建 [[ formatBriefRun.created_count || 0 ]] · 已存在 [[ formatBriefRun.skipped_count || 0 ]]
                             <div v-for="row in (formatBriefRun.created || [])" :key="row.combo_key" class="text-xs text-emerald-400">#[[ row.rank ]] [[ row.label_zh ]] [[ row.share_pct ]]</div>
                         </div>
-                        <button @click="runMonthlyFormatBriefs" :disabled="formatBriefRunning" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white px-6 py-3 rounded-full font-bold text-sm">
-                            [[ formatBriefRunning ? '統計中…' : '跑今個月 20 個新 brief' ]]
-                        </button>
+                        <div class="flex flex-col sm:flex-row gap-2">
+                            <button @click="runMonthlyFormatBriefs" :disabled="formatBriefRunning || formatMetaResetting" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white px-6 py-3 rounded-full font-bold text-sm">
+                                [[ formatBriefRunning ? '統計中…' : '跑今個月 20 個新 brief' ]]
+                            </button>
+                            <button @click="resetFormatMetaData" :disabled="formatMetaResetting || formatBriefRunning" class="bg-red-700 hover:bg-red-600 disabled:opacity-60 text-white px-6 py-3 rounded-full font-bold text-sm">
+                                [[ formatMetaResetting ? '重設中…' : '完全重設 Meta data' ]]
+                            </button>
+                        </div>
+                        <p v-if="formatMetaResetMessage" class="text-xs mt-2" :class="formatMetaResetOk ? 'text-emerald-400' : 'text-red-400'">[[ formatMetaResetMessage ]]</p>
                     </div>
                     <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
                         <h3 class="text-lg font-bold text-white mb-4">Manual update</h3>

@@ -2692,6 +2692,15 @@ def revise_limitless_meta_brief(combo_key):
     return jsonify(result), 200 if result.get('success') else 400
 
 
+@main_bp.route('/api/admin/limitless-meta/reset', methods=['POST'])
+@admin_required
+def reset_limitless_meta_data():
+    from services.limitless_decks.meta_field import reset_meta_data
+
+    result = reset_meta_data()
+    return jsonify(result), 200 if result.get('success') else 500
+
+
 @main_bp.route('/api/admin/limitless-meta/briefs/run', methods=['POST'])
 @admin_required
 def run_limitless_meta_briefs():
