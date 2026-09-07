@@ -90,6 +90,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         advantages_text: "",
         weaknesses_text: "",
         kill_lines_text: "",
+        roles_text: "",
     });
     const importMissingNotice = ref(null);
 
@@ -799,7 +800,10 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
             return value.map((row) => {
                 if (typeof row === "string") return row;
                 if (row && row.attacker) {
-                    return [row.attacker, row.attack, row.damage, (row.breaks || []).join("、"), row.note].filter(Boolean).join(" | ");
+                    return [row.attacker, row.role, row.kind, row.attack, row.damage, (row.breaks || []).join("、"), row.note].filter(Boolean).join(" | ");
+                }
+                if (row && (row.role || row.name)) {
+                    return [row.name, row.role, row.reason].filter(Boolean).join(" | ");
                 }
                 return [row.rule, row.note].filter(Boolean).join(" — ");
             }).join("\n");
@@ -812,6 +816,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
             advantages_text: listText(analysis.advantages),
             weaknesses_text: listText(analysis.weaknesses),
             kill_lines_text: listText(analysis.kill_lines),
+            roles_text: listText(analysis.pokemon_roles),
             combo_lines_text: lines.map((line) => {
                 if (typeof line === "string") return line;
                 return [line.damage, line.card || line.pieces, line.line || line.formula, line.note].filter(Boolean).join(" | ");
@@ -855,6 +860,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
             advantages: linesOf(briefDraft.value.advantages_text),
             weaknesses: linesOf(briefDraft.value.weaknesses_text),
             kill_lines: linesOf(briefDraft.value.kill_lines_text),
+            pokemon_roles: linesOf(briefDraft.value.roles_text),
             combo_lines: linesOf(briefDraft.value.combo_lines_text),
             quirks: linesOf(briefDraft.value.quirks_text).map((line) => ({ rule: line })),
             verified: true,

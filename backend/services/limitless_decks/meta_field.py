@@ -990,10 +990,29 @@ def _annotate_worker(combo_keys: list[str]) -> None:
         )
 
 
-def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
-    """Turn the raw skill catalog into gameplan / advantages / weaknesses / kill lines."""
+def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str, str]:
     from services.ai_assistant.client import AIClientError, AIConfigError, chat_message
 
+    prompt = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
+    ]
+    raw_text = ""
+    try:
+        msg = chat_message(prompt, temperature=0.2, response_format={"type": "json_object"})
+        raw_text = _message_text(msg)
+        parsed = _extract_json_object(raw_text)
+        if parsed:
+            return parsed, raw_text, ""
+        msg = chat_message(prompt, temperature=0.2)
+        raw_text = _message_text(msg)
+        return _extract_json_object(raw_text), raw_text, ""
+    except (AIConfigError, AIClientError) as exc:
+        return None, raw_text, str(exc)
+
+
+def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
+    """3-step pipeline: roles -> kill/utility lines -> gameplan writeup."""
     current = get_brief(combo_key)
     if not current.get("success"):
         return current
@@ -1001,60 +1020,80 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     analysis = brief.get("analysis") if isinstance(brief.get("analysis"), dict) else {}
     profile = brief.get("profile") if isinstance(brief.get("profile"), dict) else {}
     catalog = analysis.get("combo_lines") or profile.get("skill_catalog") or []
-    prompt = [
-        {
-            "role": "system",
-            "content": (
-                "你係 PTCG Standard 牌組分析員。輸入係一套牌嘅完整特性／招式目錄同 HP。"
-                "請用目錄整理成分析，唔好發明目錄沒有嘅傷害數字。"
-                "只回 JSON，欄位："
-                "gameplan（打法，3-6句），"
-                "advantages（優點 string array），"
-                "weaknesses（弱點 string array），"
-                "kill_lines（array，每項 attacker, attack, damage, breaks, note；"
-                "breaks 寫可以斬到邊啲常見 HP，例如 60／70 土龍、180／220／300／310），"
-                "tempo_note（一句節奏），"
-                "reply（一句總結）。"
-                "主打點要分得出邊張先係輸出，進化體／工具寵物可以寫血線但唔好當成主炮。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps({
-                "combo_key": brief.get("combo_key") or combo_key,
-                "label_zh": brief.get("label_zh"),
-                "share": brief.get("last_share"),
-                "n": brief.get("last_n"),
-                "catalog": catalog,
-                "hp_table": profile.get("hp_table") or [],
-                "families": profile.get("families") or [],
-            }, ensure_ascii=False, default=str),
-        },
-    ]
-    raw_text = ""
-    try:
-        msg = chat_message(prompt, temperature=0.2, response_format={"type": "json_object"})
-        raw_text = _message_text(msg)
-        parsed = _extract_json_object(raw_text)
-        if not parsed:
-            msg = chat_message(prompt, temperature=0.2)
-            raw_text = _message_text(msg)
-            parsed = _extract_json_object(raw_text)
-    except (AIConfigError, AIClientError) as exc:
-        return {"success": False, "error": str(exc), "combo_key": combo_key}
+    base = {
+        "combo_key": brief.get("combo_key") or combo_key,
+        "label_zh": brief.get("label_zh"),
+        "share": brief.get("last_share"),
+        "n": brief.get("last_n"),
+        "catalog": catalog,
+        "hp_table": profile.get("hp_table") or [],
+        "families": profile.get("families") or [],
+        "common_hp": [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 220, 230, 240, 250, 270, 280, 300, 310, 330, 340],
+    }
 
-    if not parsed:
-        return {"success": False, "error": "AI 沒有返回可整理嘅 JSON", "combo_key": combo_key, "raw": raw_text[:400]}
+    roles, raw1, err1 = _ai_json(
+        (
+            "你係 PTCG 牌組角色分類員。只根據輸入目錄同張數分類每張寶可夢。"
+            "只回 JSON：{roles:[{name, role, reason}], main_attackers:[], tools:[], engines:[], techs:[]}。"
+            "role 只能係 main_attacker / engine / tool / tech / setup / tank。"
+            "main_attacker = 主要輸出。tool = 工具寵（點傷、濾牌、上傷、擋槍、 complementary 30點等），即使有傷害都唔係主炮。"
+            "例子：胡地 30 傷可以收含羞苞，所以係 tool，唔係 main_attacker。"
+            "進化線幼體通常係 setup。萬金油單張（喵喵ex、含羞苞、願增猿）多數係 tool/tech。"
+            "唔好發明目錄沒有嘅卡。"
+        ),
+        base,
+    )
+    if not roles:
+        return {"success": False, "error": err1 or "角色分類失敗", "combo_key": combo_key, "raw": raw1[:400]}
+
+    lines, raw2, err2 = _ai_json(
+        (
+            "你係 PTCG 斬殺線分析員。輸入有完整招式目錄、HP、以及上一步角色分類。"
+            "只回 JSON：{kill_lines:[{attacker, role, attack, damage, kind, breaks, note}]}。"
+            "kind 只能係 primary / chip / utility。"
+            "primary = 主打手主炮；chip = 主線補傷；utility = 工具便利線。"
+            "一定要包括工具便利線：例如胡地 30 剛剛好含羞苞 30 血，即使胡地唔係主打手。"
+            "breaks 寫具體血量同典型目標，例如「30 含羞苞」「60 土龍節節細體」「310 Mega ex」。"
+            "傷害數字只能用目錄出現過嘅印刷值，可寫組合公式但每段都要來自目錄。"
+            "同一張工具寵可以有多條 utility。"
+        ),
+        {**base, "roles": roles},
+    )
+    if not lines:
+        return {"success": False, "error": err2 or "斬殺線整理失敗", "combo_key": combo_key, "raw": raw2[:400], "roles": roles}
+
+    writeup, raw3, err3 = _ai_json(
+        (
+            "你係 PTCG 牌組評論員。輸入已有角色分類同斬殺線，請寫完整整理。"
+            "只回 JSON：{gameplan, advantages, weaknesses, tempo_note, reply}。"
+            "gameplan 3-8 句，講點展開、主炮點輸出、工具寵點配合（包括 30 收含羞苞呢類便利線）。"
+            "advantages / weaknesses 用 string array，每點綁返目錄或斬殺線，唔好空講節奏快。"
+            "主打手同工具寵要分得清。reply 一句總結。"
+        ),
+        {**base, "roles": roles, "kill_lines": lines.get("kill_lines") if isinstance(lines, dict) else lines},
+    )
+    if not writeup:
+        return {"success": False, "error": err3 or "打法整理失敗", "combo_key": combo_key, "raw": raw3[:400], "roles": roles, "kill_lines": lines}
 
     merged = dict(analysis)
-    for field in ("gameplan", "advantages", "weaknesses", "kill_lines", "tempo_note", "reply"):
-        if field in parsed:
-            merged[field] = parsed[field]
-    merged["source"] = "full_skill_catalog+ai"
+    merged["pokemon_roles"] = roles.get("roles") if isinstance(roles, dict) else roles
+    merged["role_groups"] = {
+        "main_attackers": roles.get("main_attackers") if isinstance(roles, dict) else [],
+        "tools": roles.get("tools") if isinstance(roles, dict) else [],
+        "engines": roles.get("engines") if isinstance(roles, dict) else [],
+        "techs": roles.get("techs") if isinstance(roles, dict) else [],
+    }
+    merged["kill_lines"] = lines.get("kill_lines") if isinstance(lines, dict) else lines
+    for field in ("gameplan", "advantages", "weaknesses", "tempo_note", "reply"):
+        if field in writeup:
+            merged[field] = writeup[field]
+    merged["pipeline"] = ["roles", "kill_lines", "writeup"]
+    merged["source"] = "catalog+role+kill+writeup"
     merged["annotated"] = True
-    saved = update_brief(combo_key, analysis=merged, label_zh=brief.get("label_zh"), note="ai annotate")
-    saved["reply"] = parsed.get("reply") or "已整理打法／優缺／斬殺線"
+    saved = update_brief(combo_key, analysis=merged, label_zh=brief.get("label_zh"), note="ai pipeline roles/kills/writeup")
+    saved["reply"] = writeup.get("reply") or "已完成三角色分類、斬殺線同打法整理"
     return saved
+
 
 def reset_meta_data() -> dict[str, Any]:
     """Wipe cached field stats and all stored briefs. Limitless decklists stay."""
