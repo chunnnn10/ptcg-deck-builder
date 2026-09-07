@@ -306,13 +306,20 @@
                 </div>
                 <div class="flex-1 max-w-xl flex gap-2">
                     <div class="relative flex-1">
-                        <input v-model="jpDeckSearchQuery" @keyup.enter="searchJpDecks(1)" type="text" 
-                               class="w-full bg-gray-700 text-white border border-gray-600 rounded-full py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-red-500 transition" 
+                        <input v-model="jpDeckSearchQuery"
+                               type="search"
+                               enterkeyhint="search"
+                               inputmode="search"
+                               @keydown.enter.prevent="searchJpDecks(1)"
+                               class="w-full bg-gray-700 text-white border border-gray-600 rounded-full py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-red-500 transition"
                                placeholder="多詞搜索：長耳兔 雪妖女">
                         <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
                             <span class="ms" aria-hidden="true">search</span>
                         </span>
                     </div>
+                    <button type="button" @click="searchJpDecks(1)" class="shrink-0 bg-red-600 hover:bg-red-500 text-white px-3 sm:px-4 py-2 rounded-lg font-bold text-sm">
+                        <span class="ms mr-1" aria-hidden="true">search</span>搜尋
+                    </button>
                     <select v-model="jpDeckSortMode" @change="searchJpDecks(1)" class="bg-gray-700 text-white border border-gray-600 rounded-lg px-2 text-xs md:text-sm focus:outline-none focus:border-red-500">
                         <option value="match_count">關聯度優先</option>
                         <option value="date">日期優先</option>
