@@ -1066,7 +1066,7 @@ def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | Non
     for attempt in range(3):
         append_annotate_log("request", f"第 {attempt + 1} 次請求模型…")
         try:
-            msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=120)
+            msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=90, max_tokens=1600)
             raw_text = _message_text(msg)
             parsed = _extract_json_object(raw_text)
             if parsed:

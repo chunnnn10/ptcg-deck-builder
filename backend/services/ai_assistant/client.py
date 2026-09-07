@@ -145,6 +145,7 @@ def chat_message(
     role: str = "chat",
     thinking: bool | None = None,
     timeout: float | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     cfg = ensure_chat_configured(role)
     if cfg.get("provider") == "anthropic":
@@ -163,6 +164,8 @@ def chat_message(
         payload["tool_choice"] = tool_choice or "auto"
     if response_format:
         payload["response_format"] = response_format
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
     use_thinking = cfg["thinking_enabled"] if thinking is None else bool(thinking)
     if use_thinking and "deepseek" in cfg["base_url"]:
         effort = cfg["reasoning_effort"]
