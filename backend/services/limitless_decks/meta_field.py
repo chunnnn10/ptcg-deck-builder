@@ -275,8 +275,9 @@ def _fetch_pokemon_cards(cursor, deck_ids: list[str]) -> dict[str, list[dict[str
             SELECT c.deck_id, c.card_name, c.count, c.local_tw_card_id, c.local_jp_card_id,
                    tw.name AS tw_name, tw.hp AS tw_hp, tw.sub_type AS tw_sub_type,
                    tw.skills_json AS tw_skills, tw.regulation_mark AS tw_mark,
+                   tw.description AS tw_description,
                    jp.name AS jp_name, jp.hp AS jp_hp, jp.sub_type AS jp_sub_type,
-                   jp.skills_json AS jp_skills
+                   jp.skills_json AS jp_skills, jp.description AS jp_description
             FROM limitless_deck_cards c
             LEFT JOIN cards tw ON tw.card_id = c.local_tw_card_id
             LEFT JOIN jp_cards jp ON jp.card_id = c.local_jp_card_id
@@ -311,53 +312,119 @@ def _parse_skills(value: Any) -> list[dict[str, Any]]:
         return []
 
 
-def _printed_lines(card: dict[str, Any]) -> list[dict[str, Any]]:
-    skills = _parse_skills(card.get("tw_skills") or card.get("jp_skills"))
-    lines = []
-    for skill in skills:
-        damage = _parse_damage(skill.get("damage"))
-        effect = str(skill.get("effect") or skill.get("text") or skill.get("description") or "")
-        kind = "ability" if str(skill.get("type") or skill.get("category") or "").lower() in ("ability", "特性") or skill.get("isAbility") else "attack"
-        if damage is None and not effect:
-            continue
-        lines.append({
-            "kind": kind,
-            "name": skill.get("name") or "",
-            "damage": damage,
-            "cost": skill.get("cost") or [],
-            "condition": effect[:240],
-            "target": "bench" if "備戰" in effect or "bench" in effect.lower() else "active",
-        })
+def _format_cost(cost: Any) -> str:
+    if isinstance(cost, list):
+        parts = [str(item).strip() for item in cost if str(item).strip()]
+        return "".join(parts)
+    return str(cost or "").strip()
+
+
+def _skill_kind(skill: dict[str, Any]) -> str:
+    blob = " ".join(str(skill.get(key) or "") for key in ("type", "category", "name")).lower()
+    if skill.get("isAbility") or "ability" in blob or "特性" in blob:
+        return "ability"
+    return "attack"
+
+
+def _normalize_skill(skill: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(skill.get("name") or skill.get("ability_name") or "").strip()
+    effect = str(skill.get("effect") or skill.get("text") or skill.get("description") or "").strip()
+    damage_raw = str(skill.get("damage") or "").strip()
+    kind = _skill_kind(skill)
+    if not name and not effect and not damage_raw:
+        return None
+    return {
+        "kind": kind,
+        "name": name,
+        "damage": damage_raw,
+        "damage_value": _parse_damage(damage_raw),
+        "cost": skill.get("cost") or [],
+        "cost_text": _format_cost(skill.get("cost")),
+        "effect": effect,
+        "target": "bench" if ("備戰" in effect or "bench" in effect.lower()) else "active",
+    }
+
+
+def _card_kit(card: dict[str, Any]) -> dict[str, Any]:
+    skills = [_normalize_skill(skill) for skill in _parse_skills(card.get("tw_skills") or card.get("jp_skills"))]
+    skills = [skill for skill in skills if skill]
+    name = str(card.get("tw_name") or card.get("card_name") or "").strip()
+    try:
+        hp = int(card.get("tw_hp") or card.get("jp_hp") or 0)
+    except Exception:
+        hp = 0
+    try:
+        count = int(card.get("count") or 1)
+    except Exception:
+        count = 1
+    abilities = [skill for skill in skills if skill["kind"] == "ability"]
+    attacks = [skill for skill in skills if skill["kind"] != "ability"]
+    return {
+        "name": name,
+        "card_id": card.get("local_tw_card_id") or card.get("local_jp_card_id"),
+        "hp": hp or None,
+        "count": count,
+        "sub_type": card.get("tw_sub_type") or card.get("jp_sub_type"),
+        "description": str(card.get("tw_description") or card.get("jp_description") or "")[:400],
+        "abilities": abilities,
+        "attacks": attacks,
+        "printed_lines": skills,
+    }
+
+
+def _catalog_lines(kit: dict[str, Any]) -> list[str]:
+    header = kit.get("name") or "未命名"
+    extras = []
+    if kit.get("hp"):
+        extras.append(f"HP{kit['hp']}")
+    if kit.get("sub_type"):
+        extras.append(str(kit["sub_type"]))
+    if kit.get("count"):
+        extras.append(f"x{kit['count']}")
+    lines = [header + (("　" + " / ".join(extras)) if extras else "")]
+    if not kit.get("abilities") and not kit.get("attacks"):
+        if kit.get("description"):
+            lines.append(f"  卡文：{kit['description']}")
+        else:
+            lines.append("  （未綁到中文／日文卡文）")
+        return lines
+    for idx, skill in enumerate(kit.get("abilities") or [], start=1):
+        text = f"  特性{idx} {skill.get('name') or ''}".rstrip()
+        if skill.get("effect"):
+            text += f"：{skill['effect']}"
+        lines.append(text)
+    for idx, skill in enumerate(kit.get("attacks") or [], start=1):
+        bits = [f"  招式{idx}"]
+        if skill.get("name"):
+            bits.append(str(skill["name"]))
+        if skill.get("cost_text"):
+            bits.append(f"費用{skill['cost_text']}")
+        if skill.get("damage"):
+            bits.append(f"傷害{skill['damage']}")
+        text = " ".join(bits)
+        if skill.get("effect"):
+            text += f"：{skill['effect']}"
+        lines.append(text)
     return lines
 
 
+def _printed_lines(card: dict[str, Any]) -> list[dict[str, Any]]:
+    return _card_kit(card).get("printed_lines") or []
+
+
 def _profile_from_cards(cards: list[dict[str, Any]], combo: dict[str, Any]) -> dict[str, Any]:
-    attackers = []
+    pokemon = []
     hp_table = []
     seen = set()
     for card in cards:
-        name = str(card.get("tw_name") or card.get("card_name") or "").strip()
-        if not name:
+        kit = _card_kit(card)
+        name = kit.get("name") or ""
+        if not name or name in seen:
             continue
-        key = name
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            hp = int(card.get("tw_hp") or card.get("jp_hp") or 0)
-        except Exception:
-            hp = 0
-        lines = _printed_lines(card)
-        if hp:
-            hp_table.append({"name": name, "hp": hp, "card_id": card.get("local_tw_card_id") or card.get("local_jp_card_id")})
-        if lines:
-            attackers.append({
-                "name": name,
-                "card_id": card.get("local_tw_card_id") or card.get("local_jp_card_id"),
-                "hp": hp or None,
-                "sub_type": card.get("tw_sub_type") or card.get("jp_sub_type"),
-                "printed_lines": lines,
-            })
+        seen.add(name)
+        pokemon.append(kit)
+        if kit.get("hp"):
+            hp_table.append({"name": name, "hp": kit["hp"], "card_id": kit.get("card_id")})
     return {
         "combo_key": combo.get("combo_key"),
         "label": combo.get("label"),
@@ -366,8 +433,10 @@ def _profile_from_cards(cards: list[dict[str, Any]], combo: dict[str, Any]) -> d
             {"id": row["id"], "en": row["en"], "zh": row["zh"], "count": row["count"], "staple": row["staple"]}
             for row in combo.get("families") or []
         ],
-        "attackers": attackers[:12],
-        "hp_table": hp_table[:16],
+        "pokemon_kits": pokemon,
+        "attackers": pokemon,
+        "hp_table": hp_table,
+        "skill_catalog": [line for kit in pokemon for line in _catalog_lines(kit)],
     }
 
 
@@ -818,21 +887,12 @@ def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -
             classified = classify_pokemon_lines(cards) if cards else combo
             profile = _profile_from_cards(cards, classified)
             analysis = {
-                "source": "printed_lines",
+                "source": "full_skill_catalog",
                 "tempo_note": None,
-                "combo_lines": [
-                    {
-                        "card": attacker.get("name"),
-                        "line": line.get("name"),
-                        "damage": line.get("damage"),
-                        "kind": line.get("kind"),
-                    }
-                    for attacker in profile.get("attackers") or []
-                    for line in attacker.get("printed_lines") or []
-                    if line.get("damage")
-                ],
+                "combo_lines": profile.get("skill_catalog") or [],
+                "pokemon_kits": profile.get("pokemon_kits") or [],
                 "verified": False,
-                "note": "自動由卡文印刷傷害抽出；組合斬殺線尚未人工／LLM 註解。",
+                "note": "已列出代表牌表每張寶可夢嘅特性同招式全文（含穿備戰等效果）。尚未判斷邊條先係主打點。",
             }
             cursor.execute(
                 """
