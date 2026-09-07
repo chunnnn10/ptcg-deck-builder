@@ -2701,6 +2701,21 @@ def reset_limitless_meta_data():
     return jsonify(result), 200 if result.get('success') else 500
 
 
+@main_bp.route('/api/admin/limitless-meta/annotate/status')
+@admin_required
+def get_limitless_meta_annotate_status():
+    from services.limitless_decks.meta_field import get_annotate_status
+    return jsonify({'success': True, 'status': get_annotate_status()})
+
+
+@main_bp.route('/api/admin/limitless-meta/briefs/<path:combo_key>/annotate', methods=['POST'])
+@admin_required
+def annotate_one_limitless_brief(combo_key):
+    from services.limitless_decks.meta_field import annotate_brief_with_ai
+    result = annotate_brief_with_ai(combo_key)
+    return jsonify(result), 200 if result.get('success') else 400
+
+
 @main_bp.route('/api/admin/limitless-meta/briefs/run', methods=['POST'])
 @admin_required
 def run_limitless_meta_briefs():

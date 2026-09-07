@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -912,6 +913,8 @@ def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -
             created.append({"combo_key": key, "label_zh": combo.get("label_zh"), "rank": rank, "share_pct": combo.get("share_pct")})
             existing.add(key)
         conn.commit()
+        created_keys = [row["combo_key"] for row in created]
+        annotate_status = start_brief_annotations(created_keys)
         return {
             "success": True,
             "month": month,
@@ -921,6 +924,7 @@ def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -
             "skipped_existing": skipped[:40],
             "created_count": len(created),
             "skipped_count": len(skipped),
+            "annotate": annotate_status,
         }
     except Exception as exc:
         conn.rollback()
@@ -928,6 +932,129 @@ def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -
     finally:
         conn.close()
 
+
+
+
+_ANNOTATE_LOCK = threading.Lock()
+_ANNOTATE_JOB: dict[str, Any] = {
+    "running": False,
+    "total": 0,
+    "done": 0,
+    "failed": 0,
+    "current": "",
+    "message": "就緒",
+}
+
+
+def get_annotate_status() -> dict[str, Any]:
+    with _ANNOTATE_LOCK:
+        return dict(_ANNOTATE_JOB)
+
+
+def start_brief_annotations(combo_keys: list[str]) -> dict[str, Any]:
+    keys = [str(key) for key in combo_keys if key]
+    if not keys:
+        return {"running": False, "total": 0, "message": "沒有新 brief 需要 AI 整理"}
+    with _ANNOTATE_LOCK:
+        if _ANNOTATE_JOB.get("running"):
+            return dict(_ANNOTATE_JOB)
+        _ANNOTATE_JOB.update({
+            "running": True,
+            "total": len(keys),
+            "done": 0,
+            "failed": 0,
+            "current": keys[0],
+            "message": f"準備整理 {len(keys)} 份 brief",
+        })
+    threading.Thread(target=_annotate_worker, args=(keys,), daemon=True).start()
+    return get_annotate_status()
+
+
+def _annotate_worker(combo_keys: list[str]) -> None:
+    for key in combo_keys:
+        with _ANNOTATE_LOCK:
+            _ANNOTATE_JOB["current"] = key
+            _ANNOTATE_JOB["message"] = f"AI 整理中：{key}"
+        result = annotate_brief_with_ai(key)
+        with _ANNOTATE_LOCK:
+            if result.get("success"):
+                _ANNOTATE_JOB["done"] += 1
+            else:
+                _ANNOTATE_JOB["failed"] += 1
+                _ANNOTATE_JOB["message"] = result.get("error") or "整理失敗"
+    with _ANNOTATE_LOCK:
+        _ANNOTATE_JOB["running"] = False
+        _ANNOTATE_JOB["current"] = ""
+        _ANNOTATE_JOB["message"] = (
+            f"AI 整理完成：成功 {_ANNOTATE_JOB['done']}，失敗 {_ANNOTATE_JOB['failed']}"
+        )
+
+
+def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
+    """Turn the raw skill catalog into gameplan / advantages / weaknesses / kill lines."""
+    from services.ai_assistant.client import AIClientError, AIConfigError, chat_message
+
+    current = get_brief(combo_key)
+    if not current.get("success"):
+        return current
+    brief = current["brief"]
+    analysis = brief.get("analysis") if isinstance(brief.get("analysis"), dict) else {}
+    profile = brief.get("profile") if isinstance(brief.get("profile"), dict) else {}
+    catalog = analysis.get("combo_lines") or profile.get("skill_catalog") or []
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "你係 PTCG Standard 牌組分析員。輸入係一套牌嘅完整特性／招式目錄同 HP。"
+                "請用目錄整理成分析，唔好發明目錄沒有嘅傷害數字。"
+                "只回 JSON，欄位："
+                "gameplan（打法，3-6句），"
+                "advantages（優點 string array），"
+                "weaknesses（弱點 string array），"
+                "kill_lines（array，每項 attacker, attack, damage, breaks, note；"
+                "breaks 寫可以斬到邊啲常見 HP，例如 60／70 土龍、180／220／300／310），"
+                "tempo_note（一句節奏），"
+                "reply（一句總結）。"
+                "主打點要分得出邊張先係輸出，進化體／工具寵物可以寫血線但唔好當成主炮。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps({
+                "combo_key": brief.get("combo_key") or combo_key,
+                "label_zh": brief.get("label_zh"),
+                "share": brief.get("last_share"),
+                "n": brief.get("last_n"),
+                "catalog": catalog,
+                "hp_table": profile.get("hp_table") or [],
+                "families": profile.get("families") or [],
+            }, ensure_ascii=False, default=str),
+        },
+    ]
+    raw_text = ""
+    try:
+        msg = chat_message(prompt, temperature=0.2, response_format={"type": "json_object"})
+        raw_text = _message_text(msg)
+        parsed = _extract_json_object(raw_text)
+        if not parsed:
+            msg = chat_message(prompt, temperature=0.2)
+            raw_text = _message_text(msg)
+            parsed = _extract_json_object(raw_text)
+    except (AIConfigError, AIClientError) as exc:
+        return {"success": False, "error": str(exc), "combo_key": combo_key}
+
+    if not parsed:
+        return {"success": False, "error": "AI 沒有返回可整理嘅 JSON", "combo_key": combo_key, "raw": raw_text[:400]}
+
+    merged = dict(analysis)
+    for field in ("gameplan", "advantages", "weaknesses", "kill_lines", "tempo_note", "reply"):
+        if field in parsed:
+            merged[field] = parsed[field]
+    merged["source"] = "full_skill_catalog+ai"
+    merged["annotated"] = True
+    saved = update_brief(combo_key, analysis=merged, label_zh=brief.get("label_zh"), note="ai annotate")
+    saved["reply"] = parsed.get("reply") or "已整理打法／優缺／斬殺線"
+    return saved
 
 def reset_meta_data() -> dict[str, Any]:
     """Wipe cached field stats and all stored briefs. Limitless decklists stay."""

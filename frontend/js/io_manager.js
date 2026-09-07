@@ -86,6 +86,10 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         note: "",
         combo_lines_text: "",
         quirks_text: "",
+        gameplan: "",
+        advantages_text: "",
+        weaknesses_text: "",
+        kill_lines_text: "",
     });
     const importMissingNotice = ref(null);
 
@@ -790,18 +794,29 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         const analysis = (brief && brief.analysis) || {};
         const lines = Array.isArray(analysis.combo_lines) ? analysis.combo_lines : [];
         const quirks = Array.isArray(analysis.quirks) ? analysis.quirks : [];
+        const listText = (value) => {
+            if (!Array.isArray(value)) return value ? String(value) : "";
+            return value.map((row) => {
+                if (typeof row === "string") return row;
+                if (row && row.attacker) {
+                    return [row.attacker, row.attack, row.damage, (row.breaks || []).join("、"), row.note].filter(Boolean).join(" | ");
+                }
+                return [row.rule, row.note].filter(Boolean).join(" — ");
+            }).join("\n");
+        };
         briefDraft.value = {
             label_zh: (brief && (brief.label_zh || brief.label)) || "",
             tempo_note: analysis.tempo_note || "",
             note: analysis.note || "",
+            gameplan: analysis.gameplan || "",
+            advantages_text: listText(analysis.advantages),
+            weaknesses_text: listText(analysis.weaknesses),
+            kill_lines_text: listText(analysis.kill_lines),
             combo_lines_text: lines.map((line) => {
                 if (typeof line === "string") return line;
                 return [line.damage, line.card || line.pieces, line.line || line.formula, line.note].filter(Boolean).join(" | ");
             }).join("\n"),
-            quirks_text: quirks.map((row) => {
-                if (typeof row === "string") return row;
-                return [row.rule, row.note].filter(Boolean).join(" — ");
-            }).join("\n"),
+            quirks_text: listText(quirks),
         };
     };
 
@@ -831,12 +846,17 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
 
     const analysisFromDraft = () => {
         const prev = (editingBrief.value && editingBrief.value.analysis) || {};
+        const linesOf = (text) => String(text || "").split("\n").map((line) => line.trim()).filter(Boolean);
         return {
             ...prev,
             tempo_note: briefDraft.value.tempo_note,
             note: briefDraft.value.note,
-            combo_lines: String(briefDraft.value.combo_lines_text || "").split("\n").map((line) => line.trim()).filter(Boolean),
-            quirks: String(briefDraft.value.quirks_text || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => ({ rule: line })),
+            gameplan: briefDraft.value.gameplan,
+            advantages: linesOf(briefDraft.value.advantages_text),
+            weaknesses: linesOf(briefDraft.value.weaknesses_text),
+            kill_lines: linesOf(briefDraft.value.kill_lines_text),
+            combo_lines: linesOf(briefDraft.value.combo_lines_text),
+            quirks: linesOf(briefDraft.value.quirks_text).map((line) => ({ rule: line })),
             verified: true,
         };
     };
@@ -864,6 +884,27 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
             alert("儲存失敗");
         } finally {
             briefSaving.value = false;
+        }
+    };
+
+    const annotateOpenBrief = async () => {
+        if (!editingBrief.value || briefRevising.value) return;
+        briefRevising.value = true;
+        briefChatLog.value = [...briefChatLog.value, { role: "user", text: "請用目錄整理打法／優缺／斬殺線" }];
+        try {
+            const res = await fetch(`/api/admin/limitless-meta/briefs/${encodeURIComponent(editingBrief.value.combo_key)}/annotate`, { method: "POST" });
+            const data = await res.json();
+            if (!data.success) {
+                briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.error || "整理失敗" }];
+                return;
+            }
+            editingBrief.value = data.brief || editingBrief.value;
+            fillBriefDraft(data.brief || editingBrief.value);
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.reply || "已整理打法／優缺／斬殺線" }];
+        } catch (e) {
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "整理連線失敗" }];
+        } finally {
+            briefRevising.value = false;
         }
     };
 
@@ -920,7 +961,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         limitlessField, limitlessFieldLoading, limitlessFieldDays, loadLimitlessField,
         limitlessPieSlices, limitlessPieGradient, limitlessBriefs, selectedLimitlessCombo,
         showBriefEditor, editingBrief, briefDraft, briefSaving, briefRevising, briefChatInput, briefChatLog,
-        openBriefEditor, closeBriefEditor, saveBriefEditor, sendBriefRevision,
+        openBriefEditor, closeBriefEditor, saveBriefEditor, sendBriefRevision, annotateOpenBrief,
         loadLimitlessCards, setLimitlessLang, setLimitlessMode,
         closeLimitlessDeckDetail, getLimitlessCards, getLimitlessSectionCards,
         getLimitlessSectionCount, getLimitlessDeckName, getLimitlessTagName,

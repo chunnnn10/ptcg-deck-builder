@@ -257,6 +257,18 @@
                         <label class="block text-xs text-gray-400">顯示名稱
                             <input v-model="briefDraft.label_zh" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2">
                         </label>
+                        <label class="block text-xs text-gray-400">牌組打法
+                            <textarea v-model="briefDraft.gameplan" rows="4" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
+                        </label>
+                        <label class="block text-xs text-gray-400">牌組優勢（一行一點）
+                            <textarea v-model="briefDraft.advantages_text" rows="3" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
+                        </label>
+                        <label class="block text-xs text-gray-400">牌組弱點（一行一點）
+                            <textarea v-model="briefDraft.weaknesses_text" rows="3" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
+                        </label>
+                        <label class="block text-xs text-gray-400">各怪物斬殺線
+                            <textarea v-model="briefDraft.kill_lines_text" rows="5" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm font-mono"></textarea>
+                        </label>
                         <label class="block text-xs text-gray-400">節奏／展開（tempo）
                             <textarea v-model="briefDraft.tempo_note" rows="2" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
                         </label>
@@ -279,7 +291,8 @@
                                 <input v-model="briefChatInput" @keyup.enter="sendBriefRevision" class="flex-1 bg-gray-900 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm" placeholder="話俾 AI 知要改咩">
                                 <button @click="sendBriefRevision" :disabled="briefRevising" class="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-60 text-white px-3 py-2 rounded-lg text-sm font-bold">[[ briefRevising ? '…' : '修正' ]]</button>
                             </div>
-                            <p class="text-[11px] text-gray-500 mt-2">AI 修正會即時寫入 brief；你仲可以喺上面人手改完再儲存。</p>
+                            <button type="button" @click="annotateOpenBrief" :disabled="briefRevising" class="mt-2 bg-sky-700 hover:bg-sky-600 disabled:opacity-60 text-white px-3 py-2 rounded-lg text-sm font-bold">[[ briefRevising ? '整理中…' : '用目錄重新 AI 整理打法／優缺／斬殺線' ]]</button>
+                            <p class="text-[11px] text-gray-500 mt-2">跑 brief 之後 AI 會自動整理呢四欄。唔滿意可以再撳上面或者人手改完儲存。</p>
                         </div>
                     </div>
                     <div class="p-3 sm:p-4 border-t border-gray-700 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">

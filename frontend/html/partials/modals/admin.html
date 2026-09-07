@@ -1093,6 +1093,10 @@
                             今次新建 [[ formatBriefRun.created_count || 0 ]] · 已存在 [[ formatBriefRun.skipped_count || 0 ]]
                             <div v-for="row in (formatBriefRun.created || [])" :key="row.combo_key" class="text-xs text-emerald-400">#[[ row.rank ]] [[ row.label_zh ]] [[ row.share_pct ]]</div>
                         </div>
+                        <div v-if="formatAnnotateStatus" class="text-xs mb-3" :class="formatAnnotateStatus.running ? 'text-yellow-300' : 'text-emerald-300'">
+                            [[ formatAnnotateStatus.message ]]
+                            <span v-if="formatAnnotateStatus.total">（[[ formatAnnotateStatus.done ]]/[[ formatAnnotateStatus.total ]]）</span>
+                        </div>
                         <div class="flex flex-col sm:flex-row gap-2">
                             <button @click="runMonthlyFormatBriefs" :disabled="formatBriefRunning || formatMetaResetting" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white px-6 py-3 rounded-full font-bold text-sm">
                                 [[ formatBriefRunning ? '統計中…' : '跑今個月 20 個新 brief' ]]

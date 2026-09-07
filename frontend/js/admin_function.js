@@ -785,6 +785,21 @@ function useAdminUpdate() {
     });
     const formatBriefRunning = ref(false);
     const formatBriefRun = ref(null);
+    const formatAnnotateStatus = ref(null);
+    let formatAnnotateTimer = null;
+    const pollFormatAnnotateStatus = async () => {
+        if (formatAnnotateTimer) clearTimeout(formatAnnotateTimer);
+        try {
+            const res = await fetch('/api/admin/limitless-meta/annotate/status');
+            const data = await res.json();
+            if (data.success) formatAnnotateStatus.value = data.status;
+            if (data.status && data.status.running) {
+                formatAnnotateTimer = setTimeout(pollFormatAnnotateStatus, 2000);
+            }
+        } catch (e) {
+            formatAnnotateTimer = setTimeout(pollFormatAnnotateStatus, 4000);
+        }
+    };
     const formatMetaResetting = ref(false);
     const formatMetaResetMessage = ref("");
     const formatMetaResetOk = ref(false);
@@ -818,6 +833,7 @@ function useAdminUpdate() {
             const data = await res.json();
             formatBriefRun.value = data;
             if (!data.success) alert(data.error || 'Meta brief 失敗');
+            if (data.success) pollFormatAnnotateStatus();
         } catch (e) {
             alert('Meta brief 連線失敗');
         } finally {
@@ -1842,6 +1858,7 @@ function useAdminUpdate() {
         stopLimitlessRematch,
         formatBriefRunning,
         formatBriefRun,
+        formatAnnotateStatus,
         runMonthlyFormatBriefs,
         formatMetaResetting,
         formatMetaResetMessage,
