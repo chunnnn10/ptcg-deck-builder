@@ -886,7 +886,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
             }
             editingBrief.value = data.brief;
             fillBriefDraft(data.brief);
-            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "已按你嘅指示更新分析，請檢查後再儲存或繼續改。" }];
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.reply || (data.brief && data.brief.analysis && data.brief.analysis.reply) || "已更新分析，請檢查傷害線同 quirks。" }];
             await loadLimitlessField();
         } catch (e) {
             briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "連線失敗" }];

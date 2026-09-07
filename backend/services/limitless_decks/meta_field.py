@@ -68,6 +68,9 @@ FAMILY_ALIASES: dict[str, tuple[str, str]] = {
     "kadabra": ("Alakazam", "胡地"),
     "abra": ("Alakazam", "胡地"),
     "胡地": ("Alakazam", "胡地"),
+    "凱西": ("Alakazam", "胡地"),
+    "凯西": ("Alakazam", "胡地"),
+    "勇基拉": ("Alakazam", "胡地"),
     "lucario": ("Lucario", "路卡利歐"),
     "riolu": ("Lucario", "路卡利歐"),
     "路卡利歐": ("Lucario", "路卡利歐"),
@@ -661,9 +664,51 @@ def update_brief(combo_key: str, analysis: dict[str, Any] | None = None, label_z
         conn.close()
 
 
+def _message_text(message: Any) -> str:
+    if isinstance(message, str):
+        return message
+    if not isinstance(message, dict):
+        return str(message or "")
+    content = message.get("content")
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                parts.append(str(part))
+        content = "\n".join(parts)
+    chunks = [content, message.get("reasoning_content"), message.get("reasoning")]
+    return "\n".join(str(chunk) for chunk in chunks if chunk)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.I).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+    candidates = [raw]
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start:end + 1])
+    for item in candidates:
+        try:
+            parsed = json.loads(item)
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and parsed:
+            if isinstance(parsed.get("analysis"), dict):
+                return parsed["analysis"]
+            return parsed
+    return None
+
+
 def revise_brief_with_ai(combo_key: str, message: str) -> dict[str, Any]:
     """Ask the chat model to propose an analysis patch, then save it."""
-    from services.ai_assistant.client import AIClientError, AIConfigError, chat_completion
+    from services.ai_assistant.client import AIClientError, AIConfigError, chat_message
 
     current = get_brief(combo_key)
     brief = current.get("brief") if current.get("success") else {"combo_key": combo_key, "analysis": {}, "label_zh": combo_key}
@@ -673,9 +718,10 @@ def revise_brief_with_ai(combo_key: str, message: str) -> dict[str, Any]:
             "role": "system",
             "content": (
                 "你係 PTCG Format Analyst 編輯助手。用戶會指出分析錯邊。"
-                "只准改 analysis JSON：quirks、combo_lines、tempo_note、vs_field_notes、note。"
-                "唔准發明唔存在嘅傷害數字；改數字要喺 note 寫原因。"
-                "只回一個 JSON 物件，唔好 markdown。"
+                "回一個 JSON 物件，可以包 markdown 都可以，但一定要有呢幾欄："
+                "tempo_note, quirks (string array), combo_lines (string array), note, reply。"
+                "combo_lines 只保留用戶話仍然有效嘅打點；quirks 寫血線同版本差。"
+                "唔准發明新傷害數字。reply 用繁中一句總結你改咗咩。"
             ),
         },
         {
@@ -689,18 +735,47 @@ def revise_brief_with_ai(combo_key: str, message: str) -> dict[str, Any]:
             }, ensure_ascii=False, default=str),
         },
     ]
-    try:
-        raw = chat_completion(prompt, response_format={"type": "json_object"})
-    except (AIConfigError, AIClientError) as exc:
-        return {"success": False, "error": str(exc)}
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
-        parsed = {}
-    if not isinstance(parsed, dict) or not parsed:
-        return {"success": False, "error": "AI 沒有返回可用 JSON", "raw": str(raw)[:800]}
+    raw_text = ""
+    last_error = ""
+    for use_format in (True, False):
+        try:
+            msg = chat_message(
+                prompt,
+                temperature=0.2,
+                response_format={"type": "json_object"} if use_format else None,
+            )
+            raw_text = _message_text(msg)
+            parsed = _extract_json_object(raw_text)
+            if parsed:
+                break
+        except (AIConfigError, AIClientError) as exc:
+            last_error = str(exc)
+            parsed = None
+            if "json" not in last_error.lower() and use_format:
+                continue
+            if not use_format:
+                return {"success": False, "error": last_error}
+    else:
+        parsed = None
+
+    if not parsed:
+        # Keep the user's correction instead of dying on format.
+        parsed = {
+            "tempo_note": analysis.get("tempo_note") or "",
+            "quirks": analysis.get("quirks") or [],
+            "combo_lines": analysis.get("combo_lines") or [],
+            "note": message,
+            "reply": "模型無出到完整 JSON，已把你嘅指示寫入備註，請再檢查傷害線。",
+        }
+        if last_error:
+            parsed["reply"] += f"（{last_error[:120]}）"
+
+    reply = str(parsed.get("reply") or parsed.get("note") or "已按你嘅指示更新分析")
+    parsed["reply"] = reply
     saved = update_brief(combo_key, analysis=parsed, label_zh=brief.get("label_zh"), note=f"ai: {message[:180]}")
     saved["proposal"] = parsed
+    saved["reply"] = reply
+    saved["raw"] = raw_text[:500]
     return saved
 
 
