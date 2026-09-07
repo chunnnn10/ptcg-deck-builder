@@ -1299,8 +1299,53 @@ def _infer_roles_from_kits(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def gold_brief_path(combo_key: str) -> "Any":
+    from pathlib import Path
+    root = Path(__file__).resolve().parent / "gold"
+    return root / f"{combo_key}.json"
+
+
+def load_gold_brief(combo_key: str) -> dict[str, Any] | None:
+    path = gold_brief_path(combo_key)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def apply_gold_brief(combo_key: str) -> dict[str, Any] | None:
+    gold = load_gold_brief(combo_key)
+    if not gold:
+        return None
+    current = get_brief(combo_key)
+    brief = current.get("brief") if current.get("success") else {"combo_key": combo_key, "analysis": {}, "label_zh": combo_key}
+    analysis = brief.get("analysis") if isinstance(brief.get("analysis"), dict) else {}
+    merged = dict(analysis)
+    merged["pokemon_roles"] = gold.get("roles") or []
+    merged["kill_lines"] = gold.get("kill_lines") or []
+    merged["gameplan"] = gold.get("gameplan") or ""
+    merged["advantages"] = gold.get("advantages") or []
+    merged["weaknesses"] = gold.get("weaknesses") or []
+    merged["reply"] = gold.get("reply") or "已套用人手金標準"
+    merged["source"] = "gold_brief"
+    merged["annotated"] = True
+    merged["verified"] = True
+    saved = update_brief(combo_key, analysis=merged, label_zh=brief.get("label_zh"), note="gold brief overlay")
+    saved["reply"] = merged["reply"]
+    saved["gold"] = True
+    return saved
+
+
 def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     """3-step pipeline: roles -> kill/utility lines -> gameplan writeup."""
+    gold_hit = apply_gold_brief(combo_key)
+    if gold_hit:
+        append_annotate_log("gold", f"套用人手金標準：{combo_key}")
+        return gold_hit
     current = get_brief(combo_key)
     if not current.get("success"):
         return current
