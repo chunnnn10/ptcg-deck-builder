@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -1020,25 +1021,45 @@ def _annotate_worker(combo_keys: list[str]) -> None:
         )
 
 
+def _compact_catalog(catalog: Any, limit: int = 60) -> list[str]:
+    lines = catalog if isinstance(catalog, list) else [str(catalog or "")]
+    compact = []
+    for line in lines:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        compact.append(text[:280])
+        if len(compact) >= limit:
+            break
+    return compact
+
+
 def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str, str]:
     from services.ai_assistant.client import AIClientError, AIConfigError, chat_message
 
+    if isinstance(payload, dict) and payload.get("catalog"):
+        payload = dict(payload)
+        payload["catalog"] = _compact_catalog(payload.get("catalog"))
     prompt = [
-        {"role": "system", "content": system},
+        {"role": "system", "content": system + " 只回 JSON 物件。"},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
     ]
     raw_text = ""
-    try:
-        msg = chat_message(prompt, temperature=0.2, response_format={"type": "json_object"})
-        raw_text = _message_text(msg)
-        parsed = _extract_json_object(raw_text)
-        if parsed:
-            return parsed, raw_text, ""
-        msg = chat_message(prompt, temperature=0.2)
-        raw_text = _message_text(msg)
-        return _extract_json_object(raw_text), raw_text, ""
-    except (AIConfigError, AIClientError) as exc:
-        return None, raw_text, str(exc)
+    last_error = ""
+    for attempt in range(3):
+        try:
+            msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=120)
+            raw_text = _message_text(msg)
+            parsed = _extract_json_object(raw_text)
+            if parsed:
+                return parsed, raw_text, ""
+            last_error = "AI 沒有返回可用 JSON"
+        except (AIConfigError, AIClientError) as exc:
+            last_error = str(exc)
+            if "401" in last_error or "402" in last_error or "未設定" in last_error:
+                break
+        time.sleep(1.5 * (attempt + 1))
+    return None, raw_text, last_error
 
 
 def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:

@@ -143,6 +143,8 @@ def chat_message(
     tool_choice: str | dict[str, Any] | None = None,
     response_format: dict[str, Any] | None = None,
     role: str = "chat",
+    thinking: bool | None = None,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     cfg = ensure_chat_configured(role)
     if cfg.get("provider") == "anthropic":
@@ -161,7 +163,8 @@ def chat_message(
         payload["tool_choice"] = tool_choice or "auto"
     if response_format:
         payload["response_format"] = response_format
-    if cfg["thinking_enabled"] and "deepseek" in cfg["base_url"]:
+    use_thinking = cfg["thinking_enabled"] if thinking is None else bool(thinking)
+    if use_thinking and "deepseek" in cfg["base_url"]:
         effort = cfg["reasoning_effort"]
         payload["thinking"] = {"type": "enabled"}
         payload["reasoning_effort"] = effort if effort in ("high", "max") else "high"
@@ -169,7 +172,7 @@ def chat_message(
         payload["temperature"] = temperature
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=cfg["timeout"])
+        resp = requests.post(url, headers=headers, json=payload, timeout=float(timeout or cfg["timeout"]))
     except requests.RequestException as exc:
         raise AIClientError(f"AI request failed: {exc}") from exc
 
