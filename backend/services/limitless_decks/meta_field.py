@@ -1323,19 +1323,13 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     append_annotate_log("roles", f"步驟 1／3：分類主打手同工具寵（{brief.get('label_zh') or combo_key}）")
     roles, raw1, err1 = _ai_json(
         (
-            "你係 PTCG 牌組角色分類員。先問呢張卡平時出特性定出招式，禁止用印刷傷害排主炮。"
-            "card_hints.play_focus=ability 就唔好寫收頭主炮。"
-            "固定範例（必須跟）："
-            "超級袋獸ex＝戰鬥區特性抽2，濾牌核心，唔係機關槍合擊200收頭。"
-            "喵喵ex＝工具寵，唔會打60。"
-            "碧草面具ex＝特性貼能＋抽牌引擎，兼打草弱；萬葉陣雨30唔係定位。"
-            "拉帝亞斯ex＝撤退工具；除非皮皮把龍改成弱超，先至會出無限之刃。"
-            "莉莉艾的皮皮ex＝特性令龍弱超，本身唔係20傷打手。"
-            "古劍豹＝特性拆場地；太晶場8備戰被拆返5，可丟殘血或喵喵。"
-            "水井面具ex＝20傷鎖撤退兼打後排，唔係100傷副攻。"
-            "吉雉雞ex＝特性抽牌；打後排只會用水井面具。"
-            "猛雷鼓先睇效果係咪棄能加傷；若呢套能量軸唔係為佢服務，就只係中段tech。"
-            "reason 要寫點用，唔好寫「鎖定為主炮所以係主炮」。"
+            "你係 PTCG 牌組角色分類員。適用任何 Standard 組合，唔好套用某一套嘅固定答案。"
+            "只准引用 catalog／card_hints 入面出現過嘅特性同招式原文，禁止發明能力。"
+            "先判斷呢張卡喺呢副牌嘅用途：特性、撤退、改弱點、拆場地、鎖撤退、打後排、濾牌、貼能、定真係出招收頭。"
+            "印刷傷害大唔等於主炮。1-2張、能量軸對唔上、或者同隊已經有濾牌／貼能核心，通常係 tech。"
+            "main_attackers 可以空白。濾牌＋貼能＋工具組成嘅牌可以冇傳統主炮。"
+            "同隊如果有改弱點卡，對應屬性嗰張先至有機會出招，唔好寫「永遠打唔到」。"
+            "reason 寫『喺呢副點用』，唔好寫『因為鎖定所以係主炮』。"
         ),
         base,
         ROLE_TOOL,
@@ -1343,15 +1337,7 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
     if not roles:
         append_annotate_log("roles", "步驟 1 失敗", err1 or "角色分類失敗", raw1)
         return {"success": False, "error": err1 or "角色分類失敗", "combo_key": combo_key, "raw": raw1[:800]}
-    locked = base.get("locked_from_card_text") or {}
-    # Only force scaler mains / energy engines. Never invent a 200-damage finisher.
-    if locked.get("locked_main_attackers"):
-        roles["main_attackers"] = list(locked["locked_main_attackers"])
-        locked_mains = set(roles["main_attackers"])
-        roles["techs"] = [name for name in (roles.get("techs") or []) if name not in locked_mains]
-    if locked.get("locked_engines"):
-        roles["engines"] = list(dict.fromkeys(list(locked["locked_engines"]) + list(roles.get("engines") or [])))
-        roles["tools"] = [name for name in (roles.get("tools") or []) if name not in set(roles["engines"])]
+    # Hints only. Do not overwrite the model with a single-deck lock.
 
     append_annotate_log(
         "roles",
