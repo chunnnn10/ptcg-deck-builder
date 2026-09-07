@@ -1066,42 +1066,143 @@ def _compact_catalog(catalog: Any, limit: int = 60) -> list[str]:
     return compact
 
 
-def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str, str]:
+def _function_tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+ROLE_TOOL = _function_tool(
+    "classify_pokemon_roles",
+    "分類牌組入面每張寶可夢係主打手、引擎定工具寵。",
+    {
+        "roles": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "role": {"type": "string", "enum": ["main_attacker", "engine", "tool", "tech", "setup", "tank"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["name", "role", "reason"],
+            },
+        },
+        "main_attackers": {"type": "array", "items": {"type": "string"}},
+        "tools": {"type": "array", "items": {"type": "string"}},
+        "engines": {"type": "array", "items": {"type": "string"}},
+        "techs": {"type": "array", "items": {"type": "string"}},
+    },
+    ["roles", "main_attackers", "tools"],
+)
+
+KILL_TOOL = _function_tool(
+    "extract_kill_lines",
+    "列出主炮、補傷同工具便利線，傷害只能用目錄出現過嘅數字。",
+    {
+        "kill_lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "attacker": {"type": "string"},
+                    "role": {"type": "string"},
+                    "attack": {"type": "string"},
+                    "damage": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["primary", "chip", "utility"]},
+                    "breaks": {"type": "array", "items": {"type": "string"}},
+                    "note": {"type": "string"},
+                },
+                "required": ["attacker", "attack", "damage", "kind"],
+            },
+        }
+    },
+    ["kill_lines"],
+)
+
+WRITEUP_TOOL = _function_tool(
+    "write_deck_brief",
+    "用已有角色同斬殺線寫打法、優勢、弱點。",
+    {
+        "gameplan": {"type": "string"},
+        "advantages": {"type": "array", "items": {"type": "string"}},
+        "weaknesses": {"type": "array", "items": {"type": "string"}},
+        "tempo_note": {"type": "string"},
+        "reply": {"type": "string"},
+    },
+    ["gameplan", "advantages", "weaknesses", "reply"],
+)
+
+
+def _tool_arguments(message: Any) -> dict[str, Any] | None:
+    if not isinstance(message, dict):
+        return None
+    calls = message.get("tool_calls") or []
+    if isinstance(calls, dict):
+        calls = [calls]
+    if not calls and message.get("function_call"):
+        calls = [{"function": message.get("function_call")}]
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else call
+        raw = fn.get("arguments") or fn.get("parameters") or fn.get("args")
+        if isinstance(raw, dict) and raw:
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            parsed = _extract_json_object(raw)
+            if parsed:
+                return parsed
+    return None
+
+
+def _ai_json(system: str, payload: dict[str, Any], tool: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str, str]:
     from services.ai_assistant.client import AIClientError, AIConfigError, chat_message
 
     if isinstance(payload, dict) and payload.get("catalog"):
         payload = dict(payload)
         payload["catalog"] = _compact_catalog(payload.get("catalog"))
+    tool_name = ((tool or {}).get("function") or {}).get("name") or "submit_result"
     prompt = [
-        {"role": "system", "content": system + " 唔好輸出 <think>。最後只回一個 JSON 物件。"},
+        {
+            "role": "system",
+            "content": system + " 必須用工具提交結果，不要只輸出 <think> 或純文字。",
+        },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
     ]
     raw_text = ""
     last_error = ""
     for attempt in range(3):
-        append_annotate_log("request", f"第 {attempt + 1} 次請求模型…")
+        append_annotate_log("request", f"第 {attempt + 1} 次強制工具調用 {tool_name}")
         try:
-            msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=90, max_tokens=4096)
+            msg = chat_message(
+                prompt,
+                temperature=0.2,
+                thinking=False,
+                timeout=90,
+                max_tokens=4096,
+                tools=[tool] if tool else None,
+                tool_choice={"type": "function", "function": {"name": tool_name}} if tool else None,
+            )
             raw_text = _message_text(msg)
             rest, think = _split_think(raw_text)
             if think:
                 append_annotate_log("think", "模型思考摘錄", raw=think[:800])
-            parsed = _extract_json_object(raw_text)
+            parsed = _tool_arguments(msg) or _extract_json_object(raw_text)
             if parsed:
-                return parsed, raw_text, ""
-            if think or rest:
-                append_annotate_log("repair", "思考有內容但無 JSON，改用草稿補一次")
-                repair = [
-                    {"role": "system", "content": system + " 根據草稿只回 JSON，不要 <think>。"},
-                    {"role": "user", "content": json.dumps({"draft": (think or rest)[:4000], "original": payload}, ensure_ascii=False, default=str)},
-                ]
-                msg = chat_message(repair, temperature=0.1, thinking=False, timeout=90, max_tokens=4096)
-                raw_text = _message_text(msg)
-                parsed = _extract_json_object(raw_text)
-                if parsed:
-                    return parsed, raw_text, ""
-            last_error = "AI 沒有返回可用 JSON"
-            append_annotate_log("parse", last_error, last_error, raw_text)
+                append_annotate_log("tool", f"已收到工具參數 {tool_name}", raw=json.dumps(parsed, ensure_ascii=False, default=str)[:800])
+                return parsed, raw_text or json.dumps(parsed, ensure_ascii=False), ""
+            last_error = "模型沒有呼叫工具，亦沒有可用 JSON"
+            append_annotate_log("parse", last_error, last_error, raw_text or str(msg)[:800])
         except (AIConfigError, AIClientError) as exc:
             last_error = str(exc)
             append_annotate_log("error", last_error, last_error, raw_text)
@@ -1143,6 +1244,7 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
             "唔好發明目錄沒有嘅卡。"
         ),
         base,
+        ROLE_TOOL,
     )
     if not roles:
         append_annotate_log("roles", "步驟 1 失敗", err1 or "角色分類失敗", raw1)
@@ -1169,6 +1271,7 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
             "同一張工具寵可以有多條 utility。"
         ),
         {**base, "roles": roles},
+        KILL_TOOL,
     )
     if not lines:
         append_annotate_log("kills", "步驟 2 失敗", err2 or "斬殺線整理失敗", raw2)
@@ -1186,6 +1289,7 @@ def annotate_brief_with_ai(combo_key: str) -> dict[str, Any]:
             "主打手同工具寵要分得清。reply 一句總結。"
         ),
         {**base, "roles": roles, "kill_lines": lines.get("kill_lines") if isinstance(lines, dict) else lines},
+        WRITEUP_TOOL,
     )
     if not writeup:
         append_annotate_log("writeup", "步驟 3 失敗", err3 or "打法整理失敗", raw3)
