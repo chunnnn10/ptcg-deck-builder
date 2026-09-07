@@ -115,6 +115,19 @@ SKILLS: list[dict[str, Any]] = [
         "output": "answer + deck_actions + deck_diff + cards",
     },
     {
+        "name": "format_field",
+        "description": "讀而家 Limitless 窗內前 20 佔比同環境打擊帶。",
+        "when": "用戶問而家環境有邊套、佔比、一線係邊啲。",
+        "tools": ["search_meta_decks", "summarize_meta_archetype", "get_matchup_sheet"],
+        "flow": [
+            "用 Limitless 搜近期套，不要用模型記憶報佔比",
+            "未有 format_snapshot 工具前，只講樣本同名次，不要假裝有精確 %",
+            "用戶要對局先轉 matchup_analysis",
+        ],
+        "stop": "列出可見套同來源就停。",
+        "output": "answer + meta_references",
+    },
+    {
         "name": "recommend_archetype",
         "description": "推薦一套並交具體牌表。",
         "when": "用戶要推薦套、組一套、要 60 張。",
