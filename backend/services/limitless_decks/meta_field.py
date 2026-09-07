@@ -589,6 +589,121 @@ def get_brief(combo_key: str) -> dict[str, Any]:
         conn.close()
 
 
+
+def _serialize_brief_row(row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    for key in ("created_at", "updated_at"):
+        if hasattr(item.get(key), "isoformat"):
+            item[key] = item[key].isoformat()
+    return item
+
+
+def update_brief(combo_key: str, analysis: dict[str, Any] | None = None, label_zh: str | None = None, note: str = "") -> dict[str, Any]:
+    """Create or overwrite a stored brief analysis. Manual edits win."""
+    ensure_schema()
+    key = str(combo_key or "").strip()
+    if not key:
+        return {"success": False, "error": "missing combo_key"}
+    conn = database.get_db_connection()
+    if not conn:
+        return {"success": False, "error": "database unavailable"}
+    month = date.today().strftime("%Y-%m")
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM format_archetype_briefs WHERE combo_key = %s", (key,))
+        existing = cursor.fetchone()
+        payload = analysis if isinstance(analysis, dict) else {}
+        if existing:
+            current = existing.get("analysis") if isinstance(existing.get("analysis"), dict) else {}
+            if isinstance(existing.get("analysis"), str):
+                try:
+                    current = json.loads(existing["analysis"])
+                except Exception:
+                    current = {}
+            merged = dict(current)
+            merged.update(payload)
+            revisions = list(merged.get("revisions") or [])
+            if note:
+                revisions.append({"at": datetime.utcnow().isoformat(timespec="seconds") + "Z", "note": note, "source": "manual"})
+            merged["revisions"] = revisions[-20:]
+            merged["verified"] = True
+            cursor.execute(
+                """
+                UPDATE format_archetype_briefs
+                SET analysis = %s::jsonb,
+                    label_zh = COALESCE(NULLIF(%s, ''), label_zh),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE combo_key = %s
+                RETURNING *
+                """,
+                (json.dumps(merged, ensure_ascii=False, default=str), str(label_zh or "").strip(), key),
+            )
+        else:
+            payload = dict(payload)
+            payload.setdefault("verified", True)
+            payload["revisions"] = [{"at": datetime.utcnow().isoformat(timespec="seconds") + "Z", "note": note or "manual create", "source": "manual"}]
+            cursor.execute(
+                """
+                INSERT INTO format_archetype_briefs (
+                    combo_key, label, label_zh, first_month, last_seen_month, analysis
+                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                RETURNING *
+                """,
+                (key, label_zh or key, label_zh or key, month, month, json.dumps(payload, ensure_ascii=False, default=str)),
+            )
+        row = cursor.fetchone()
+        conn.commit()
+        return {"success": True, "brief": _serialize_brief_row(row)}
+    except Exception as exc:
+        conn.rollback()
+        return {"success": False, "error": str(exc)}
+    finally:
+        conn.close()
+
+
+def revise_brief_with_ai(combo_key: str, message: str) -> dict[str, Any]:
+    """Ask the chat model to propose an analysis patch, then save it."""
+    from services.ai_assistant.client import AIClientError, AIConfigError, chat_completion
+
+    current = get_brief(combo_key)
+    brief = current.get("brief") if current.get("success") else {"combo_key": combo_key, "analysis": {}, "label_zh": combo_key}
+    analysis = brief.get("analysis") if isinstance(brief.get("analysis"), dict) else {}
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "你係 PTCG Format Analyst 編輯助手。用戶會指出分析錯邊。"
+                "只准改 analysis JSON：quirks、combo_lines、tempo_note、vs_field_notes、note。"
+                "唔准發明唔存在嘅傷害數字；改數字要喺 note 寫原因。"
+                "只回一個 JSON 物件，唔好 markdown。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps({
+                "instruction": message,
+                "combo_key": brief.get("combo_key") or combo_key,
+                "label_zh": brief.get("label_zh"),
+                "profile": brief.get("profile") or {},
+                "analysis": analysis,
+            }, ensure_ascii=False, default=str),
+        },
+    ]
+    try:
+        raw = chat_completion(prompt, response_format={"type": "json_object"})
+    except (AIConfigError, AIClientError) as exc:
+        return {"success": False, "error": str(exc)}
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict) or not parsed:
+        return {"success": False, "error": "AI 沒有返回可用 JSON", "raw": str(raw)[:800]}
+    saved = update_brief(combo_key, analysis=parsed, label_zh=brief.get("label_zh"), note=f"ai: {message[:180]}")
+    saved["proposal"] = parsed
+    return saved
+
+
 def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -> dict[str, Any]:
     """Fill up to `quota` NEW combo briefs from current window ranking. Never re-analyze stored keys."""
     ensure_schema()

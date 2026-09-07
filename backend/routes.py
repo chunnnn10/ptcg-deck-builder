@@ -2664,6 +2664,34 @@ def get_limitless_deck_combo(deck_id):
     return jsonify({'success': True, 'combo': combo})
 
 
+@main_bp.route('/api/admin/limitless-meta/briefs/<path:combo_key>', methods=['PUT'])
+@admin_required
+def put_limitless_meta_brief(combo_key):
+    from services.limitless_decks.meta_field import update_brief
+
+    data = request.get_json(silent=True) or {}
+    result = update_brief(
+        combo_key,
+        analysis=data.get('analysis') if isinstance(data.get('analysis'), dict) else None,
+        label_zh=data.get('label_zh'),
+        note=str(data.get('note') or 'manual edit'),
+    )
+    return jsonify(result), 200 if result.get('success') else 400
+
+
+@main_bp.route('/api/admin/limitless-meta/briefs/<path:combo_key>/revise', methods=['POST'])
+@admin_required
+def revise_limitless_meta_brief(combo_key):
+    from services.limitless_decks.meta_field import revise_brief_with_ai
+
+    data = request.get_json(silent=True) or {}
+    message = str(data.get('message') or '').strip()
+    if not message:
+        return jsonify({'success': False, 'error': '請輸入要改邊啲分析'}), 400
+    result = revise_brief_with_ai(combo_key, message)
+    return jsonify(result), 200 if result.get('success') else 400
+
+
 @main_bp.route('/api/admin/limitless-meta/briefs/run', methods=['POST'])
 @admin_required
 def run_limitless_meta_briefs():

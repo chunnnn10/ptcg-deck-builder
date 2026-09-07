@@ -10,10 +10,10 @@
                 </div>
                 <button @click="showDeckLibrary = false" class="text-gray-400 hover:text-white"><span class="ms ms-2x" aria-hidden="true">close</span></button>
             </div>
-            <div class="flex-1 overflow-y-auto p-6 bg-grid custom-scroll">
+            <div class="flex-1 overflow-y-auto p-3 sm:p-6 bg-grid custom-scroll">
                 <div v-if="publicDecksLoading" class="text-center mt-20 text-blue-400"><span class="ms animate-spin ms-3x" aria-hidden="true">progress_activity</span><p class="mt-4">載入中...</p></div>
                 <div v-else-if="publicDecks.length === 0" class="text-center mt-20 text-gray-500"><p class="text-xl">沒有找到相關牌組</p></div>
-                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
                     <div v-for="d in publicDecks" :key="d.id" class="bg-gray-800 rounded-lg border border-gray-700 hover:border-blue-500 transition-all hover:shadow-xl group flex flex-col overflow-hidden">
                         <div class="grid grid-cols-2 gap-0.5 bg-gray-900 aspect-video w-full">
                             <div v-for="(img, idx) in d.preview_images.slice(0, 4)" :key="idx" class="relative overflow-hidden">
@@ -67,8 +67,8 @@
 
 
 
-    <div v-if="showLimitlessDeckLibrary" class="fixed inset-0 z-[65] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
-        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-7xl h-full flex flex-col border border-gray-700 shadow-2xl overflow-hidden">
+    <div v-if="showLimitlessDeckLibrary" class="fixed inset-0 z-[65] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-0 sm:p-3">
+        <div class="modal-panel relative bg-gray-900 rounded-none sm:rounded-2xl w-full max-w-7xl h-full flex flex-col border-0 sm:border border-gray-700 shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-gray-700 bg-gray-800 flex flex-col lg:flex-row gap-3 lg:items-center">
                 <div class="flex items-center justify-between gap-3">
                     <h2 class="text-xl font-bold text-white whitespace-nowrap"><span class="ms mr-2 text-yellow-400" aria-hidden="true">emoji_events</span>LimitLess DeckList</h2>
@@ -129,9 +129,9 @@
                             <div class="bg-gray-800 border border-gray-700 rounded-xl p-4"><div class="text-xs text-gray-500">賽事人次加總</div><div class="text-2xl font-bold text-white">[[ limitlessField.tournaments.total_players ]]</div></div>
                             <div class="bg-gray-800 border border-gray-700 rounded-xl p-4"><div class="text-xs text-gray-500">中位人數</div><div class="text-2xl font-bold text-white">[[ limitlessField.tournaments.median_players ]]</div></div>
                         </div>
-                        <div class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+                        <div class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 lg:gap-6">
                             <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 flex flex-col items-center">
-                                <div class="w-52 h-52 rounded-full border-4 border-gray-900" :style="{ background: limitlessPieGradient }"></div>
+                                <div class="w-40 h-40 sm:w-52 sm:h-52 rounded-full border-4 border-gray-900" :style="{ background: limitlessPieGradient }"></div>
                                 <p class="text-xs text-gray-500 mt-3">組合佔比（前 8 + 其他）</p>
                             </div>
                             <div class="space-y-2">
@@ -153,14 +153,14 @@
                         <div>
                             <h4 class="text-sm font-bold text-gray-300 mb-2">組合明細（牌表推斷）</h4>
                             <div class="space-y-1 max-h-80 overflow-y-auto custom-scroll">
-                                <div v-for="row in limitlessField.combinations.slice(0, 30)" :key="row.combo_key" class="grid grid-cols-[1fr_auto_auto] gap-3 items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                                <button v-for="row in limitlessField.combinations.slice(0, 30)" :key="row.combo_key" @click="openBriefEditor(row.combo_key, row)" class="w-full text-left grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-1 sm:gap-3 items-start sm:items-center bg-gray-800 border border-gray-700 hover:border-yellow-500 rounded-lg px-3 py-2">
                                     <div class="min-w-0">
                                         <div class="text-white truncate">[[ row.label_zh ]]</div>
                                         <div class="text-[11px] text-gray-500 truncate">官方標題常見：[[ (row.official_titles || []).map(t => t.name).join(' / ') ]]</div>
                                     </div>
                                     <div class="text-yellow-400 font-mono text-sm">[[ row.share_pct ]]</div>
-                                    <div class="text-[11px]" :class="row.has_brief ? 'text-emerald-400' : 'text-gray-500'">[[ row.has_brief ? '已有 brief' : '未分析' ]]</div>
-                                </div>
+                                    <div class="text-[11px]" :class="row.has_brief ? 'text-emerald-400' : 'text-gray-500'">[[ row.has_brief ? '已有 brief · 點擊編輯' : '未分析 · 點擊建立' ]]</div>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -201,7 +201,9 @@
                         <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
                             <div>
                                 <h3 class="text-2xl font-bold text-white">[[ getLimitlessDeckName(selectedLimitlessDeck.deck) ]]</h3>
-                                <div v-if="selectedLimitlessCombo" class="text-xs text-emerald-400 mt-1">組合推斷：[[ selectedLimitlessCombo.label_zh ]]（Limitless 原標題：[[ selectedLimitlessDeck.deck.archetype || selectedLimitlessDeck.deck.title || '-' ]]）</div>
+                                <div v-if="selectedLimitlessCombo" class="text-xs text-emerald-400 mt-1">組合推斷：[[ selectedLimitlessCombo.label_zh ]]（Limitless 原標題：[[ selectedLimitlessDeck.deck.archetype || selectedLimitlessDeck.deck.title || '-' ]]）
+                                    <button v-if="user && user.is_admin" class="ml-2 underline text-yellow-400" @click="openBriefEditor(selectedLimitlessCombo.combo_key, selectedLimitlessCombo)">編輯分析</button>
+                                </div>
                                 <div v-else-if="selectedLimitlessDeck.deck.archetype_zh && selectedLimitlessDeck.deck.archetype" class="text-xs text-gray-500 mt-1">[[ selectedLimitlessDeck.deck.archetype ]]</div>
                                 <div class="text-sm text-gray-400 mt-1">[[ selectedLimitlessDeck.deck.player_name || '-' ]] / # [[ selectedLimitlessDeck.deck.placement || '-' ]] / [[ selectedLimitlessDeck.deck.tournament_title || '-' ]]</div>
                                 <div class="text-xs text-gray-500 mt-1">[[ selectedLimitlessDeck.deck.date || '-' ]] / [[ selectedLimitlessDeck.deck.location || '-' ]]</div>
@@ -240,18 +242,68 @@
                 </div>
             </div>
 
-            <div class="p-3 border-t border-gray-700 bg-gray-800 flex justify-center items-center gap-4"><button @click="prevLimitlessPage" :disabled="limitlessTournamentPage <= 1" class="px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 hover:bg-gray-600">上一頁</button><span class="text-gray-300 text-sm">比賽第 [[ limitlessTournamentPage ]] / [[ limitlessTournamentTotalPages ]] 頁</span><button @click="nextLimitlessPage" :disabled="limitlessTournamentPage >= limitlessTournamentTotalPages" class="px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 hover:bg-gray-600">下一頁</button></div>
+            <div class="p-3 border-t border-gray-700 bg-gray-800 flex justify-center items-center gap-3 text-sm" v-show="limitlessMobileTab !== 'field'"><button @click="prevLimitlessPage" :disabled="limitlessTournamentPage <= 1" class="px-3 py-2 bg-gray-700 rounded text-white disabled:opacity-50 hover:bg-gray-600">上一頁</button><span class="text-gray-300">[[ limitlessTournamentPage ]] / [[ limitlessTournamentTotalPages ]]</span><button @click="nextLimitlessPage" :disabled="limitlessTournamentPage >= limitlessTournamentTotalPages" class="px-3 py-2 bg-gray-700 rounded text-white disabled:opacity-50 hover:bg-gray-600">下一頁</button></div>
+
+            <div v-if="showBriefEditor" class="absolute inset-0 z-20 bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-6">
+                <div class="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden">
+                    <div class="p-3 sm:p-4 border-b border-gray-700 flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <h3 class="text-lg font-bold text-white truncate">分析編輯 · [[ (editingBrief && editingBrief.label_zh) || '' ]]</h3>
+                            <p class="text-[11px] text-gray-500 truncate">[[ editingBrief && editingBrief.combo_key ]]</p>
+                        </div>
+                        <button @click="closeBriefEditor" class="text-gray-400 hover:text-white p-2"><span class="ms" aria-hidden="true">close</span></button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 custom-scroll">
+                        <label class="block text-xs text-gray-400">顯示名稱
+                            <input v-model="briefDraft.label_zh" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2">
+                        </label>
+                        <label class="block text-xs text-gray-400">節奏／展開（tempo）
+                            <textarea v-model="briefDraft.tempo_note" rows="2" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
+                        </label>
+                        <label class="block text-xs text-gray-400">傷害線（一行一條）
+                            <textarea v-model="briefDraft.combo_lines_text" rows="5" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm font-mono" placeholder="200 | 水忍蛙 | 招式名"></textarea>
+                        </label>
+                        <label class="block text-xs text-gray-400">規則盒／quirks
+                            <textarea v-model="briefDraft.quirks_text" rows="3" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
+                        </label>
+                        <label class="block text-xs text-gray-400">備註
+                            <textarea v-model="briefDraft.note" rows="2" class="mt-1 w-full bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm"></textarea>
+                        </label>
+                        <div class="bg-gray-800 border border-gray-700 rounded-xl p-3">
+                            <div class="text-xs font-bold text-gray-300 mb-2">同 AI 對話修正</div>
+                            <div class="space-y-2 max-h-36 overflow-y-auto custom-scroll mb-2">
+                                <div v-if="!briefChatLog.length" class="text-xs text-gray-500">例如：「330 唔應該算入夜巡靈，改返印刷 200」</div>
+                                <div v-for="(msg, idx) in briefChatLog" :key="idx" class="text-sm" :class="msg.role === 'user' ? 'text-yellow-300' : 'text-gray-200'">[[ msg.role === 'user' ? '你：' : 'AI：' ]][[ msg.text ]]</div>
+                            </div>
+                            <div class="flex gap-2">
+                                <input v-model="briefChatInput" @keyup.enter="sendBriefRevision" class="flex-1 bg-gray-900 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm" placeholder="話俾 AI 知要改咩">
+                                <button @click="sendBriefRevision" :disabled="briefRevising" class="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-60 text-white px-3 py-2 rounded-lg text-sm font-bold">[[ briefRevising ? '…' : '修正' ]]</button>
+                            </div>
+                            <p class="text-[11px] text-gray-500 mt-2">AI 修正會即時寫入 brief；你仲可以喺上面人手改完再儲存。</p>
+                        </div>
+                    </div>
+                    <div class="p-3 sm:p-4 border-t border-gray-700 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+                        <button @click="closeBriefEditor" class="px-4 py-2 rounded-lg bg-gray-700 text-white">關閉</button>
+                        <button v-if="user && user.is_admin" @click="saveBriefEditor" :disabled="briefSaving" class="px-4 py-2 rounded-lg bg-emerald-600 text-white font-bold">[[ briefSaving ? '儲存中…' : '儲存人手修改' ]]</button>
+                        <p v-else class="text-xs text-gray-500 self-center">登入管理員先可以儲存。</p>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 
 
 
-    <div v-if="showJpDeckLibrary" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-6">
-        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-6xl h-full flex flex-col border border-gray-700 shadow-2xl relative overflow-hidden">
-            <div class="p-6 border-b border-gray-700 flex justify-between items-center bg-gray-800 gap-4">
-                <h2 class="text-2xl font-bold text-white whitespace-nowrap">
-                    <span class="ms mr-2 text-red-400" aria-hidden="true">temple_buddhist</span><span class="hidden md:inline">日本大賽牌組</span>
+    <div v-if="showJpDeckLibrary" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-0 sm:p-4">
+        <div class="modal-panel bg-gray-900 rounded-none sm:rounded-2xl w-full max-w-6xl h-full flex flex-col border-0 sm:border border-gray-700 shadow-2xl relative overflow-hidden">
+            <div class="p-3 sm:p-4 border-b border-gray-700 flex flex-col sm:flex-row sm:justify-between sm:items-center bg-gray-800 gap-2 sm:gap-4">
+                <div class="flex items-center justify-between gap-3">
+                <h2 class="text-lg sm:text-2xl font-bold text-white whitespace-nowrap">
+                    <span class="ms mr-2 text-red-400" aria-hidden="true">temple_buddhist</span>日本大賽牌組
                 </h2>
+                <button @click="showJpDeckLibrary = false" class="sm:hidden text-gray-400 hover:text-white p-2"><span class="ms ms-lg" aria-hidden="true">close</span></button>
+                </div>
                 <div class="flex-1 max-w-xl flex gap-2">
                     <div class="relative flex-1">
                         <input v-model="jpDeckSearchQuery" @keyup.enter="searchJpDecks(1)" type="text" 
@@ -266,12 +318,12 @@
                         <option value="date">日期優先</option>
                     </select>
                 </div>
-                <button @click="showJpDeckLibrary = false" class="text-gray-400 hover:text-white">
+                <button @click="showJpDeckLibrary = false" class="hidden sm:block text-gray-400 hover:text-white">
                     <span class="ms ms-2x" aria-hidden="true">close</span>
                 </button>
             </div>
 
-            <div class="flex-1 overflow-y-auto p-6 bg-grid custom-scroll">
+            <div class="flex-1 overflow-y-auto p-3 sm:p-6 bg-grid custom-scroll">
                 <div v-if="jpImportMissing.length"
                      class="mb-4 bg-red-950/40 border border-red-800 rounded-lg p-3">
                     <div class="text-sm font-bold text-red-200 mb-2">
@@ -305,11 +357,11 @@
                         </button>
                     </div>
                 </div>
-                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
                     <div v-for="d in jpDecks" :key="d.code" 
                          class="bg-gray-800 rounded-lg border border-gray-700 hover:border-red-500 transition-all hover:shadow-xl group flex flex-col overflow-hidden">
                         
-                        <div class="aspect-video w-full bg-gray-900 relative overflow-hidden cursor-pointer group/img"
+                        <div class="aspect-[16/9] sm:aspect-video w-full bg-gray-900 relative overflow-hidden cursor-pointer group/img"
                             @click="openJpPreview(d.image)">
                             <img v-if="d.image" :src="d.image" class="object-cover w-full h-full opacity-80 group-hover/img:opacity-100 transition">
                             <div v-else class="flex items-center justify-center w-full h-full text-gray-600">
@@ -336,7 +388,7 @@
                             </div>
                             
                             <button @click="loadJpDeck(d.code)" 
-                                    class="w-full bg-red-600 hover:bg-red-500 text-white py-2 rounded font-bold transition">
+                                    class="w-full bg-red-600 hover:bg-red-500 text-white py-3 sm:py-2 rounded font-bold transition text-base">
                                 <span class="ms mr-2" aria-hidden="true">download</span> 載入牌組
                             </button>
                         </div>
@@ -344,14 +396,14 @@
                 </div>
             </div>
 
-            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-center items-center gap-4">
+            <div class="p-3 sm:p-4 border-t border-gray-700 bg-gray-800 flex justify-center items-center gap-3">
                 <button @click="prevJpPage" :disabled="jpDeckPage <= 1" 
-                        class="px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600">
+                        class="px-3 sm:px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600">
                     上一頁
                 </button>
-                <span class="text-gray-300">第 [[ jpDeckPage ]] / [[ jpDeckTotalPages ]] 頁</span>
+                <span class="text-gray-300 text-sm">[[ jpDeckPage ]] / [[ jpDeckTotalPages ]]</span>
                 <button @click="nextJpPage" :disabled="jpDeckPage >= jpDeckTotalPages" 
-                        class="px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600">
+                        class="px-3 sm:px-4 py-2 bg-gray-700 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-600">
                     下一頁
                 </button>
             </div>

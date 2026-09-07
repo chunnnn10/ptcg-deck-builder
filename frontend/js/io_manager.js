@@ -74,6 +74,19 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     const limitlessFieldDays = ref(30);
     const limitlessBriefs = ref([]);
     const selectedLimitlessCombo = ref(null);
+    const showBriefEditor = ref(false);
+    const editingBrief = ref(null);
+    const briefSaving = ref(false);
+    const briefRevising = ref(false);
+    const briefChatInput = ref("");
+    const briefChatLog = ref([]);
+    const briefDraft = ref({
+        label_zh: "",
+        tempo_note: "",
+        note: "",
+        combo_lines_text: "",
+        quirks_text: "",
+    });
     const importMissingNotice = ref(null);
 
     const showLiveModal = ref(false);
@@ -772,6 +785,116 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     const prevJpPage = () => { if (jpDeckPage.value > 1) searchJpDecks(jpDeckPage.value - 1); };
     const nextJpPage = () => { if (jpDeckPage.value < jpDeckTotalPages.value) searchJpDecks(jpDeckPage.value + 1); };
 
+
+    const fillBriefDraft = (brief) => {
+        const analysis = (brief && brief.analysis) || {};
+        const lines = Array.isArray(analysis.combo_lines) ? analysis.combo_lines : [];
+        const quirks = Array.isArray(analysis.quirks) ? analysis.quirks : [];
+        briefDraft.value = {
+            label_zh: (brief && (brief.label_zh || brief.label)) || "",
+            tempo_note: analysis.tempo_note || "",
+            note: analysis.note || "",
+            combo_lines_text: lines.map((line) => {
+                if (typeof line === "string") return line;
+                return [line.damage, line.card || line.pieces, line.line || line.formula, line.note].filter(Boolean).join(" | ");
+            }).join("\n"),
+            quirks_text: quirks.map((row) => {
+                if (typeof row === "string") return row;
+                return [row.rule, row.note].filter(Boolean).join(" — ");
+            }).join("\n"),
+        };
+    };
+
+    const openBriefEditor = async (comboKey, fallback = {}) => {
+        if (!comboKey) return;
+        showBriefEditor.value = true;
+        briefChatLog.value = [];
+        briefChatInput.value = "";
+        editingBrief.value = { combo_key: comboKey, label_zh: fallback.label_zh || comboKey };
+        fillBriefDraft(editingBrief.value);
+        try {
+            const res = await fetch(`/api/limitless-meta/briefs/${encodeURIComponent(comboKey)}`);
+            const data = await res.json();
+            if (data.success && data.brief) {
+                editingBrief.value = data.brief;
+                fillBriefDraft(data.brief);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const closeBriefEditor = () => {
+        showBriefEditor.value = false;
+        editingBrief.value = null;
+    };
+
+    const analysisFromDraft = () => {
+        const prev = (editingBrief.value && editingBrief.value.analysis) || {};
+        return {
+            ...prev,
+            tempo_note: briefDraft.value.tempo_note,
+            note: briefDraft.value.note,
+            combo_lines: String(briefDraft.value.combo_lines_text || "").split("\n").map((line) => line.trim()).filter(Boolean),
+            quirks: String(briefDraft.value.quirks_text || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => ({ rule: line })),
+            verified: true,
+        };
+    };
+
+    const saveBriefEditor = async () => {
+        if (!editingBrief.value || briefSaving.value) return;
+        briefSaving.value = true;
+        try {
+            const res = await fetch(`/api/admin/limitless-meta/briefs/${encodeURIComponent(editingBrief.value.combo_key)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    label_zh: briefDraft.value.label_zh,
+                    analysis: analysisFromDraft(),
+                    note: "manual edit",
+                }),
+            });
+            const data = await res.json();
+            if (!data.success) return alert(data.error || "儲存失敗");
+            editingBrief.value = data.brief;
+            fillBriefDraft(data.brief);
+            await loadLimitlessField();
+            alert("已儲存分析");
+        } catch (e) {
+            alert("儲存失敗");
+        } finally {
+            briefSaving.value = false;
+        }
+    };
+
+    const sendBriefRevision = async () => {
+        if (!editingBrief.value || !briefChatInput.value.trim() || briefRevising.value) return;
+        const message = briefChatInput.value.trim();
+        briefChatLog.value = [...briefChatLog.value, { role: "user", text: message }];
+        briefChatInput.value = "";
+        briefRevising.value = true;
+        try {
+            const res = await fetch(`/api/admin/limitless-meta/briefs/${encodeURIComponent(editingBrief.value.combo_key)}/revise`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.error || "修正失敗" }];
+                return;
+            }
+            editingBrief.value = data.brief;
+            fillBriefDraft(data.brief);
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "已按你嘅指示更新分析，請檢查後再儲存或繼續改。" }];
+            await loadLimitlessField();
+        } catch (e) {
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "連線失敗" }];
+        } finally {
+            briefRevising.value = false;
+        }
+    };
+
     return {
         showImportModal, importText, isImporting, importStatus, conflictQueue, notFoundList, importIntoNewTab,
         showExportModal, exportTextContent, exportWithId,
@@ -796,6 +919,8 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         limitlessMobileTab, setLimitlessMobileTab,
         limitlessField, limitlessFieldLoading, limitlessFieldDays, loadLimitlessField,
         limitlessPieSlices, limitlessPieGradient, limitlessBriefs, selectedLimitlessCombo,
+        showBriefEditor, editingBrief, briefDraft, briefSaving, briefRevising, briefChatInput, briefChatLog,
+        openBriefEditor, closeBriefEditor, saveBriefEditor, sendBriefRevision,
         loadLimitlessCards, setLimitlessLang, setLimitlessMode,
         closeLimitlessDeckDetail, getLimitlessCards, getLimitlessSectionCards,
         getLimitlessSectionCount, getLimitlessDeckName, getLimitlessTagName,

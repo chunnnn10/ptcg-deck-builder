@@ -257,8 +257,8 @@
 
 <!-- === Admin Panel 用戶管理彈窗 === -->
 
-    <div v-if="showAdminPanel" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
-        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-4xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div v-if="showAdminPanel" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-0 sm:p-4">
+        <div class="modal-panel bg-gray-900 rounded-none sm:rounded-2xl w-full max-w-4xl h-full sm:h-auto border-0 sm:border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-none sm:max-h-[90vh]">
             <!-- Header -->
             <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
                 <h2 class="text-xl font-bold text-white">
@@ -271,7 +271,7 @@
 
             <!-- 統計區 -->
             <div class="p-4 bg-gray-850 border-b border-gray-700">
-                <div class="grid grid-cols-4 gap-4">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
                     <div class="bg-gray-800 p-3 rounded-lg border border-gray-700 text-center">
                         <div class="text-2xl font-bold text-white">[[ adminStats.totalUsers ]]</div>
                         <div class="text-xs text-gray-400">總用戶數</div>
@@ -292,7 +292,7 @@
             </div>
 
             <!-- 搜尋與操作 -->
-            <div class="p-4 bg-gray-850 border-b border-gray-700 flex items-center gap-4">
+            <div class="p-3 sm:p-4 bg-gray-850 border-b border-gray-700 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4">
                 <div class="relative flex-1">
                     <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
                         <span class="ms" aria-hidden="true">search</span>
@@ -308,7 +308,26 @@
 
             <!-- 用戶列表 -->
             <div class="flex-1 overflow-y-auto overflow-x-auto custom-scroll">
-                <table class="w-full min-w-[600px]">
+                <div class="md:hidden p-3 space-y-3">
+                    <div v-if="adminUsersLoading" class="text-center text-gray-400 py-10">載入中...</div>
+                    <div v-else-if="filteredAdminUsers.length === 0" class="text-center text-gray-500 py-10">沒有找到用戶</div>
+                    <div v-for="u in filteredAdminUsers" :key="'m-'+u.id" class="bg-gray-800 border border-gray-700 rounded-xl p-3 space-y-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="font-bold text-white truncate">[[ u.username ]]</div>
+                            <span class="text-[11px] px-2 py-0.5 rounded-full" :class="u.role === 'admin' ? 'bg-yellow-900/50 text-yellow-400' : 'bg-gray-700 text-gray-300'">[[ u.role ]]</span>
+                        </div>
+                        <div class="text-xs text-gray-400 break-all">[[ u.email || '-' ]]</div>
+                        <div class="text-xs" :class="u.is_verified ? 'text-green-400' : 'text-red-400'">[[ u.is_verified ? '已驗證' : '未驗證' ]]</div>
+                        <div class="flex flex-wrap gap-2 pt-1">
+                            <button v-if="u.id !== user.id" @click="openEditUserModal(u)" class="px-3 py-2 bg-gray-700 rounded-lg text-blue-300 text-sm">編輯</button>
+                            <button v-if="u.id !== user.id" @click="toggleUserRole(u)" class="px-3 py-2 bg-gray-700 rounded-lg text-yellow-300 text-sm">角色</button>
+                            <button @click="toggleAiAccess(u)" class="px-3 py-2 bg-gray-700 rounded-lg text-green-300 text-sm">AI</button>
+                            <button v-if="!u.is_verified" @click="verifyUser(u)" class="px-3 py-2 bg-gray-700 rounded-lg text-emerald-300 text-sm">驗證</button>
+                            <button v-if="u.id !== user.id" @click="deleteUser(u)" class="px-3 py-2 bg-gray-700 rounded-lg text-red-300 text-sm">刪除</button>
+                        </div>
+                    </div>
+                </div>
+                <table class="w-full min-w-[600px] hidden md:table">
                     <thead class="bg-gray-800 sticky top-0">
                         <tr class="text-left text-xs text-gray-400 uppercase">
                             <th class="px-4 py-3">用戶</th>
@@ -415,15 +434,15 @@
             </div>
 
             <!-- Footer -->
-            <div class="p-4 border-t border-gray-700 bg-gray-800 flex justify-between items-center">
+            <div class="p-3 sm:p-4 border-t border-gray-700 bg-gray-800 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2">
                 <div class="text-sm text-gray-400">
                     共 [[ filteredAdminUsers.length ]] 位用戶
                 </div>
                 <div class="flex gap-2">
-                    <button @click="openRegulationModal" class="bg-yellow-700 hover:bg-yellow-600 text-white px-6 py-2 rounded-lg transition text-sm">
+                    <button @click="openRegulationModal" class="flex-1 sm:flex-none bg-yellow-700 hover:bg-yellow-600 text-white px-4 sm:px-6 py-2 rounded-lg transition text-sm">
                         <span class="ms mr-2" aria-hidden="true">flag</span>賽季設定
                     </button>
-                    <button @click="showAdminPanel = false" class="bg-gray-700 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition">
+                    <button @click="showAdminPanel = false" class="flex-1 sm:flex-none bg-gray-700 hover:bg-gray-600 text-white px-4 sm:px-6 py-2 rounded-lg transition">
                         關閉
                     </button>
                 </div>
@@ -704,8 +723,8 @@
 
 <!-- === 牌組管理彈窗（日本/美國/City Leagues） === -->
 
-    <div v-if="showDeckAdmin" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-4">
-        <div class="modal-panel bg-gray-900 rounded-2xl w-full max-w-4xl border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div v-if="showDeckAdmin" class="fixed inset-0 z-[85] flex items-center justify-center bg-black bg-opacity-95 backdrop-blur p-0 sm:p-4">
+        <div class="modal-panel bg-gray-900 rounded-none sm:rounded-2xl w-full max-w-4xl h-full sm:h-auto border-0 sm:border border-gray-700 shadow-2xl overflow-hidden flex flex-col max-h-none sm:max-h-[90vh]">
             <!-- Header -->
             <div class="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
                 <h2 class="text-xl font-bold text-white">
@@ -717,31 +736,31 @@
             </div>
 
             <!-- Tabs -->
-            <div class="flex border-b border-gray-700 bg-gray-850">
+            <div class="flex border-b border-gray-700 bg-gray-850 overflow-x-auto custom-scroll">
                 <button @click="deckAdminTab = 'jp'"
                         :class="deckAdminTab === 'jp' ? 'bg-gray-900 text-red-400 border-b-2 border-red-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
-                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
-                    <span class="ms" aria-hidden="true">temple_buddhist</span> 日本牌組管理
+                        class="px-4 sm:px-6 py-3 font-bold text-xs sm:text-sm transition flex items-center gap-2 whitespace-nowrap shrink-0">
+                    <span class="ms" aria-hidden="true">temple_buddhist</span> 日本
                 </button>
                 <button @click="deckAdminTab = 'us'"
                         :class="deckAdminTab === 'us' ? 'bg-gray-900 text-blue-400 border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
-                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
-                    <span class="ms" aria-hidden="true">flag</span> 美國牌組管理
+                        class="px-4 sm:px-6 py-3 font-bold text-xs sm:text-sm transition flex items-center gap-2 whitespace-nowrap shrink-0">
+                    <span class="ms" aria-hidden="true">flag</span> 美國
                 </button>
                 <button @click="deckAdminTab = 'cl'"
                         :class="deckAdminTab === 'cl' ? 'bg-gray-900 text-yellow-400 border-b-2 border-yellow-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
-                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
-                    <span class="ms" aria-hidden="true">emoji_events</span> City Leagues 牌組
+                        class="px-4 sm:px-6 py-3 font-bold text-xs sm:text-sm transition flex items-center gap-2 whitespace-nowrap shrink-0">
+                    <span class="ms" aria-hidden="true">emoji_events</span> LimitLess
                 </button>
                 <button @click="openCardRolesTab"
                         :class="deckAdminTab === 'roles' ? 'bg-gray-900 text-purple-400 border-b-2 border-purple-500' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
-                        class="px-6 py-3 font-bold text-sm transition flex items-center gap-2">
-                    <span class="ms" aria-hidden="true">sell</span> 效果角色標籤
+                        class="px-4 sm:px-6 py-3 font-bold text-xs sm:text-sm transition flex items-center gap-2 whitespace-nowrap shrink-0">
+                    <span class="ms" aria-hidden="true">sell</span> 角色標籤
                 </button>
             </div>
 
             <!-- Content -->
-            <div class="flex-1 overflow-y-auto p-6 custom-scroll">
+            <div class="flex-1 overflow-y-auto p-3 sm:p-6 custom-scroll">
 
                 <!-- ========== 日本牌組管理 ========== -->
                 <div v-if="deckAdminTab === 'jp'" class="space-y-6">
