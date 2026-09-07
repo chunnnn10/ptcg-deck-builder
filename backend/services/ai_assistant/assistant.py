@@ -258,6 +258,29 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "list_format_snapshot",
+            "description": "Get last-30-day Limitless combination share percentages and tournament size summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer", "minimum": 7, "maximum": 120}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_format_brief",
+            "description": "Get a permanently stored monthly brief for a combo key, including printed damage lines if already analyzed.",
+            "parameters": {
+                "type": "object",
+                "properties": {"combo_key": {"type": "string"}},
+                "required": ["combo_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_matchup_sheet",
             "description": "Get matchup sheet schema and seed rows (setup / quirks / breakpoints / vs_archetype). Seed rows are unverified user notes.",
             "parameters": {
@@ -1018,6 +1041,24 @@ def _run_tool(name: str, args: dict[str, Any], context: dict[str, Any]) -> Any:
         return skill
     if name == "get_matchup_sheet":
         return get_matchup_sheet(str(args.get("user_archetype") or ""), str(args.get("opponent_archetype") or ""))
+    if name == "list_format_snapshot":
+        from services.limitless_decks.meta_field import build_field_stats
+        stats = build_field_stats(days=int(args.get("days") or 30))
+        if not stats.get("success"):
+            return stats
+        return {
+            "window": stats.get("window"),
+            "tournaments": {
+                "count": (stats.get("tournaments") or {}).get("count"),
+                "total_players": (stats.get("tournaments") or {}).get("total_players"),
+                "median_players": (stats.get("tournaments") or {}).get("median_players"),
+            },
+            "decks": stats.get("decks"),
+            "combinations": (stats.get("combinations") or [])[:20],
+        }
+    if name == "get_format_brief":
+        from services.limitless_decks.meta_field import get_brief
+        return get_brief(str(args.get("combo_key") or ""))
     raise ValueError(f"Unknown tool: {name}")
 
 

@@ -1063,6 +1063,22 @@
                         </div>
                     </div>
                     <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-10 h-10 bg-sky-900/50 rounded-lg flex items-center justify-center"><span class="ms text-sky-400 text-lg" aria-hidden="true">pie_chart</span></div>
+                            <div>
+                                <h3 class="text-lg font-bold text-white">每月 Meta brief（永久）</h3>
+                                <p class="text-xs text-gray-400">用近 30 日組合佔比由上而下填最多 20 個「未分析過」嘅套。已有 brief 只更新排名，唔重跑分析。</p>
+                            </div>
+                        </div>
+                        <div v-if="formatBriefRun" class="text-sm text-gray-300 mb-3">
+                            今次新建 [[ formatBriefRun.created_count || 0 ]] · 已存在 [[ formatBriefRun.skipped_count || 0 ]]
+                            <div v-for="row in (formatBriefRun.created || [])" :key="row.combo_key" class="text-xs text-emerald-400">#[[ row.rank ]] [[ row.label_zh ]] [[ row.share_pct ]]</div>
+                        </div>
+                        <button @click="runMonthlyFormatBriefs" :disabled="formatBriefRunning" class="bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white px-6 py-3 rounded-full font-bold text-sm">
+                            [[ formatBriefRunning ? '統計中…' : '跑今個月 20 個新 brief' ]]
+                        </button>
+                    </div>
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 p-6">
                         <h3 class="text-lg font-bold text-white mb-4">Manual update</h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="space-y-2"><label class="block text-xs text-gray-500">Tournament ID</label><div class="flex gap-2"><input v-model="limitlessManualTournament" class="flex-1 bg-gray-700 text-white border border-gray-600 rounded px-3 py-2" placeholder="567 or jp-4827"><button @click="updateLimitlessTournament" class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded font-bold text-sm">Update</button></div></div>

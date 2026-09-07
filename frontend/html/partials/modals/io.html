@@ -74,7 +74,7 @@
                     <h2 class="text-xl font-bold text-white whitespace-nowrap"><span class="ms mr-2 text-yellow-400" aria-hidden="true">emoji_events</span>LimitLess DeckList</h2>
                     <button @click="showLimitlessDeckLibrary = false" class="lg:hidden text-gray-400 hover:text-white"><span class="ms ms-lg" aria-hidden="true">close</span></button>
                 </div>
-                <div class="flex-1 grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-2">
+                <div class="flex-1 grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto_auto] gap-2">
                     <div class="relative">
                         <input v-model="limitlessDeckSearchQuery" @keyup.enter="searchLimitlessDecks(1)" type="text" class="w-full bg-gray-700 text-white border border-gray-600 rounded-lg py-2 pl-9 pr-3 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm" placeholder="搜尋玩家、牌型、卡名、系列、比賽">
                         <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400"><span class="ms" aria-hidden="true">search</span></span>
@@ -91,13 +91,17 @@
                         <option value="player">玩家</option>
                     </select>
                     <button @click="searchLimitlessDecks(1)" class="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg font-bold text-sm"><span class="ms mr-1" aria-hidden="true">refresh</span>搜尋</button>
+                    <button @click="setLimitlessMobileTab('field'); loadLimitlessField()" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-bold text-sm" :class="limitlessMobileTab === 'field' ? 'ring-2 ring-yellow-500' : ''"><span class="ms mr-1" aria-hidden="true">pie_chart</span>30日 Meta</button>
                 </div>
                 <button @click="showLimitlessDeckLibrary = false" class="hidden lg:block text-gray-400 hover:text-white"><span class="ms ms-lg" aria-hidden="true">close</span></button>
             </div>
 
-            <div class="flex-1 overflow-hidden flex flex-col xl:grid xl:grid-cols-[300px_360px_1fr]">
+            <div class="flex-1 overflow-hidden" :class="limitlessMobileTab === 'field' ? 'flex flex-col' : 'flex flex-col xl:grid xl:grid-cols-[300px_360px_1fr]'">
                 <!-- 手機版分步瀏覽 tab（桌面 xl 以上隱藏，三欄並排） -->
                 <div class="xl:hidden flex border-b border-gray-700 bg-gray-800 shrink-0">
+                    <button @click="setLimitlessMobileTab('field'); loadLimitlessField()" class="flex-1 py-3 text-xs font-bold transition" :class="limitlessMobileTab === 'field' ? 'bg-yellow-600 text-white' : 'text-gray-400'">
+                        <span class="ms mr-1" aria-hidden="true">pie_chart</span>Meta
+                    </button>
                     <button @click="setLimitlessMobileTab('tournaments')" class="flex-1 py-3 text-xs font-bold transition" :class="limitlessMobileTab === 'tournaments' ? 'bg-yellow-600 text-white' : 'text-gray-400'">
                         <span class="ms mr-1" aria-hidden="true">emoji_events</span>比賽<span v-if="limitlessTournaments.length" class="ml-1 opacity-80">([[ limitlessTournaments.length ]])</span>
                     </button>
@@ -108,7 +112,60 @@
                         <span class="ms mr-1" aria-hidden="true">checklist</span>牌表
                     </button>
                 </div>
-                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4 flex-1 min-h-0" :class="limitlessMobileTab === 'tournaments' ? 'flex flex-col' : 'hidden xl:flex'">
+                <div class="overflow-y-auto custom-scroll p-4 lg:p-6 flex-1 min-h-0" :class="limitlessMobileTab === 'field' ? 'flex flex-col' : 'hidden'">
+                    <div v-if="limitlessFieldLoading" class="text-center mt-16 text-yellow-400"><span class="ms animate-spin ms-3x" aria-hidden="true">progress_activity</span><p class="mt-4">正在統計近 30 日 Limitless...</p></div>
+                    <div v-else-if="!limitlessField" class="text-center mt-16 text-gray-500">未有 Meta 資料</div>
+                    <div v-else class="space-y-6">
+                        <div class="flex flex-wrap items-end justify-between gap-3">
+                            <div>
+                                <h3 class="text-xl font-bold text-white">近 [[ limitlessField.window.days ]] 日 Standard 場地</h3>
+                                <p class="text-xs text-gray-400 mt-1">[[ limitlessField.window.from ]] → [[ limitlessField.window.to ]] · 標題用牌表組合修正，唔再盲信 Limitless 名</p>
+                            </div>
+                            <button @click="loadLimitlessField()" class="text-sm text-yellow-400 hover:text-yellow-300">重新統計</button>
+                        </div>
+                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div class="bg-gray-800 border border-gray-700 rounded-xl p-4"><div class="text-xs text-gray-500">比賽</div><div class="text-2xl font-bold text-white">[[ limitlessField.tournaments.count ]]</div></div>
+                            <div class="bg-gray-800 border border-gray-700 rounded-xl p-4"><div class="text-xs text-gray-500">已索引牌組</div><div class="text-2xl font-bold text-white">[[ limitlessField.decks ]]</div></div>
+                            <div class="bg-gray-800 border border-gray-700 rounded-xl p-4"><div class="text-xs text-gray-500">賽事人次加總</div><div class="text-2xl font-bold text-white">[[ limitlessField.tournaments.total_players ]]</div></div>
+                            <div class="bg-gray-800 border border-gray-700 rounded-xl p-4"><div class="text-xs text-gray-500">中位人數</div><div class="text-2xl font-bold text-white">[[ limitlessField.tournaments.median_players ]]</div></div>
+                        </div>
+                        <div class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+                            <div class="bg-gray-800 border border-gray-700 rounded-xl p-4 flex flex-col items-center">
+                                <div class="w-52 h-52 rounded-full border-4 border-gray-900" :style="{ background: limitlessPieGradient }"></div>
+                                <p class="text-xs text-gray-500 mt-3">組合佔比（前 8 + 其他）</p>
+                            </div>
+                            <div class="space-y-2">
+                                <div v-for="slice in limitlessPieSlices" :key="slice.key" class="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                                    <div class="flex items-center gap-2 min-w-0"><span class="w-3 h-3 rounded-sm shrink-0" :style="{ background: slice.color }"></span><span class="text-sm text-white truncate">[[ slice.label ]]</span></div>
+                                    <div class="text-sm font-mono text-yellow-400 shrink-0">[[ slice.share_pct ]] · [[ slice.n ]]</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-gray-300 mb-2">比賽人數</h4>
+                            <div class="space-y-1 max-h-56 overflow-y-auto custom-scroll">
+                                <div v-for="t in limitlessField.tournaments.items" :key="t.tournament_id" class="flex justify-between gap-3 text-sm bg-gray-800/70 rounded px-3 py-2">
+                                    <div class="min-w-0"><div class="text-white truncate">[[ t.title ]]</div><div class="text-[11px] text-gray-500">[[ t.date ]] · [[ t.location || t.source_region ]]</div></div>
+                                    <div class="text-yellow-400 font-bold shrink-0">[[ t.players ]]人 / [[ t.decks ]]套</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-gray-300 mb-2">組合明細（牌表推斷）</h4>
+                            <div class="space-y-1 max-h-80 overflow-y-auto custom-scroll">
+                                <div v-for="row in limitlessField.combinations.slice(0, 30)" :key="row.combo_key" class="grid grid-cols-[1fr_auto_auto] gap-3 items-center bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                                    <div class="min-w-0">
+                                        <div class="text-white truncate">[[ row.label_zh ]]</div>
+                                        <div class="text-[11px] text-gray-500 truncate">官方標題常見：[[ (row.official_titles || []).map(t => t.name).join(' / ') ]]</div>
+                                    </div>
+                                    <div class="text-yellow-400 font-mono text-sm">[[ row.share_pct ]]</div>
+                                    <div class="text-[11px]" :class="row.has_brief ? 'text-emerald-400' : 'text-gray-500'">[[ row.has_brief ? '已有 brief' : '未分析' ]]</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4 flex-1 min-h-0" :class="limitlessMobileTab === 'tournaments' ? 'flex flex-col' : (limitlessMobileTab === 'field' ? 'hidden' : 'hidden xl:flex')">
                     <div v-if="limitlessTournamentsLoading" class="text-center mt-20 text-yellow-400"><span class="ms animate-spin ms-3x" aria-hidden="true">progress_activity</span><p class="mt-4">正在載入比賽...</p></div>
                     <div v-else-if="limitlessTournaments.length === 0" class="text-center mt-20 text-gray-500"><span class="ms ms-3x mb-4 opacity-30" aria-hidden="true">emoji_events</span><p>沒有找到比賽</p></div>
                     <div v-else class="space-y-2">
@@ -123,7 +180,7 @@
                     </div>
                 </div>
 
-                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4 flex-1 min-h-0" :class="limitlessMobileTab === 'decks' ? 'flex flex-col' : 'hidden xl:flex'">
+                <div class="border-r border-gray-700 overflow-y-auto custom-scroll p-4 flex-1 min-h-0" :class="limitlessMobileTab === 'decks' ? 'flex flex-col' : (limitlessMobileTab === 'field' ? 'hidden' : 'hidden xl:flex')">
                     <div v-if="limitlessDecksLoading" class="text-center mt-20 text-yellow-400"><span class="ms animate-spin ms-3x" aria-hidden="true">progress_activity</span><p class="mt-4">正在載入牌組...</p></div>
                     <div v-else-if="limitlessDecks.length === 0" class="text-center mt-20 text-gray-500"><span class="ms ms-3x mb-4 opacity-30" aria-hidden="true">list</span><p>[[ selectedLimitlessTournament && !selectedLimitlessTournament.detail_synced ? '此比賽詳情尚未同步' : '此比賽沒有牌組' ]]</p></div>
                     <div v-else class="space-y-2">
@@ -137,14 +194,15 @@
                     </div>
                 </div>
 
-                <div class="overflow-y-auto custom-scroll p-4 lg:p-6 flex-1 min-h-0" :class="limitlessMobileTab === 'detail' ? 'flex flex-col' : 'hidden xl:flex'">
+                <div class="overflow-y-auto custom-scroll p-4 lg:p-6 flex-1 min-h-0" :class="limitlessMobileTab === 'detail' ? 'flex flex-col' : (limitlessMobileTab === 'field' ? 'hidden' : 'hidden xl:flex')">
                     <div v-if="limitlessDetailLoading" class="text-center mt-20 text-yellow-400"><span class="ms animate-spin ms-3x" aria-hidden="true">progress_activity</span><p class="mt-4">正在載入牌表...</p></div>
                     <div v-else-if="!selectedLimitlessDeck" class="text-center mt-20 text-gray-500"><span class="ms ms-3x mb-4 opacity-30" aria-hidden="true">touch_app</span><p>請選擇一副 Limitless 牌組</p></div>
                     <div v-else>
                         <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
                             <div>
                                 <h3 class="text-2xl font-bold text-white">[[ getLimitlessDeckName(selectedLimitlessDeck.deck) ]]</h3>
-                                <div v-if="selectedLimitlessDeck.deck.archetype_zh && selectedLimitlessDeck.deck.archetype" class="text-xs text-gray-500 mt-1">[[ selectedLimitlessDeck.deck.archetype ]]</div>
+                                <div v-if="selectedLimitlessCombo" class="text-xs text-emerald-400 mt-1">組合推斷：[[ selectedLimitlessCombo.label_zh ]]（Limitless 原標題：[[ selectedLimitlessDeck.deck.archetype || selectedLimitlessDeck.deck.title || '-' ]]）</div>
+                                <div v-else-if="selectedLimitlessDeck.deck.archetype_zh && selectedLimitlessDeck.deck.archetype" class="text-xs text-gray-500 mt-1">[[ selectedLimitlessDeck.deck.archetype ]]</div>
                                 <div class="text-sm text-gray-400 mt-1">[[ selectedLimitlessDeck.deck.player_name || '-' ]] / # [[ selectedLimitlessDeck.deck.placement || '-' ]] / [[ selectedLimitlessDeck.deck.tournament_title || '-' ]]</div>
                                 <div class="text-xs text-gray-500 mt-1">[[ selectedLimitlessDeck.deck.date || '-' ]] / [[ selectedLimitlessDeck.deck.location || '-' ]]</div>
                             </div>

@@ -2624,6 +2624,60 @@ def get_limitless_tournament_decks(tournament_id):
     return jsonify(result), 200 if result.get('success') else 500
 
 
+@main_bp.route('/api/limitless-meta/field')
+def get_limitless_meta_field():
+    from services.limitless_decks.meta_field import build_field_stats
+
+    days = request.args.get('days', 30)
+    fmt = request.args.get('format', 'standard').strip() or 'standard'
+    try:
+        days = int(days or 30)
+    except (TypeError, ValueError):
+        days = 30
+    result = build_field_stats(days=days, fmt=fmt)
+    return jsonify(result), 200 if result.get('success') else 500
+
+
+@main_bp.route('/api/limitless-meta/briefs')
+def get_limitless_meta_briefs():
+    from services.limitless_decks.meta_field import list_briefs
+
+    result = list_briefs()
+    return jsonify(result), 200 if result.get('success') else 500
+
+
+@main_bp.route('/api/limitless-meta/briefs/<path:combo_key>')
+def get_limitless_meta_brief(combo_key):
+    from services.limitless_decks.meta_field import get_brief
+
+    result = get_brief(combo_key)
+    return jsonify(result), 200 if result.get('success') else 404
+
+
+@main_bp.route('/api/limitless-decks/<path:deck_id>/combo')
+def get_limitless_deck_combo(deck_id):
+    from services.limitless_decks.meta_field import get_deck_combo
+
+    combo = get_deck_combo(deck_id)
+    if not combo:
+        return jsonify({'success': False, 'error': 'combo not available'}), 404
+    return jsonify({'success': True, 'combo': combo})
+
+
+@main_bp.route('/api/admin/limitless-meta/briefs/run', methods=['POST'])
+@admin_required
+def run_limitless_meta_briefs():
+    from services.limitless_decks.meta_field import run_monthly_briefs
+
+    data = request.get_json(silent=True) or {}
+    result = run_monthly_briefs(
+        days=int(data.get('days') or 30),
+        quota=int(data.get('quota') or 20),
+        fmt=str(data.get('format') or 'standard'),
+    )
+    return jsonify(result), 200 if result.get('success') else 500
+
+
 @main_bp.route('/api/limitless-decks/list')
 def get_limitless_decks():
     from services.limitless_decks.repository import list_decks

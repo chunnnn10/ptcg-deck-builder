@@ -783,6 +783,26 @@ function useAdminUpdate() {
         elapsed: "",
         use_tcgdex: false
     });
+    const formatBriefRunning = ref(false);
+    const formatBriefRun = ref(null);
+    const runMonthlyFormatBriefs = async () => {
+        if (formatBriefRunning.value) return;
+        formatBriefRunning.value = true;
+        try {
+            const res = await fetch('/api/admin/limitless-meta/briefs/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ days: 30, quota: 20, format: 'standard' }),
+            });
+            const data = await res.json();
+            formatBriefRun.value = data;
+            if (!data.success) alert(data.error || 'Meta brief 失敗');
+        } catch (e) {
+            alert('Meta brief 連線失敗');
+        } finally {
+            formatBriefRunning.value = false;
+        }
+    };
     const limitlessRematchLimit = ref(null);
     const limitlessRematchTcgdex = ref(false);
     const limitlessRematchStats = ref(null);
@@ -1799,6 +1819,9 @@ function useAdminUpdate() {
         limitlessRematchStats,
         startLimitlessRematch,
         stopLimitlessRematch,
+        formatBriefRunning,
+        formatBriefRun,
+        runMonthlyFormatBriefs,
         loadRematchStats,
 
         // ========== JP 卡牌更新 (Limitless) ==========

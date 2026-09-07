@@ -118,10 +118,10 @@ SKILLS: list[dict[str, Any]] = [
         "name": "format_field",
         "description": "讀而家 Limitless 窗內前 20 佔比同環境打擊帶。",
         "when": "用戶問而家環境有邊套、佔比、一線係邊啲。",
-        "tools": ["search_meta_decks", "summarize_meta_archetype", "get_matchup_sheet"],
+        "tools": ["list_format_snapshot", "get_format_brief", "search_meta_decks", "get_matchup_sheet"],
         "flow": [
-            "用 Limitless 搜近期套，不要用模型記憶報佔比",
-            "未有 format_snapshot 工具前，只講樣本同名次，不要假裝有精確 %",
+            "先 list_format_snapshot 睇 30 日組合佔比",
+            "有 combo_key 再 get_format_brief 攞永久傷害線",
             "用戶要對局先轉 matchup_analysis",
         ],
         "stop": "列出可見套同來源就停。",

@@ -1,7 +1,7 @@
 // /Pokemon/public/js/io_manager.js
 
 function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
-    const { ref } = Vue;
+    const { ref, computed } = Vue;
 
     const showImportModal = ref(false);
     const importText = ref("");
@@ -69,6 +69,11 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     const limitlessImportMissing = ref([]);
     // 手機版 LimitLess 分步瀏覽：'tournaments' | 'decks' | 'detail'（桌面三欄並排不受影響）
     const limitlessMobileTab = ref("tournaments");
+    const limitlessField = ref(null);
+    const limitlessFieldLoading = ref(false);
+    const limitlessFieldDays = ref(30);
+    const limitlessBriefs = ref([]);
+    const selectedLimitlessCombo = ref(null);
     const importMissingNotice = ref(null);
 
     const showLiveModal = ref(false);
@@ -151,7 +156,68 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     const openLimitlessDeckLibrary = async () => {
         showLimitlessDeckLibrary.value = true;
         if (limitlessTournaments.value.length === 0) await searchLimitlessTournaments(1);
+        if (!limitlessField.value) await loadLimitlessField();
     };
+
+    const loadLimitlessField = async () => {
+        limitlessFieldLoading.value = true;
+        try {
+            const res = await fetch(`/api/limitless-meta/field?days=${encodeURIComponent(limitlessFieldDays.value || 30)}&format=standard`);
+            const data = await res.json();
+            if (data.success) {
+                limitlessField.value = data;
+            }
+            const briefRes = await fetch("/api/limitless-meta/briefs");
+            const briefData = await briefRes.json();
+            if (briefData.success) limitlessBriefs.value = briefData.briefs || [];
+        } catch (e) {
+            console.error(e);
+        } finally {
+            limitlessFieldLoading.value = false;
+        }
+    };
+
+    const limitlessPieSlices = computed(() => {
+        const combos = (limitlessField.value && limitlessField.value.combinations) || [];
+        const palette = ["#eab308", "#22c55e", "#38bdf8", "#f97316", "#a855f7", "#f43f5e", "#14b8a6", "#e879f9", "#94a3b8"];
+        const top = combos.slice(0, 8);
+        const rest = combos.slice(8);
+        const restN = rest.reduce((sum, row) => sum + Number(row.n || 0), 0);
+        const slices = top.map((row, index) => ({
+            key: row.combo_key,
+            label: row.label_zh || row.label,
+            n: row.n,
+            share: row.share,
+            share_pct: row.share_pct,
+            color: palette[index % palette.length],
+        }));
+        if (restN > 0) {
+            const total = Number((limitlessField.value && limitlessField.value.decks) || restN);
+            slices.push({
+                key: "other",
+                label: "其他",
+                n: restN,
+                share: total ? restN / total : 0,
+                share_pct: total ? `${((restN / total) * 100).toFixed(2)}%` : "0%",
+                color: "#64748b",
+            });
+        }
+        let cursor = 0;
+        return slices.map((slice) => {
+            const start = cursor;
+            cursor += Number(slice.share || 0);
+            return { ...slice, start, end: cursor };
+        });
+    });
+
+    const limitlessPieGradient = computed(() => {
+        const parts = limitlessPieSlices.value.map((slice) => {
+            const a = (slice.start * 100).toFixed(2);
+            const b = (slice.end * 100).toFixed(2);
+            return `${slice.color} ${a}% ${b}%`;
+        });
+        return parts.length ? `conic-gradient(${parts.join(",")})` : "conic-gradient(#334155 0 100%)";
+    });
 
     const searchLimitlessTournaments = async (page = 1) => {
         limitlessTournamentsLoading.value = true;
@@ -219,9 +285,24 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
                 limitlessLang.value = available.tw && available.tw.normal ? "tw" : (available.jp && available.jp.normal ? "jp" : "en");
                 limitlessMode.value = "normal";
                 limitlessImportMissing.value = [];
+                selectedLimitlessCombo.value = null;
                 // 手機版自動切到「牌表」頁（桌面三欄無影響）
                 limitlessMobileTab.value = "detail";
                 await loadLimitlessCards();
+                try {
+                    const comboRes = await fetch(`/api/limitless-decks/${encodeURIComponent(deckId)}/combo`);
+                    const comboData = await comboRes.json();
+                    if (comboData.success && comboData.combo) {
+                        selectedLimitlessCombo.value = comboData.combo;
+                        if (selectedLimitlessDeck.value && selectedLimitlessDeck.value.deck) {
+                            selectedLimitlessDeck.value.deck.combo_label_zh = comboData.combo.label_zh;
+                            selectedLimitlessDeck.value.deck.combo_label = comboData.combo.label;
+                            selectedLimitlessDeck.value.deck.combo_key = comboData.combo.combo_key;
+                        }
+                    }
+                } catch (comboErr) {
+                    console.error(comboErr);
+                }
             } else {
                 alert(data.error || "Limitless deck not found");
             }
@@ -238,7 +319,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     };
 
     const setLimitlessMobileTab = (tab) => {
-        if (["tournaments", "decks", "detail"].includes(tab)) limitlessMobileTab.value = tab;
+        if (["field", "tournaments", "decks", "detail"].includes(tab)) limitlessMobileTab.value = tab;
     };
 
     const loadLimitlessCards = async () => {
@@ -285,7 +366,7 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
     const getLimitlessSectionCount = (section) => getLimitlessSectionCards(section).reduce((sum, c) => sum + Number(c.count || 0), 0);
     const getLimitlessDeckName = (item) => {
         if (!item) return "";
-        return item.archetype_zh || item.title_zh || item.archetype || item.title || "未命名牌組";
+        return item.combo_label_zh || item.archetype_zh || item.title_zh || item.archetype || item.title || "未命名牌組";
     };
     const getLimitlessTagName = (item, tag, index) => {
         const translated = item && Array.isArray(item.tags_zh) ? item.tags_zh[index] : "";
@@ -713,6 +794,8 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
         searchLimitlessTournaments, openLimitlessTournament, importLimitlessDeck,
         limitlessImporting, limitlessImportMissing, importMissingNotice, closeImportMissingNotice,
         limitlessMobileTab, setLimitlessMobileTab,
+        limitlessField, limitlessFieldLoading, limitlessFieldDays, loadLimitlessField,
+        limitlessPieSlices, limitlessPieGradient, limitlessBriefs, selectedLimitlessCombo,
         loadLimitlessCards, setLimitlessLang, setLimitlessMode,
         closeLimitlessDeckDetail, getLimitlessCards, getLimitlessSectionCards,
         getLimitlessSectionCount, getLimitlessDeckName, getLimitlessTagName,
