@@ -753,18 +753,33 @@ def _message_text(message: Any) -> str:
     return "\n".join(str(chunk) for chunk in chunks if chunk)
 
 
+def _split_think(text: str) -> tuple[str, str]:
+    raw = str(text or "")
+    thinks = re.findall(r"<think>(.*?)</think>", raw, flags=re.S | re.I)
+    rest = re.sub(r"<think>.*?</think>", "", raw, flags=re.S | re.I)
+    leftover = re.search(r"<think>(.*)$", rest, flags=re.S | re.I)
+    if leftover:
+        thinks.append(leftover.group(1))
+        rest = rest[: leftover.start()]
+    return rest.strip(), "\n".join(part.strip() for part in thinks if part.strip())
+
+
 def _extract_json_object(text: str) -> dict[str, Any] | None:
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.I).strip()
-        raw = re.sub(r"```$", "", raw).strip()
-    candidates = [raw]
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        candidates.append(raw[start:end + 1])
+    rest, think = _split_think(text)
+    blobs = [rest, think, str(text or "")]
+    candidates = []
+    for blob in blobs:
+        raw = blob.strip()
+        if not raw:
+            continue
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?", "", raw, flags=re.I).strip()
+            raw = re.sub(r"```$", "", raw).strip()
+        candidates.append(raw)
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(raw[start:end + 1])
     for item in candidates:
         try:
             parsed = json.loads(item)
@@ -1058,7 +1073,7 @@ def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | Non
         payload = dict(payload)
         payload["catalog"] = _compact_catalog(payload.get("catalog"))
     prompt = [
-        {"role": "system", "content": system + " 只回 JSON 物件。"},
+        {"role": "system", "content": system + " 唔好輸出 <think>。最後只回一個 JSON 物件。"},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
     ]
     raw_text = ""
@@ -1066,11 +1081,25 @@ def _ai_json(system: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | Non
     for attempt in range(3):
         append_annotate_log("request", f"第 {attempt + 1} 次請求模型…")
         try:
-            msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=90, max_tokens=1600)
+            msg = chat_message(prompt, temperature=0.2, thinking=False, timeout=90, max_tokens=4096)
             raw_text = _message_text(msg)
+            rest, think = _split_think(raw_text)
+            if think:
+                append_annotate_log("think", "模型思考摘錄", raw=think[:800])
             parsed = _extract_json_object(raw_text)
             if parsed:
                 return parsed, raw_text, ""
+            if think or rest:
+                append_annotate_log("repair", "思考有內容但無 JSON，改用草稿補一次")
+                repair = [
+                    {"role": "system", "content": system + " 根據草稿只回 JSON，不要 <think>。"},
+                    {"role": "user", "content": json.dumps({"draft": (think or rest)[:4000], "original": payload}, ensure_ascii=False, default=str)},
+                ]
+                msg = chat_message(repair, temperature=0.1, thinking=False, timeout=90, max_tokens=4096)
+                raw_text = _message_text(msg)
+                parsed = _extract_json_object(raw_text)
+                if parsed:
+                    return parsed, raw_text, ""
             last_error = "AI 沒有返回可用 JSON"
             append_annotate_log("parse", last_error, last_error, raw_text)
         except (AIConfigError, AIClientError) as exc:

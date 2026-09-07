@@ -167,12 +167,16 @@ def chat_message(
     if max_tokens:
         payload["max_tokens"] = int(max_tokens)
     use_thinking = cfg["thinking_enabled"] if thinking is None else bool(thinking)
-    if use_thinking and "deepseek" in cfg["base_url"]:
+    base_url = str(cfg.get("base_url") or "").lower()
+    if use_thinking and "deepseek" in base_url:
         effort = cfg["reasoning_effort"]
         payload["thinking"] = {"type": "enabled"}
         payload["reasoning_effort"] = effort if effort in ("high", "max") else "high"
     else:
         payload["temperature"] = temperature
+        if "minimax" in base_url or "deepseek" in base_url:
+            payload["thinking"] = {"type": "disabled"}
+            payload["reasoning_split"] = True
 
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=float(timeout or cfg["timeout"]))
