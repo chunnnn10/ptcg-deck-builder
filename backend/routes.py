@@ -2711,9 +2711,10 @@ def get_limitless_meta_annotate_status():
 @main_bp.route('/api/admin/limitless-meta/briefs/<path:combo_key>/annotate', methods=['POST'])
 @admin_required
 def annotate_one_limitless_brief(combo_key):
-    from services.limitless_decks.meta_field import annotate_brief_with_ai
-    result = annotate_brief_with_ai(combo_key)
-    return jsonify(result), 200 if result.get('success') else 400
+    from services.limitless_decks.meta_field import start_brief_annotations
+    result = start_brief_annotations([combo_key])
+    result['success'] = True
+    return jsonify(result)
 
 
 @main_bp.route('/api/admin/limitless-meta/briefs/run', methods=['POST'])

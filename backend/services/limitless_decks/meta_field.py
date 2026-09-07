@@ -936,19 +936,26 @@ def run_monthly_briefs(days: int = 30, quota: int = 20, fmt: str = "standard") -
 
 
 _ANNOTATE_LOCK = threading.Lock()
+_ANNOTATE_QUEUE: list[str] = []
 _ANNOTATE_JOB: dict[str, Any] = {
     "running": False,
     "total": 0,
     "done": 0,
     "failed": 0,
     "current": "",
+    "last_key": "",
+    "last_ok": False,
+    "last_error": "",
+    "last_reply": "",
     "message": "就緒",
 }
 
 
 def get_annotate_status() -> dict[str, Any]:
     with _ANNOTATE_LOCK:
-        return dict(_ANNOTATE_JOB)
+        payload = dict(_ANNOTATE_JOB)
+        payload["queued"] = list(_ANNOTATE_QUEUE)
+        return payload
 
 
 def start_brief_annotations(combo_keys: list[str]) -> dict[str, Any]:
@@ -957,31 +964,54 @@ def start_brief_annotations(combo_keys: list[str]) -> dict[str, Any]:
         return {"running": False, "total": 0, "message": "沒有新 brief 需要 AI 整理"}
     with _ANNOTATE_LOCK:
         if _ANNOTATE_JOB.get("running"):
-            return dict(_ANNOTATE_JOB)
+            current = _ANNOTATE_JOB.get("current") or ""
+            for key in keys:
+                if key != current and key not in _ANNOTATE_QUEUE:
+                    _ANNOTATE_QUEUE.append(key)
+                    _ANNOTATE_JOB["total"] = int(_ANNOTATE_JOB.get("total") or 0) + 1
+            _ANNOTATE_JOB["message"] = f"已排入隊列：{keys[0]}"
+            payload = dict(_ANNOTATE_JOB)
+            payload["queued"] = list(_ANNOTATE_QUEUE)
+            payload["started"] = True
+            return payload
         _ANNOTATE_JOB.update({
             "running": True,
             "total": len(keys),
             "done": 0,
             "failed": 0,
             "current": keys[0],
+            "last_key": "",
+            "last_ok": False,
+            "last_error": "",
+            "last_reply": "",
             "message": f"準備整理 {len(keys)} 份 brief",
         })
     threading.Thread(target=_annotate_worker, args=(keys,), daemon=True).start()
-    return get_annotate_status()
+    status = get_annotate_status()
+    status["started"] = True
+    return status
 
 
 def _annotate_worker(combo_keys: list[str]) -> None:
-    for key in combo_keys:
+    pending = list(combo_keys)
+    while pending:
+        key = pending.pop(0)
         with _ANNOTATE_LOCK:
             _ANNOTATE_JOB["current"] = key
-            _ANNOTATE_JOB["message"] = f"AI 整理中：{key}"
+            _ANNOTATE_JOB["message"] = f"AI 三步整理中：{key}"
         result = annotate_brief_with_ai(key)
         with _ANNOTATE_LOCK:
+            _ANNOTATE_JOB["last_key"] = key
+            _ANNOTATE_JOB["last_ok"] = bool(result.get("success"))
+            _ANNOTATE_JOB["last_error"] = "" if result.get("success") else str(result.get("error") or "整理失敗")
+            _ANNOTATE_JOB["last_reply"] = str(result.get("reply") or "")
             if result.get("success"):
                 _ANNOTATE_JOB["done"] += 1
             else:
                 _ANNOTATE_JOB["failed"] += 1
-                _ANNOTATE_JOB["message"] = result.get("error") or "整理失敗"
+                _ANNOTATE_JOB["message"] = _ANNOTATE_JOB["last_error"]
+            pending.extend(_ANNOTATE_QUEUE)
+            _ANNOTATE_QUEUE.clear()
     with _ANNOTATE_LOCK:
         _ANNOTATE_JOB["running"] = False
         _ANNOTATE_JOB["current"] = ""

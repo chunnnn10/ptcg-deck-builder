@@ -895,18 +895,43 @@ function useIOManager(deck, addToDeck, currentDeckName, workspaceAPI = null) {
 
     const annotateOpenBrief = async () => {
         if (!editingBrief.value || briefRevising.value) return;
+        const comboKey = editingBrief.value.combo_key;
         briefRevising.value = true;
         briefChatLog.value = [...briefChatLog.value, { role: "user", text: "請用目錄整理打法／優缺／斬殺線" }];
         try {
-            const res = await fetch(`/api/admin/limitless-meta/briefs/${encodeURIComponent(editingBrief.value.combo_key)}/annotate`, { method: "POST" });
+            const res = await fetch(`/api/admin/limitless-meta/briefs/${encodeURIComponent(comboKey)}/annotate`, { method: "POST" });
             const data = await res.json();
-            if (!data.success) {
-                briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.error || "整理失敗" }];
+            if (!data.success && !data.started) {
+                briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.error || data.message || "無法開始整理" }];
                 return;
             }
-            editingBrief.value = data.brief || editingBrief.value;
-            fillBriefDraft(data.brief || editingBrief.value);
-            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: data.reply || "已整理打法／優缺／斬殺線" }];
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "已背景開始三步整理，唔使留住呢個請求。整理緊…" }];
+            const deadline = Date.now() + 6 * 60 * 1000;
+            while (Date.now() < deadline) {
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                const statusRes = await fetch("/api/admin/limitless-meta/annotate/status");
+                const statusData = await statusRes.json();
+                const status = statusData.status || {};
+                if (status.message) {
+                    briefChatLog.value = [...briefChatLog.value.slice(0, -1), { role: "assistant", text: status.message }];
+                }
+                const finishedThis = status.last_key === comboKey && (!status.running || status.current !== comboKey);
+                if (finishedThis && (status.last_ok || status.last_error)) {
+                    if (!status.last_ok) {
+                        briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: status.last_error || "整理失敗" }];
+                        return;
+                    }
+                    const briefRes = await fetch(`/api/limitless-meta/briefs/${encodeURIComponent(comboKey)}`);
+                    const briefData = await briefRes.json();
+                    if (briefData.success && briefData.brief) {
+                        editingBrief.value = briefData.brief;
+                        fillBriefDraft(briefData.brief);
+                    }
+                    briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: status.last_reply || "已完成角色分類、斬殺線同打法整理" }];
+                    return;
+                }
+            }
+            briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "整理逾時。請稍後再開呢套 brief 睇係唔係已經寫入。" }];
         } catch (e) {
             briefChatLog.value = [...briefChatLog.value, { role: "assistant", text: "整理連線失敗" }];
         } finally {
