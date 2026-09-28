@@ -19,4 +19,4 @@ RUN mkdir -p /app/data/images /app/data/images_jp /app/data/deck_json_exports
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--chdir", "/app/backend", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+CMD ["gunicorn", "--chdir", "/app/backend", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "8", "--timeout", "180", "--access-logfile", "-", "--error-logfile", "-", "app:app"]

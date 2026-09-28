@@ -68,6 +68,27 @@ def _should_start_background_workers():
     return not config.FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
 
 
+_SERVICE_LOCK_HANDLE = None
+
+
+def _acquire_service_lock():
+    """跨 process 檔案鎖：gunicorn 多 worker 時，確保背景服務只由其中一個 worker 啟動。
+
+    冇呢個鎖而 workers > 1，每個 worker 都會各自起一套背景爬蟲 + 備份排程，
+    造成重複抓取、DB 競爭同資源浪費。
+    """
+    global _SERVICE_LOCK_HANDLE
+    try:
+        import fcntl
+        lock_path = os.environ.get('PTCG_SERVICE_LOCK', '/tmp/ptcg_background.lock')
+        handle = open(lock_path, 'w')
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _SERVICE_LOCK_HANDLE = handle
+        return True
+    except Exception:
+        return False
+
+
 def _sleep_interval(seconds, minimum=60):
     try:
         seconds = int(seconds)
@@ -199,6 +220,11 @@ def run_limitless_auto_update_service():
 def start_background_update_threads():
     if not _should_start_background_workers():
         print(">>> [Auto Update] skipped in Flask reloader monitor process", flush=True)
+        return
+
+    # 多 worker 時只准一個 process 起背景服務，避免重複爬取同互相爭資源。
+    if not _acquire_service_lock():
+        print(">>> [Auto Update] background services already owned by another worker; skipped", flush=True)
         return
 
     if config.ENABLE_JP_DECK_AUTO_UPDATE:
