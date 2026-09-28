@@ -17,6 +17,70 @@ def get_db_connection():
         print(f"DB Connection Error: {e}")
         return None
 
+
+def _ensure_expansion_table_ready(cursor, table):
+    """冪等地令系列表具備 sort_order 欄位同 set_code 唯一約束，並清走重複行。
+
+    生產環境舊庫可能冇 sort_order 欄位又或者有重複 set_code（早期冇唯一約束造成），
+    會令之後所有 UPSERT 靜默失敗。呢個函式每次 sync 前都可以安全重跑。
+
+    用 SAVEPOINT 隔離每個步驟，任何一步失敗只回滾該步，唔會拖冧外層交易
+    （例如 init_db 嘅單一交易，裡面仲有其他未 commit 嘅 DDL）。
+    """
+    def _run(sql):
+        try:
+            cursor.execute("SAVEPOINT _ensure_exp")
+        except Exception:
+            return
+        try:
+            cursor.execute(sql)
+            cursor.execute("RELEASE SAVEPOINT _ensure_exp")
+        except Exception:
+            try:
+                cursor.execute("ROLLBACK TO SAVEPOINT _ensure_exp")
+                cursor.execute("RELEASE SAVEPOINT _ensure_exp")
+            except Exception:
+                pass
+
+    _run(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 999999")
+    # 移除重複 set_code，保留 last_updated 最新嘅一行（時間相同時保留實體位置較後者）
+    _run(
+        f"""
+        DELETE FROM {table} a
+        USING {table} b
+        WHERE a.set_code = b.set_code
+          AND (
+                a.last_updated < b.last_updated
+             OR (a.last_updated = b.last_updated AND a.ctid < b.ctid)
+          )
+        """
+    )
+    # 保證 set_code 有唯一索引，令 ON CONFLICT (set_code) 生效
+    _run(f"CREATE UNIQUE INDEX IF NOT EXISTS {table}_set_code_key ON {table} (set_code)")
+
+
+def ensure_expansion_table(table):
+    """對外版本：開自己嘅連線去整理指定系列表。回傳是否成功。"""
+    if table not in ('expansion_sets', 'jp_expansion_sets'):
+        return False
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        _ensure_expansion_table_ready(cursor, table)
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"ensure_expansion_table({table}) failed: {e}")
+        return False
+    finally:
+        conn.close()
+
 # ==========================================
 # 卡牌查詢
 # ==========================================
@@ -620,9 +684,11 @@ def init_db():
             set_code VARCHAR PRIMARY KEY,
             set_name VARCHAR,
             series VARCHAR DEFAULT '',
+            sort_order INTEGER DEFAULT 999999,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        _ensure_expansion_table_ready(cursor, 'expansion_sets')
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS jp_cards (
@@ -672,9 +738,11 @@ def init_db():
             set_code VARCHAR PRIMARY KEY,
             set_name VARCHAR,
             series VARCHAR DEFAULT '',
+            sort_order INTEGER DEFAULT 999999,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        _ensure_expansion_table_ready(cursor, 'jp_expansion_sets')
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS imported_decks (

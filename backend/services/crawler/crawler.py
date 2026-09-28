@@ -107,6 +107,16 @@ def ensure_schema_updates():
     except Exception:
         pass
 
+    # 1b. 自愈：清走重複 set_code、確保有唯一索引（否則 ON CONFLICT (set_code) 會失效）
+    try:
+        database._ensure_expansion_table_ready(cursor, 'expansion_sets')
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
     # 2. 檢查 cards 表的新欄位
     # 注意：regulation_flags 用來儲存 'Standard', 'Expanded' 等標記
     new_columns = [
@@ -312,6 +322,19 @@ def fetch_expansion_meta():
     if not conn:
         return {}
 
+    # 自愈：確保表有 sort_order、set_code 唯一約束，並清走重複行。
+    # 生產舊庫可能缺欄位或有重複，會令以下所有 UPSERT 靜默失敗。
+    try:
+        cursor = conn.cursor()
+        database._ensure_expansion_table_ready(cursor, 'expansion_sets')
+        conn.commit()
+    except Exception as e:
+        log_update(f"整理 expansion_sets 表時出錯（繼續嘗試寫入）: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
     cursor = conn.cursor()
     expansion_map = {}
     count = 0
@@ -328,7 +351,7 @@ def fetch_expansion_meta():
             cursor.execute(
                 """INSERT INTO expansion_sets (set_code, set_name, series, sort_order, last_updated)
                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                   ON CONFLICT ON CONSTRAINT expansion_sets_pkey DO UPDATE
+                   ON CONFLICT (set_code) DO UPDATE
                    SET set_name = EXCLUDED.set_name,
                        series = EXCLUDED.series,
                        sort_order = EXCLUDED.sort_order,

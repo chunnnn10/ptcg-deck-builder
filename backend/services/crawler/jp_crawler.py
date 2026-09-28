@@ -835,11 +835,12 @@ def _persist_jp_expansion_sets(expansions: list[dict]) -> int:
     written = 0
     try:
         cursor = conn.cursor()
-        # 補齊 sort_order 欄位（舊庫可能未有）
+        # 自愈：確保表有 sort_order、set_code 唯一約束，並清走重複行。
         try:
-            cursor.execute("ALTER TABLE jp_expansion_sets ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 999999")
+            database._ensure_expansion_table_ready(cursor, 'jp_expansion_sets')
             conn.commit()
-        except Exception:
+        except Exception as e:
+            jp_log(f"整理 jp_expansion_sets 表時出錯（繼續嘗試寫入）: {e}")
             try:
                 conn.rollback()
             except Exception:
