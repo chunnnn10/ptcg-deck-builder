@@ -192,7 +192,9 @@ def list_provisional(limit: int = 100) -> list[dict]:
                 item["created_at"] = str(item["created_at"])
             rows.append(item)
         return rows
-    except Exception:
+    except Exception as exc:
+        # 唔可以靜默吞錯：壞 query 同「冇資料」必須分得開。
+        print(f">>> [Provisional] list_provisional failed: {exc}", flush=True)
         return []
     finally:
         conn.close()
@@ -230,13 +232,26 @@ def _remap_json_card_ids(payload: Any, mapping: dict[str, str]) -> tuple[Any, in
 
 
 def _remap_stored_decks(cursor, mapping: dict[str, str]) -> int:
+    """只載入／更新真正引用被取代臨時 id 嘅行，避免全表掃描。
+
+    SQL LIKE 只做粗篩（臨時 id 內嘅 `_` 係 LIKE 通配符，會多撈少量無關行），
+    權威判斷仍然交由 _remap_json_card_ids 做，唔會改變儲存格式或結果。
+    """
     changed_total = 0
+    temp_ids = [str(tid) for tid in mapping if str(tid)]
+    if not temp_ids:
+        return 0
+    like_patterns = [f"%{tid}%" for tid in temp_ids]
     for table, column, id_col in (
         ("user_workspace", "content", "id"),
         ("decks", "content", "id"),
     ):
+        like_clause = " OR ".join([f"{column} LIKE %s"] * len(like_patterns))
         try:
-            cursor.execute(f"SELECT {id_col}, {column} FROM {table}")
+            cursor.execute(
+                f"SELECT {id_col}, {column} FROM {table} WHERE {like_clause}",
+                like_patterns,
+            )
         except Exception:
             try:
                 cursor.connection.rollback()

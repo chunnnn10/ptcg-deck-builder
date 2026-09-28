@@ -741,9 +741,8 @@ def register():
             msg += ' 請至信箱收取驗證信以啟用帳號。'
         else:
             if verify_link:
-                # 直接回傳驗證連結給前端
-                msg += ' (開發模式/發信失敗) 請使用下方連結進行驗證。'
-                response_data['verify_link'] = verify_link
+                # 開發模式/發信失敗：驗證連結只寫入伺服器日誌，絕不回傳給呼叫方
+                msg += ' (開發模式/發信失敗) 驗證信未發送，請聯繫管理員查看伺服器日誌。'
             else:
                 msg += ' 驗證信發送失敗，請聯繫管理員。'
 
@@ -753,7 +752,7 @@ def register():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': f'伺服器內部錯誤: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/verify/<token>')
 def verify_email(token):
@@ -862,8 +861,8 @@ def forgot_password():
         elif verify_link:
             return jsonify({
                 'success': True,
-                'message': '(開發模式) 請使用下方連結重設密碼。',
-                'verify_link': verify_link
+                # 開發模式/發信失敗：重設連結只寫入伺服器日誌，絕不回傳給呼叫方
+                'message': '(開發模式) 重設密碼郵件未發送，請聯繫管理員查看伺服器日誌。'
             })
         else:
             return jsonify({'success': False, 'error': '郵件發送失敗，請稍後再試。'}), 500
@@ -871,7 +870,7 @@ def forgot_password():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': f'伺服器錯誤: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 def send_password_reset_email(user_email, token):
@@ -961,7 +960,7 @@ def reset_password():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': f'伺服器錯誤: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 # ==========================================
 # API 接口 (保持不變)
@@ -998,7 +997,7 @@ def ai_chat():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': str(e),
+            'error': '伺服器內部錯誤，請稍後再試',
             'answer': '',
             'cards': [],
             'meta_references': [],
@@ -1007,7 +1006,7 @@ def ai_chat():
             'tool_trace': [],
             'tool_results': [],
         }), 500
-        return jsonify({'success': False, 'error': str(e), 'answer': '', 'tool_results': [], 'cards': []}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試', 'answer': '', 'tool_results': [], 'cards': []}), 500
 
 
 @main_bp.route('/api/ai/chat/jobs', methods=['POST'])
@@ -1029,7 +1028,7 @@ def ai_chat_job_start():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e), 'job_id': None, 'status': 'failed'}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試', 'job_id': None, 'status': 'failed'}), 500
 
 
 @main_bp.route('/api/ai/chat/jobs/<job_id>', methods=['GET'])
@@ -1236,7 +1235,9 @@ def get_cards_batch():
             c_id_str = str(c_id or "")
             card_data['logic'] = logic_by_id.get(c_id_str) or logic_by_id.get(c_id_str.rsplit('.', 1)[0] if '.' in c_id_str else '')
             results.append(card_data)
-    except Exception as e: return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally: conn.close()
     return jsonify(results)
 
@@ -1413,7 +1414,8 @@ def get_jp_cards_batch():
             card_data['language'] = 'jp'
             results.append(card_data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
     return jsonify(results)
@@ -1503,8 +1505,9 @@ def get_card_variants(card_id):
         return jsonify(result)
 
     except Exception as e:
+        print(f"Error: {e}")
         conn.close()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/card/refresh/<card_id>', methods=['POST'])
@@ -1558,11 +1561,12 @@ def refresh_card_detail(card_id):
         return jsonify({'success': True, 'card': card_data})
 
     except Exception as e:
+        print(f"Error: {e}")
         try:
             conn.close()
         except Exception:
             pass
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/deck/save', methods=['POST'])
@@ -1584,8 +1588,9 @@ def save_deck():
         conn.close()
         return jsonify({'success': True, 'id': new_id})
     except Exception as e:
+        print(f"Error: {e}")
         conn.close()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/deck/<deck_id>')
 def get_deck(deck_id):
@@ -1677,7 +1682,9 @@ def add_card():
         conn.commit()
         conn.close()
         return jsonify({'success': True, 'message': 'Card added successfully', 'image_url': f"/images/{new_filename}"})
-    except Exception as e: return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 # ==========================================
 # [修改] 更新功能 API - 需要 Admin 權限
@@ -1706,7 +1713,7 @@ def check_version():
                 if m: official_pages = int(m.group(1))
     except Exception as e:
         print(f"Version check error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'})
 
     return jsonify({
         'success': True,
@@ -1763,12 +1770,14 @@ def start_update():
 from services.crawler import jp_crawler
 
 @main_bp.route('/api/jp/crawler/status')
+@admin_required
 def jp_crawler_status():
     """取得 JP 爬蟲狀態"""
     return jsonify(jp_crawler.JP_UPDATE_STATE)
 
 
 @main_bp.route('/api/jp/crawler/expansions')
+@admin_required
 def jp_expansion_list():
     """取得 JP 擴充包列表 (從搜尋頁 JS 資料解析)。
     持久化進 jp_expansion_sets 表以供每日自動偵測新系列使用。
@@ -1824,7 +1833,7 @@ def start_jp_update():
 from services.crawler import limitless_jp_crawler as ljp
 
 @main_bp.route('/api/limitless-jp/test', methods=['POST'])
-@login_required
+@admin_required
 def limitless_jp_test():
     """測試單卡解析"""
     data = request.json or {}
@@ -1913,6 +1922,7 @@ def limitless_jp_start():
 
 
 @main_bp.route('/api/limitless-jp/status', methods=['GET'])
+@admin_required
 def limitless_jp_status():
     """取得 Limitless JP 爬蟲進度"""
     return jsonify({
@@ -1954,6 +1964,7 @@ def get_regulation_settings():
             'standard_marks': standard_marks
         })
     except Exception as e:
+        print(f"Error: {e}")
         return jsonify({
             'success': True,
             'marks': [],
@@ -1986,7 +1997,7 @@ def update_regulation_settings():
         return jsonify({'success': True, 'message': '賽季設定已更新'})
     except Exception as e:
         print(f"Update regulation settings error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/crawler/expansions', methods=['GET'])
@@ -2097,7 +2108,7 @@ def get_expansions():
 
     except Exception as e:
         print(f"Get expansions error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/crawler/status', methods=['GET'])
 @admin_required  # [新增] 權限檢查
@@ -2118,13 +2129,15 @@ def sync_expansions_now():
         tw_map = crawler.fetch_expansion_meta()
         payload['tw'] = len(tw_map) if tw_map else 0
     except Exception as e:
-        payload['errors'].append(f'tw: {e}')
+        print(f"Error: {e}")
+        payload['errors'].append('tw: 同步失敗')
 
     try:
         jp_list = jp_crawler.fetch_jp_expansion_meta(persist=True)
         payload['jp'] = len(jp_list) if jp_list else 0
     except Exception as e:
-        payload['errors'].append(f'jp: {e}')
+        print(f"Error: {e}")
+        payload['errors'].append('jp: 同步失敗')
 
     return jsonify({
         'success': True,
@@ -2203,8 +2216,9 @@ def get_deck_mapping_stats():
             }
         })
     except Exception as e:
+        print(f"Error: {e}")
         conn.close()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 # ==========================================
@@ -2330,7 +2344,7 @@ def list_card_roles():
         return jsonify({'success': True, 'tags': tags, 'total': total, 'page': page, 'page_size': page_size})
     except Exception as e:
         print(f"Card role list error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
 
@@ -2368,8 +2382,9 @@ def review_card_roles():
         conn.commit()
         return jsonify({'success': True, 'updated': cursor.rowcount})
     except Exception as e:
+        print(f"Error: {e}")
         conn.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
 
@@ -2391,8 +2406,9 @@ def clear_card_roles():
         conn.commit()
         return jsonify({'success': True, 'deleted': cursor.rowcount})
     except Exception as e:
+        print(f"Error: {e}")
         conn.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
 
@@ -2530,7 +2546,8 @@ def extract_provisional_card():
         try:
             parsed = extract_from_image(raw, mime=mime)
         except Exception as exc:
-            item['error'] = str(exc)
+            print(f"Error: {exc}")
+            item['error'] = '解析失敗，請稍後再試'
             results.append(item)
             continue
         saved = None
@@ -2604,9 +2621,10 @@ def clear_all_imported_decks():
         conn.close()
         return jsonify({'success': True, 'message': '已清除所有日本牌組資料（deck_cards + id_mapping + imported_decks）'})
     except Exception as e:
+        print(f"Error: {e}")
         conn.rollback()
         conn.close()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 # ==========================================
@@ -2802,7 +2820,8 @@ def import_limitless_deck(deck_id):
             mode=data.get('mode', 'normal'),
         )
     except Exception as exc:
-        return jsonify({'success': False, 'error': f'導入失敗：{exc}'}), 500
+        print(f"Error: {exc}")
+        return jsonify({'success': False, 'error': '導入失敗，請稍後再試'}), 500
     return jsonify(result), 200 if result.get('success') else 400
 
 
@@ -2836,7 +2855,8 @@ def refresh_limitless_indexes():
         )
         return jsonify({'success': True, 'result': result})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/admin/limitless/update/tournament/<path:tournament_id>', methods=['POST'])
@@ -2854,7 +2874,8 @@ def update_limitless_tournament(tournament_id):
         )
         return jsonify({'success': True, 'result': result})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/admin/limitless/update/deck/<path:deck_id>', methods=['POST'])
@@ -2867,7 +2888,8 @@ def update_limitless_deck(deck_id):
         result = update_deck(deck_id, include_bling=bool(data.get('include_bling', False)))
         return jsonify({'success': True, 'result': result})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/admin/limitless/rematch/stats')
@@ -2878,7 +2900,8 @@ def limitless_rematch_stats():
     try:
         return jsonify({'success': True, 'stats': missing_stats()})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/admin/limitless/rematch/start', methods=['POST'])
@@ -2896,7 +2919,8 @@ def start_limitless_rematch():
         )
         return jsonify({'success': success, 'message': message, 'status': status})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"Error: {e}")
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/admin/limitless/rematch/status')
@@ -3151,7 +3175,7 @@ def get_japanese_decks():
         print(f"Get JP decks error: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
 
@@ -3236,13 +3260,14 @@ def get_japanese_deck_content(deck_code):
             pass
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 # ==========================================
 # [新增] PTCG Live 轉換工具 API
 # ==========================================
 
 @main_bp.route('/api/tools/convert-live', methods=['POST'])
+@login_required
 def convert_to_live():
     """
     將牌組列表轉換為 PTCG Live 格式
@@ -3377,7 +3402,7 @@ def convert_to_live():
 
     except Exception as e:
         print(f"Live convert error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 # ==========================================
 # [新增] 用戶管理 API - 需要 Admin 權限
@@ -3409,7 +3434,7 @@ def get_all_users():
         return jsonify({'success': True, 'users': users})
     except Exception as e:
         print(f"Get users error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/admin/users/role', methods=['POST'])
 @admin_required
@@ -3432,6 +3457,17 @@ def update_user_role():
         
         conn = User._get_db()
         cursor = conn.cursor()
+
+        # [安全] 最後一位管理員保護：不可將最後一位 admin 降級
+        if new_role != 'admin':
+            cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+            _target = cursor.fetchone()
+            if _target and _target['role'] == 'admin':
+                cursor.execute("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")
+                if cursor.fetchone()['c'] <= 1:
+                    conn.close()
+                    return jsonify({'success': False, 'error': '無法移除最後一位管理員'}), 400
+
         cursor.execute("UPDATE users SET role = %s WHERE id = %s", (new_role, user_id))
         conn.commit()
         conn.close()
@@ -3439,7 +3475,7 @@ def update_user_role():
         return jsonify({'success': True, 'message': f'用戶角色已更新為 {new_role}'})
     except Exception as e:
         print(f"Update role error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/admin/users/verify', methods=['POST'])
 @admin_required
@@ -3461,7 +3497,7 @@ def admin_verify_user():
         return jsonify({'success': True, 'message': '用戶已驗證'})
     except Exception as e:
         print(f"Verify user error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/admin/users/delete', methods=['POST'])
 @admin_required
@@ -3482,12 +3518,20 @@ def delete_user():
         cursor = conn.cursor()
         
         # 檢查用戶是否存在
-        cursor.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+        cursor.execute("SELECT username, role FROM users WHERE id = %s", (user_id,))
         user = cursor.fetchone()
         if not user:
             conn.close()
             return jsonify({'success': False, 'error': '用戶不存在'}), 404
         
+
+        # [安全] 最後一位管理員保護：不可刪除最後一位 admin
+        if user['role'] == 'admin':
+            cursor.execute("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")
+            if cursor.fetchone()['c'] <= 1:
+                conn.close()
+                return jsonify({'success': False, 'error': '無法刪除最後一位管理員'}), 400
+
         # 刪除用戶
         cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
         conn.commit()
@@ -3496,7 +3540,7 @@ def delete_user():
         return jsonify({'success': True, 'message': f'用戶已刪除'})
     except Exception as e:
         print(f"Delete user error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 @main_bp.route('/api/admin/users/<user_id>', methods=['PUT'])
@@ -3528,7 +3572,7 @@ def admin_update_user(user_id):
 
     except Exception as e:
         print(f"Admin update user error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 
 # ==========================================
@@ -3624,7 +3668,7 @@ def get_gap_a_logic_status():
         })
     except Exception as e:
         print(f"Gap A logic status error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
 
@@ -3675,7 +3719,7 @@ def run_gap_a_logic_backfill():
     except Exception as e:
         conn.rollback()
         print(f"Gap A logic backfill error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
     finally:
         conn.close()
 
@@ -3745,7 +3789,7 @@ def get_all_decks():
         return jsonify({'success': True, 'decks': results})
     except Exception as e:
         print(f"Get all decks error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/admin/deck/<deck_id>', methods=['GET'])
 @admin_required
@@ -3776,7 +3820,7 @@ def get_deck_detail(deck_id):
         })
     except Exception as e:
         print(f"Get deck detail error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/admin/deck/<deck_id>', methods=['PUT'])
 @admin_required
@@ -3823,7 +3867,7 @@ def update_deck(deck_id):
         return jsonify({'success': True, 'message': '牌組已更新'})
     except Exception as e:
         print(f"Update deck error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/admin/deck/<deck_id>', methods=['DELETE'])
 @admin_required
@@ -3850,7 +3894,7 @@ def delete_deck(deck_id):
         return jsonify({'success': True, 'message': f'牌組 "{deck_name}" 已刪除'})
     except Exception as e:
         print(f"Delete deck error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 # ==========================================
 # [新增] 工作區 API - 需要登入
@@ -3865,7 +3909,7 @@ def get_workspace():
         return jsonify({'success': True, 'workspace': tree})
     except Exception as e:
         print(f"Get workspace error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item', methods=['POST'])
 @login_required
@@ -3898,7 +3942,7 @@ def create_workspace_item():
             return jsonify({'success': False, 'error': '建立失敗'}), 500
     except Exception as e:
         print(f"Create workspace item error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>', methods=['GET'])
 @login_required
@@ -3912,7 +3956,7 @@ def get_workspace_item(item_id):
             return jsonify({'success': False, 'error': '項目不存在'}), 404
     except Exception as e:
         print(f"Get workspace item error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>', methods=['PUT'])
 @login_required
@@ -3952,7 +3996,7 @@ def update_workspace_item(item_id):
             return jsonify({'success': False, 'error': '更新失敗或項目不存在'}), 404
     except Exception as e:
         print(f"Update workspace item error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>/timeline', methods=['GET'])
 @login_required
@@ -3962,7 +4006,7 @@ def get_workspace_item_timeline(item_id):
         return jsonify({'success': True, 'timeline': entries})
     except Exception as e:
         print(f"Get workspace timeline error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>/timeline', methods=['POST'])
 @login_required
@@ -3981,7 +4025,7 @@ def create_workspace_item_timeline(item_id):
         return jsonify({'success': True, 'timeline': timeline})
     except Exception as e:
         print(f"Create workspace timeline error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>/timeline/<timeline_id>/restore', methods=['POST'])
 @login_required
@@ -3993,7 +4037,7 @@ def restore_workspace_item_timeline(item_id, timeline_id):
         return jsonify({'success': True, **restored})
     except Exception as e:
         print(f"Restore workspace timeline error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>', methods=['DELETE'])
 @login_required
@@ -4008,7 +4052,7 @@ def delete_workspace_item(item_id):
             return jsonify({'success': False, 'error': '刪除失敗或項目不存在'}), 404
     except Exception as e:
         print(f"Delete workspace item error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>/move', methods=['POST'])
 @login_required
@@ -4026,7 +4070,9 @@ def move_workspace_item(item_id):
                     return True
                 item = database.get_workspace_item(parent_id, current_user.id)
                 if item and item.get('type') == 'folder':
-                    conn = database.get_workspace_db()
+                    conn = database.get_db_connection()
+                    if not conn:
+                        raise RuntimeError('無法連線至資料庫')
                     cursor = conn.cursor()
                     cursor.execute("SELECT id FROM user_workspace WHERE parent_id = %s AND user_id = %s", 
                                    (parent_id, current_user.id))
@@ -4048,7 +4094,7 @@ def move_workspace_item(item_id):
             return jsonify({'success': False, 'error': '移動失敗'}), 500
     except Exception as e:
         print(f"Move workspace item error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500
 
 @main_bp.route('/api/workspace/item/<item_id>/publish', methods=['POST'])
 @login_required
@@ -4087,4 +4133,4 @@ def publish_workspace_deck(item_id):
         })
     except Exception as e:
         print(f"Publish deck error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試'}), 500

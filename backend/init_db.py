@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS jp_cards (
     evolves_from VARCHAR,
     set_code VARCHAR,
     set_number VARCHAR,
+    set_total VARCHAR,
     set_name VARCHAR,
     regulation_flags VARCHAR,
     regulation_mark VARCHAR DEFAULT '',
@@ -223,11 +224,59 @@ CREATE TABLE IF NOT EXISTS api_logs (
 CREATE TABLE IF NOT EXISTS deck_search_index (
     deck_id INTEGER REFERENCES imported_decks(id) ON DELETE CASCADE,
     card_name TEXT NOT NULL,
-    count INTEGER DEFAULT 1
+    count INTEGER DEFAULT 1,
+    CONSTRAINT uq_deck_search_index_deck_card UNIQUE (deck_id, card_name)
 );
 CREATE INDEX IF NOT EXISTS idx_dsi_deck ON deck_search_index(deck_id);
 CREATE INDEX IF NOT EXISTS idx_dsi_name ON deck_search_index(card_name);
 CREATE INDEX IF NOT EXISTS idx_dsi_deck_card_name ON deck_search_index(deck_id, card_name);
+
+-- === Phase-0 schema 完整性自癒（可安全重跑）===
+ALTER TABLE jp_cards ADD COLUMN IF NOT EXISTS set_total VARCHAR;
+
+DO $$
+DECLARE r RECORD;
+BEGIN
+    IF to_regclass('public.deck_cards') IS NULL
+       OR to_regclass('public.imported_decks') IS NULL THEN
+        RETURN;
+    END IF;
+    FOR r IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        WHERE t.relname = 'deck_cards'
+          AND c.contype = 'f'
+          AND a.attname = 'deck_id'
+          AND c.confdeltype <> 'c'
+    LOOP
+        EXECUTE format('ALTER TABLE deck_cards DROP CONSTRAINT %I', r.conname);
+    END LOOP;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        WHERE t.relname = 'deck_cards'
+          AND c.contype = 'f'
+          AND a.attname = 'deck_id'
+          AND c.confdeltype = 'c'
+    ) THEN
+        ALTER TABLE deck_cards
+            ADD CONSTRAINT deck_cards_deck_id_fkey
+            FOREIGN KEY (deck_id) REFERENCES imported_decks(id) ON DELETE CASCADE NOT VALID;
+    END IF;
+END $$;
+
+DELETE FROM deck_search_index a
+USING deck_search_index b
+WHERE a.deck_id = b.deck_id
+  AND a.card_name = b.card_name
+  AND a.ctid < b.ctid;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_deck_search_index_deck_card
+    ON deck_search_index (deck_id, card_name);
 
 COMMIT;
 """

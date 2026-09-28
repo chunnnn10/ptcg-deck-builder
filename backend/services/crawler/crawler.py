@@ -783,6 +783,7 @@ def cleanup_placeholder_cards():
             WHERE (
                     p.card_id LIKE 'placeholder::%'
                  OR p.card_id LIKE p.set_code || '\\_%' ESCAPE '\\'
+                 OR p.card_id LIKE 'prov\\_%' ESCAPE '\\'
             )
               AND EXISTS (
                   SELECT 1 FROM cards real
@@ -987,7 +988,8 @@ def jp_worker_robot(worker_id, q):
             if jp_name or jp_id:
                 conn = database.get_db_connection()
                 try:
-                    conn.execute("UPDATE cards SET japanese_name = %s, jp_id = %s WHERE card_id = %s", (jp_name, jp_id, card_id))
+                    cur = conn.cursor()
+                    cur.execute("UPDATE cards SET japanese_name = %s, jp_id = %s WHERE card_id = %s", (jp_name, jp_id, card_id))
                     conn.commit()
                     conn.close()
                     # log_update(f"🇯🇵 已補完: {name} -> {jp_name}")
@@ -1314,6 +1316,23 @@ def run_update_process(target_expansion_codes=None, target_regulations=None,
         cleanup_placeholder_cards()
     except Exception as e:
         log_update(f"清理假卡時出錯（非致命）: {e}")
+
+    # 更新 server_meta.json（供 /api/admin/check_version 比對版本用）。
+    # 失敗唔可以影響爬取結果，故整個流程包喺 try/except 內。
+    try:
+        conn = database.get_db_connection()
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) AS total FROM cards")
+                row = cur.fetchone()
+                total_cards = int(row['total']) if row else 0
+            finally:
+                conn.close()
+            save_local_meta(total_cards)
+            log_update(f"已更新 server_meta.json，總卡數 {total_cards}")
+    except Exception as e:
+        log_update(f"更新 server_meta.json 時出錯（非致命）: {e}")
 
     with update_lock:
         UPDATE_STATE['running'] = False

@@ -540,6 +540,22 @@ def parse_detail_page(card_id: int, session=None) -> Optional[JPCardData]:
 # ==========================================
 # 資料庫寫入
 # ==========================================
+def _regulation_flag_for_mark(mark) -> str:
+    """依卡牌自己嘅賽季字母決定 regulation_flags，而非硬編成 'Standard'。
+
+    優先重用 crawler.py 嘅同一套邏輯（讀 regulation_settings 表），
+    讀唔到時用本地等價實作，確保 regulation_settings 為空都仲有 F-J fallback。
+    """
+    try:
+        from services.crawler import crawler as _crawler
+        return _crawler._regulation_flag_for_mark(None, mark)
+    except Exception:
+        m = (mark or '').strip().upper()
+        if not m:
+            return ''
+        return 'Standard' if m in {'F', 'G', 'H', 'I', 'J'} else 'Expanded'
+
+
 def save_card_to_db(card: JPCardData, skip_images: bool = False, conn=None) -> bool:
     """將解析後的卡牌寫入 jp_cards 表 (UPSERT)。可傳入現有連線重用。"""
     card_id_str = f"jp{card.card_id:06d}"
@@ -629,7 +645,7 @@ def save_card_to_db(card: JPCardData, skip_images: bool = False, conn=None) -> b
             skills_json, card.rarity,
             chinese_name, card.sub_type, card.evolves_from,
             card.set_code, card.set_number, card.set_total, card.set_name,
-            "Standard", card.regulation_mark,
+            _regulation_flag_for_mark(card.regulation_mark), card.regulation_mark,
             card.description,
             card.flavor_text, card.pokedex_number, card.pokedex_category,
             card.height, card.weight

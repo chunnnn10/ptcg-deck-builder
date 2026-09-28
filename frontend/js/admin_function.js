@@ -563,6 +563,11 @@ function useAdminUpdate() {
             if (editUserData.password.trim()) {
                 body.password = editUserData.password.trim();
             }
+            // 保留目前的 AI 助手使用權狀態（後端欄位：ai_enabled，1/0）
+            const currentUser = adminUsers.value.find(u => u.id === editUserData.id);
+            if (currentUser && typeof currentUser.ai_enabled !== 'undefined') {
+                body.ai_enabled = currentUser.ai_enabled ? 1 : 0;
+            }
             const res = await fetch(`/api/admin/users/${editUserData.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -823,6 +828,7 @@ function useAdminUpdate() {
     };
     const runMonthlyFormatBriefs = async () => {
         if (formatBriefRunning.value) return;
+        if (!confirm('確定要執行每月格式簡報（Monthly Format Briefs）？\n這會呼叫 AI 產生大量內容（quota 20、30 天資料），耗時且會消耗 AI 額度，確定要繼續嗎？')) return;
         formatBriefRunning.value = true;
         try {
             const res = await fetch('/api/admin/limitless-meta/briefs/run', {
@@ -975,6 +981,7 @@ function useAdminUpdate() {
             alert('機器人數量最少為 1');
             return;
         }
+        if (!confirm(`確定要啟動牌組對應（Deck Mapping）？\n這會啟動 ${botCount} 個機器人長時間爬取並寫入資料庫，可能耗時很久，確定要繼續嗎？`)) return;
 
         try {
             const res = await fetch('/api/admin/deck-mapping/start', {
@@ -1372,6 +1379,7 @@ function useAdminUpdate() {
         if (dailyUpdateState.running) return;
         const botCount = dailyUpdateBotCount.value;
         if (botCount < 1) { alert('機器人數量最少為 1'); return; }
+        if (!confirm(`確定要執行每日更新？\n這會啟動 ${botCount} 個機器人爬取並更新牌組資料，屬於長時間、耗資源的工作，確定要繼續嗎？`)) return;
         try {
             const res = await fetch('/api/admin/deck-update/daily', {
                 method: 'POST',
@@ -1461,6 +1469,7 @@ function useAdminUpdate() {
         if (fullUpdateState.running) return;
         const botCount = fullUpdateBotCount.value;
         if (botCount < 1) { alert('機器人數量最少為 1'); return; }
+        if (!confirm(`確定要執行完整更新？\n這會啟動 ${botCount} 個機器人完整重新爬取所有牌組，非常耗時且消耗資源，確定要繼續嗎？`)) return;
         try {
             const res = await fetch('/api/admin/deck-update/full', {
                 method: 'POST',
@@ -1519,6 +1528,7 @@ function useAdminUpdate() {
         if (limitlessRegionGlobal.value) regions.push('global');
         if (limitlessRegionJp.value) regions.push('jp');
         if (regions.length === 0) return alert('Select at least one Limitless region');
+        if (!confirm(`確定要啟動 Limitless 更新？\n這會長時間爬取 ${regions.join(', ')} 的賽事與牌組資料，非常耗時且消耗資源，確定要繼續嗎？`)) return;
         try {
             const body = {
                 include_bling: limitlessIncludeBling.value,
@@ -1744,6 +1754,7 @@ function useAdminUpdate() {
         loadAdminUsers,
         filterAdminUsers,
         toggleUserRole,
+        toggleAiAccess,
         verifyUser,
         deleteUser,
 

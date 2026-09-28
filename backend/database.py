@@ -81,6 +81,82 @@ def ensure_expansion_table(table):
     finally:
         conn.close()
 
+
+def _ensure_schema_integrity(cursor):
+    """冪等修復生產庫嘅 schema 漂移（每次啟動都可安全重跑）：
+    1. jp_cards.set_total 欄位（crawler 一直寫入，但舊 schema 從未建立）
+    2. deck_cards.deck_id 外鍵必須係 ON DELETE CASCADE
+    3. deck_search_index 必須有 (deck_id, card_name) 唯一索引，令 ON CONFLICT DO NOTHING 生效
+
+    每個步驟用 SAVEPOINT 隔離，任何一步失敗只回滾該步，唔會拖凷 init_db 嘅外層交易。
+    """
+    def _run(sql):
+        try:
+            cursor.execute("SAVEPOINT _ensure_schema")
+        except Exception:
+            return
+        try:
+            cursor.execute(sql)
+            cursor.execute("RELEASE SAVEPOINT _ensure_schema")
+        except Exception:
+            try:
+                cursor.execute("ROLLBACK TO SAVEPOINT _ensure_schema")
+                cursor.execute("RELEASE SAVEPOINT _ensure_schema")
+            except Exception:
+                pass
+
+    # 1) jp_cards.set_total（卡牌總張數字串，如 "081"）
+    _run("ALTER TABLE jp_cards ADD COLUMN IF NOT EXISTS set_total VARCHAR")
+
+    # 2) deck_cards.deck_id -> imported_decks(id) ON DELETE CASCADE
+    _run("""
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+            IF to_regclass('public.deck_cards') IS NULL
+               OR to_regclass('public.imported_decks') IS NULL THEN
+                RETURN;
+            END IF;
+            FOR r IN
+                SELECT c.conname
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+                WHERE t.relname = 'deck_cards'
+                  AND c.contype = 'f'
+                  AND a.attname = 'deck_id'
+                  AND c.confdeltype <> 'c'
+            LOOP
+                EXECUTE format('ALTER TABLE deck_cards DROP CONSTRAINT %I', r.conname);
+            END LOOP;
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+                WHERE t.relname = 'deck_cards'
+                  AND c.contype = 'f'
+                  AND a.attname = 'deck_id'
+                  AND c.confdeltype = 'c'
+            ) THEN
+                ALTER TABLE deck_cards
+                    ADD CONSTRAINT deck_cards_deck_id_fkey
+                    FOREIGN KEY (deck_id) REFERENCES imported_decks(id) ON DELETE CASCADE NOT VALID;
+            END IF;
+        END $$;
+    """)
+
+    # 3) deck_search_index 去重 + 唯一索引
+    _run("""
+        DELETE FROM deck_search_index a
+        USING deck_search_index b
+        WHERE a.deck_id = b.deck_id
+          AND a.card_name = b.card_name
+          AND a.ctid < b.ctid
+    """)
+    _run("CREATE UNIQUE INDEX IF NOT EXISTS uq_deck_search_index_deck_card ON deck_search_index (deck_id, card_name)")
+
+
 # ==========================================
 # 卡牌查詢
 # ==========================================
@@ -619,6 +695,12 @@ def init_db():
         cursor.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'official'")
         cursor.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS replaced_by VARCHAR")
         cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cards_set_code ON cards(set_code)
+        """)
+        cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_cards_set_code_number ON cards(set_code, set_number)
         """)
 
@@ -712,6 +794,7 @@ def init_db():
             evolves_from VARCHAR,
             set_code VARCHAR,
             set_number VARCHAR,
+            set_total VARCHAR,
             set_name VARCHAR,
             regulation_flags VARCHAR,
             regulation_mark VARCHAR DEFAULT '',
@@ -779,7 +862,7 @@ def init_db():
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS deck_cards (
             id SERIAL PRIMARY KEY,
-            deck_id INTEGER REFERENCES imported_decks(id),
+            deck_id INTEGER REFERENCES imported_decks(id) ON DELETE CASCADE,
             local_card_id VARCHAR,
             quantity INTEGER
         )
@@ -842,7 +925,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS deck_search_index (
             deck_id INTEGER REFERENCES imported_decks(id) ON DELETE CASCADE,
             card_name TEXT NOT NULL,
-            count INTEGER DEFAULT 1
+            count INTEGER DEFAULT 1,
+            CONSTRAINT uq_deck_search_index_deck_card UNIQUE (deck_id, card_name)
         )
         """)
         cursor.execute("""
@@ -994,6 +1078,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_card_locale_bindings_status
         ON card_locale_bindings(status)
         """)
+
+        _ensure_schema_integrity(cursor)
 
         conn.commit()
         print("Database initialized successfully.")
