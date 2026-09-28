@@ -1080,14 +1080,15 @@ def search_cards():
     cursor = conn.cursor()
 
     # 基礎 SQL。預設搜尋只回列表需要欄位，詳情由 batch/detail API 補取。
-    # 排除進化鏈佔位假卡（card_id 以 'placeholder::' 開頭），避免污染搜尋結果
+    # 排除進化鏈佔位假卡（card_id 以 'placeholder::' 開頭），避免污染搜尋結果。
+    # 注意：SQL 以參數化執行，字面 % 必須寫成 %% 否則 psycopg2 會拋 IndexError。
     if full_payload:
-        sql = "SELECT * FROM cards WHERE COALESCE(source, 'official') <> 'replaced' AND card_id NOT LIKE 'placeholder::%'"
+        sql = "SELECT * FROM cards WHERE COALESCE(source, 'official') <> 'replaced' AND card_id NOT LIKE 'placeholder::%%'"
     else:
         sql = (
             "SELECT card_id, image_file, card_type, name, sub_type, hp, element_type, "
             "rarity, japanese_name, set_code, set_number, set_name, regulation_mark "
-            "FROM cards WHERE COALESCE(source, 'official') <> 'replaced' AND card_id NOT LIKE 'placeholder::%'"
+            "FROM cards WHERE COALESCE(source, 'official') <> 'replaced' AND card_id NOT LIKE 'placeholder::%%'"
         )
     params = []
 
