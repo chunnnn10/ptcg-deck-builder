@@ -1080,13 +1080,14 @@ def search_cards():
     cursor = conn.cursor()
 
     # 基礎 SQL。預設搜尋只回列表需要欄位，詳情由 batch/detail API 補取。
+    # 排除進化鏈佔位假卡（card_id 以 'placeholder::' 開頭），避免污染搜尋結果
     if full_payload:
-        sql = "SELECT * FROM cards WHERE COALESCE(source, 'official') <> 'replaced'"
+        sql = "SELECT * FROM cards WHERE COALESCE(source, 'official') <> 'replaced' AND card_id NOT LIKE 'placeholder::%'"
     else:
         sql = (
             "SELECT card_id, image_file, card_type, name, sub_type, hp, element_type, "
             "rarity, japanese_name, set_code, set_number, set_name, regulation_mark "
-            "FROM cards WHERE COALESCE(source, 'official') <> 'replaced'"
+            "FROM cards WHERE COALESCE(source, 'official') <> 'replaced' AND card_id NOT LIKE 'placeholder::%'"
         )
     params = []
 
@@ -2002,12 +2003,22 @@ def get_expansions():
         cursor = conn.cursor()
 
         # 確保 expansion_sets 表存在
+        _exp_sql = (
+            "SELECT set_code, set_name, series, sort_order, last_updated "
+            "FROM expansion_sets "
+            "ORDER BY COALESCE(sort_order, 999999) ASC, last_updated DESC"
+        )
         try:
-            cursor.execute("SELECT set_code, set_name, series, last_updated FROM expansion_sets ORDER BY last_updated DESC")
+            cursor.execute(_exp_sql)
             rows = cursor.fetchall()
-        except psycopg2.OperationalError:
+        except Exception:
+            conn.rollback()
             crawler.ensure_schema_updates()
-            rows = []
+            try:
+                cursor.execute(_exp_sql)
+                rows = cursor.fetchall()
+            except Exception:
+                rows = []
 
         need_sync = False
         if not rows:
@@ -2036,9 +2047,13 @@ def get_expansions():
             print("擴充包列表過期或為空，正在同步官網...")
             try:
                 crawler.fetch_expansion_meta()
-                cursor.execute("SELECT set_code, set_name, series, last_updated FROM expansion_sets ORDER BY last_updated DESC")
+                cursor.execute(_exp_sql)
                 rows = cursor.fetchall()
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 print(f"sync_expansion_meta 失敗（沿用舊資料）: {e}")
 
         # 取最新同步時間（最新一筆 last_updated）

@@ -81,19 +81,30 @@ def ensure_schema_updates():
     if not conn: return
     cursor = conn.cursor()
     
-    # 1. 建立擴充包列表 Table (含 series 欄位)
+    # 1. 建立擴充包列表 Table (含 series / sort_order 欄位)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS expansion_sets (
         set_code TEXT PRIMARY KEY,
         set_name TEXT,
         series TEXT DEFAULT '',
+        sort_order INTEGER DEFAULT 999999,
         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-    # 補齊舊表的 series 欄位
+    # 補齊舊表的 series / sort_order 欄位
+    # 注意：必須立刻 commit，否則之後 new_columns 迴圈的 rollback 會連這裡一齊回滾，
+    # 導致 sort_order 明明 ALTER 過但實際上冇建立。
     try:
-        cursor.execute("ALTER TABLE expansion_sets ADD COLUMN series TEXT DEFAULT ''")
-    except:
+        cursor.execute("ALTER TABLE expansion_sets ADD COLUMN IF NOT EXISTS series TEXT DEFAULT ''")
+    except Exception:
+        conn.rollback()
+    try:
+        cursor.execute("ALTER TABLE expansion_sets ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 999999")
+    except Exception:
+        conn.rollback()
+    try:
+        conn.commit()
+    except Exception:
         pass
 
     # 2. 檢查 cards 表的新欄位
@@ -198,6 +209,8 @@ def _parse_expansion_modal(soup):
     if not modal:
         return expansions
 
+    seen_codes = set()
+    ordinal = 0  # 官網列表出現次序（越細越新），用作穩定排序
     current_series = ''
     for row in modal.select('.conditionRow'):
         # 系列標籤
@@ -217,8 +230,19 @@ def _parse_expansion_modal(soup):
             if inp and label:
                 code = inp.get('value', '').strip()
                 name = label.get_text(strip=True)
-                if code and name:
-                    expansions.append({'code': code, 'name': name, 'series': current_series})
+                if not code or not name:
+                    continue
+                # 官網同一代碼可能重複出現（例如 SP5 出現 3 次），只保留第一次
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                expansions.append({
+                    'code': code,
+                    'name': name,
+                    'series': current_series,
+                    'sort_order': ordinal,
+                })
+                ordinal += 1
 
     return expansions
 
@@ -291,20 +315,31 @@ def fetch_expansion_meta():
     cursor = conn.cursor()
     expansion_map = {}
     count = 0
-    for exp in expansion_list:
+    for idx, exp in enumerate(expansion_list):
         code = exp['code']
         name = exp['name']
         series = exp.get('series', '')
+        # sort_order：官網列表出現次序（0 = 最新），無提供時退回列舉次序
+        sort_order = exp.get('sort_order', idx)
         expansion_map[code] = {'name': name, 'series': series}
         try:
+            # 只在資料真正有變時才刷新 last_updated，避免每次同步把所有舊系列
+            # 一律標成「剛剛更新」，令 last_updated 失去「新系列」排序意義。
             cursor.execute(
-                """INSERT INTO expansion_sets (set_code, set_name, series)
-                   VALUES (%s, %s, %s)
+                """INSERT INTO expansion_sets (set_code, set_name, series, sort_order, last_updated)
+                   VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
                    ON CONFLICT ON CONSTRAINT expansion_sets_pkey DO UPDATE
                    SET set_name = EXCLUDED.set_name,
                        series = EXCLUDED.series,
-                       last_updated = CURRENT_TIMESTAMP""",
-                (code, name, series)
+                       sort_order = EXCLUDED.sort_order,
+                       last_updated = CASE
+                           WHEN expansion_sets.set_name IS DISTINCT FROM EXCLUDED.set_name
+                             OR expansion_sets.series IS DISTINCT FROM EXCLUDED.series
+                             OR expansion_sets.sort_order IS DISTINCT FROM EXCLUDED.sort_order
+                           THEN CURRENT_TIMESTAMP
+                           ELSE expansion_sets.last_updated
+                       END""",
+                (code, name, series, sort_order)
             )
             count += 1
         except Exception as e:
@@ -673,6 +708,83 @@ def parse_detail_page(card_id):
         return None
 
 
+# 標準賽制字母快取（來源：regulation_settings 表）
+_STANDARD_MARKS_CACHE = None
+
+
+def _standard_marks():
+    global _STANDARD_MARKS_CACHE
+    if _STANDARD_MARKS_CACHE is not None:
+        return _STANDARD_MARKS_CACHE
+    marks = set()
+    conn = database.get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT mark FROM regulation_settings WHERE is_standard = TRUE")
+            marks = {str(r['mark']).strip().upper() for r in cur.fetchall() if r.get('mark')}
+        except Exception:
+            marks = set()
+        finally:
+            conn.close()
+    if not marks:
+        marks = {'F', 'G', 'H', 'I', 'J'}
+    _STANDARD_MARKS_CACHE = marks
+    return marks
+
+
+def _regulation_flag_for_mark(cursor, mark):
+    """依卡牌自己的賽季字母決定 regulation_flags，而非爬取目標賽制。"""
+    mark = (mark or '').strip().upper()
+    if not mark:
+        return ''
+    return 'Standard' if mark in _standard_marks() else 'Expanded'
+
+
+def cleanup_placeholder_cards():
+    """刪除會與官方數字卡重複的進化鏈假卡（card_id 非純數字）。
+
+    返回刪除行數。這些假卡係級聯寫入產生，冇 HP / 圖 / set_number，會污染搜尋同統計。
+    """
+    conn = database.get_db_connection()
+    if not conn:
+        return 0
+    try:
+        cursor = conn.cursor()
+        # 只刪兩種已知假卡：新舊級聯寫入產生嘅
+        #   placeholder::<set>::<name> 同 <set_code>_<name>
+        # 用 set_code 前綴比對，避免誤刪 tcgdex(jp<id>) 等其他來源卡。
+        cursor.execute(
+            """
+            DELETE FROM cards p
+            WHERE (
+                    p.card_id LIKE 'placeholder::%'
+                 OR p.card_id LIKE p.set_code || '\\_%' ESCAPE '\\'
+            )
+              AND EXISTS (
+                  SELECT 1 FROM cards real
+                  WHERE real.card_id ~ '^[0-9]+$'
+                    AND real.set_code = p.set_code
+                    AND real.name = p.name
+              )
+            """
+        )
+        deleted = cursor.rowcount or 0
+        conn.commit()
+        if deleted:
+            log_update(f"清理重複進化假卡 {deleted} 張")
+        return deleted
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_update(f"清理進化假卡失敗: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
 def save_card_with_context(data, context):
     """使用 PostgreSQL UPSERT (ON CONFLICT) 寫入卡片"""
     source_url = data['image_url_source']
@@ -704,15 +816,10 @@ def save_card_with_context(data, context):
         jp_name = existing_row['japanese_name'] if existing_row else None
         jp_id = existing_row['jp_id'] if existing_row else None
 
-        reg_flag = 'Standard' if context.get('regulation') == 1 else 'Expanded'
-        if context.get('regulation') == 2:
-            reg_flag = 'Expanded'
-
-        reg_flag = 'Standard' if context.get('regulation') == 1 else 'Expanded'
-        if context.get('regulation') == 2:
-            reg_flag = 'Expanded'
-        # 賽季字母與描述
-        regulation_mark = data.get('regulation_mark', '')
+        # 賽制標記必須依「卡牌自己的賽季字母」判定，唔可以跟爬取目標賽制，
+        # 否則同一次 reg=[1,2] 掃描會將所有卡一律標成 Standard。
+        regulation_mark = (data.get('regulation_mark') or '').strip().upper()
+        reg_flag = _regulation_flag_for_mark(cursor, regulation_mark)
         description = data.get('description', '')
 
         cursor.execute("""
@@ -779,27 +886,12 @@ def save_card_with_context(data, context):
         except Exception as exc:
             print(f">>> [Crawler] provisional replace skipped: {exc}", flush=True)
 
-        # 級聯寫入進化鏈上的中間卡片
-        for parent in data.get('evolution_parents', []):
-            if parent.get('name') and parent.get('evolves_from'):
-                try:
-                    cursor.execute("""
-                        INSERT INTO cards (card_id, name, evolves_from, set_code, set_name, card_type)
-                        VALUES (%s, %s, %s, %s, %s, 'Pokémon')
-                        ON CONFLICT (card_id) DO UPDATE SET
-                            evolves_from = EXCLUDED.evolves_from,
-                            set_code = EXCLUDED.set_code,
-                            set_name = EXCLUDED.set_name
-                    """, (
-                        f"{context.get('set_code', '')}_{parent['name']}",
-                        parent['name'],
-                        parent['evolves_from'],
-                        context.get('set_code', ''),
-                        context.get('set_name', '')
-                    ))
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
+        # 唔再級聯寫入進化鏈佔位卡。
+        # 原本做法會為每個進化前寶可夢寫一張 card_id 非純數字嘅假卡，
+        # 喺多 worker 併發下仲會因「存在檢查」競態而穩定產生幽靈卡，
+        # 污染搜尋、系列統計同 AI 對應。真實卡本身已有 evolves_from 文字欄位，
+        # 前端進化鏈顯示靠佢就夠，毋須假卡。
+        pass
     except Exception as e:
         conn.rollback()
         log_update(f"DB寫入失敗 {data['name']}: {e}")
@@ -952,10 +1044,27 @@ def _extract_list_ids(list_url):
 
 
 def collect_official_ids(base_list_url, expansion_code, regulations):
-    """只掃官方列表頁，收集 card_id，唔打詳情。"""
+    """只掃官方列表頁，收集 card_id，唔打詳情。
+
+    防重複掃描：當已指定 expansion_code 時，官方列表本身已鎖定單一擴充包，
+    regulation 篩選對同一系列幾乎無差別，逐個 regulation 掃會令請求量翻倍。
+    故此在指定 expansion_code 時只掃一次；只在冇 expansion_code（自定義/no filter）
+    時才逐個 regulation 掃。
+    """
     found = []
     seen = set()
-    for reg in regulations or [None]:
+
+    if expansion_code:
+        regs = [None]
+    else:
+        # 去除重複且保留次序
+        deduped = []
+        for r in (regulations or [None]):
+            if r not in deduped:
+                deduped.append(r)
+        regs = deduped or [None]
+
+    for reg in regs:
         first_url = construct_filtered_url(base_list_url, 1, expansion_code, reg)
         pages = _detect_total_pages(first_url)
         for page in range(1, pages + 1):
@@ -1176,6 +1285,12 @@ def run_update_process(target_expansion_codes=None, target_regulations=None,
             jp_queue.join()
     else:
         log_update("已略過日文補完。")
+
+    # 清走舊有嘅進化鏈假卡（card_id 非純數字嘅級聯殘留）
+    try:
+        cleanup_placeholder_cards()
+    except Exception as e:
+        log_update(f"清理假卡時出錯（非致命）: {e}")
 
     with update_lock:
         UPDATE_STATE['running'] = False

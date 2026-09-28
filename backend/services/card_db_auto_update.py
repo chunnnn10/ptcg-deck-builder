@@ -67,13 +67,16 @@ def detect_new_tw_expansion_codes(max_new: int) -> list[str]:
         return []
     try:
         cursor = conn.cursor()
+        # 用官方列表出現次序 (sort_order 越細 = 越新) 排序，唔好靠 last_updated；
+        # 舊做法因為每次同步都把所有系列標成同一時間，新系列根本排唔到最前。
         cursor.execute(
             """
             SELECT s.set_code
             FROM expansion_sets s
-            LEFT JOIN cards c ON c.set_code = s.set_code
-            WHERE c.card_id IS NULL
-            ORDER BY s.last_updated DESC
+            WHERE NOT EXISTS (
+                SELECT 1 FROM cards c WHERE c.set_code = s.set_code
+            )
+            ORDER BY COALESCE(s.sort_order, 999999) ASC, s.set_code ASC
             LIMIT %s
             """,
             (int(max_new),),

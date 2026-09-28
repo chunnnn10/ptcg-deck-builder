@@ -835,21 +835,39 @@ def _persist_jp_expansion_sets(expansions: list[dict]) -> int:
     written = 0
     try:
         cursor = conn.cursor()
-        for exp in expansions:
+        # 補齊 sort_order 欄位（舊庫可能未有）
+        try:
+            cursor.execute("ALTER TABLE jp_expansion_sets ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 999999")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        for idx, exp in enumerate(expansions):
             code = (exp.get('code') or '').strip()
             name = (exp.get('name') or '').strip()
             series = (exp.get('series') or '').strip()
+            sort_order = exp.get('sort_order', idx)
             if not code:
                 continue
             try:
+                # 只在資料真正有變時刷新 last_updated，避免全部 JP 系列被標成同一時間。
                 cursor.execute(
-                    """INSERT INTO jp_expansion_sets (set_code, set_name, series)
-                       VALUES (%s, %s, %s)
+                    """INSERT INTO jp_expansion_sets (set_code, set_name, series, sort_order, last_updated)
+                       VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
                        ON CONFLICT (set_code) DO UPDATE
                        SET set_name = EXCLUDED.set_name,
                            series = EXCLUDED.series,
-                           last_updated = CURRENT_TIMESTAMP""",
-                    (code, name, series),
+                           sort_order = EXCLUDED.sort_order,
+                           last_updated = CASE
+                               WHEN jp_expansion_sets.set_name IS DISTINCT FROM EXCLUDED.set_name
+                                 OR jp_expansion_sets.series IS DISTINCT FROM EXCLUDED.series
+                                 OR jp_expansion_sets.sort_order IS DISTINCT FROM EXCLUDED.sort_order
+                               THEN CURRENT_TIMESTAMP
+                               ELSE jp_expansion_sets.last_updated
+                           END""",
+                    (code, name, series, sort_order),
                 )
                 written += 1
             except Exception as e:
@@ -881,13 +899,16 @@ def detect_new_jp_expansion_codes(max_new: int = 3) -> list[str]:
         return []
     try:
         cursor = conn.cursor()
+        # 用官方列表出現次序 (sort_order 越細 = 越新) 排序；舊做法靠 last_updated，
+        # 但每次同步都會被批量標成同一時間，令偵測結果變成隨機舊系列。
         cursor.execute(
             """
             SELECT s.set_code
             FROM jp_expansion_sets s
-            LEFT JOIN jp_cards c ON c.set_code = s.set_code
-            WHERE c.card_id IS NULL
-            ORDER BY s.last_updated DESC
+            WHERE NOT EXISTS (
+                SELECT 1 FROM jp_cards c WHERE c.set_code = s.set_code
+            )
+            ORDER BY COALESCE(s.sort_order, 999999) ASC, s.set_code ASC
             LIMIT %s
             """,
             (int(max_new),),
