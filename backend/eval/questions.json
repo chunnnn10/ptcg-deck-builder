@@ -83,6 +83,11 @@
       "id": "q16-unanswerable",
       "category": "unanswerable",
       "question": "下年世界賽冠軍會係邊個？"
+    },
+    {
+      "id": "q09-pokemon-deck-filter",
+      "category": "card-search-effect",
+      "question": "有哪些寶可夢在HIJ標可以濾牌用途？"
     }
   ]
 }

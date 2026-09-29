@@ -346,9 +346,59 @@ def _json_loads(value: Any, default: Any = None) -> Any:
 # Row-aware compaction limits. Chosen so a compacted trace stays well under
 # the model context while keeping the fields the model actually cites.
 _COMPACT_MAX_ROWS = 40
-_COMPACT_MAX_FIELDS = 24
+_COMPACT_MAX_FIELDS = 40
 _COMPACT_FIELD_CHARS = 600
 _COMPACT_DEPTH = 4
+
+# Whitelist of model-useful card fields. Everything else a raw card row carries
+# (image_file, image_url, predicates, logic_extractor_version, id, language,
+# logic_source_card_id, ...) is noise that used to eat the whole budget.
+_SLIM_CARD_FIELDS: tuple[str, ...] = (
+    "card_id",
+    "name",
+    "card_type",
+    "sub_type",
+    "hp",
+    "element_type",
+    "weakness_type",
+    "weakness_value",
+    "resistance_type",
+    "resistance_value",
+    "retreat_cost",
+    "rarity",
+    "set_code",
+    "set_number",
+    "set_name",
+    "regulation_mark",
+    "evolution_stage",
+    "evolves_from",
+    "description",
+    "japanese_name",
+)
+
+# Small annotations some card-shaped results add on top of the plain card row
+# (role search, decklist rows). Kept only when actually present, so a plain
+# card payload stays identical to the whitelist above.
+_SLIM_CARD_ANNOTATIONS: tuple[str, ...] = (
+    "role",
+    "params",
+    "confidence",
+    "evidence_span",
+    "semantic_score",
+    "count",
+    "section",
+)
+
+# Keys searched (in order) for the record list inside a dict tool result.
+_RECORD_LIST_KEYS: tuple[str, ...] = (
+    "cards",
+    "results",
+    "items",
+    "sample_decks",
+    "meta_references",
+    "decklists",
+    "search_results",
+)
 
 
 def _compact_scalar(value: Any) -> Any:
@@ -359,57 +409,212 @@ def _compact_scalar(value: Any) -> Any:
     return None
 
 
+def _looks_like_card(value: Any) -> bool:
+    """True when a dict carries the identifying keys of a card record.
+
+    Diagnostic objects (``_degraded_note``) and meta/role annotations do not,
+    so they fall through to the generic compactor untouched.
+    """
+    return isinstance(value, dict) and bool(value.get("card_id")) and bool(value.get("name"))
+
+
+def _slim_cost(cost: Any) -> str:
+    """Render an energy cost such as ['雷', '雷', '無色'] as '雷雷無色'."""
+    if isinstance(cost, list):
+        return "".join(str(item).strip() for item in cost if str(item).strip())
+    if isinstance(cost, str):
+        return cost if len(cost) <= 40 else cost[:40]
+    return ""
+
+
+def _slim_skill(skill: Any) -> dict[str, Any]:
+    if not isinstance(skill, dict):
+        text = str(skill or "")
+        return {"effect": _compact_scalar(text)} if text else {}
+    item: dict[str, Any] = {}
+    for key in ("name", "type", "damage"):
+        value = skill.get(key)
+        if value is None or value == "":
+            continue
+        item[key] = _compact_scalar(value) if isinstance(value, str) else value
+    cost = _slim_cost(skill.get("cost"))
+    if cost:
+        item["cost"] = cost
+    effect = skill.get("effect")
+    if effect is not None and effect != "":
+        item["effect"] = _compact_scalar(effect)
+    return item
+
+
+def _slim_card(card: dict[str, Any], depth: int = 0) -> dict[str, Any]:
+    """Project a card-like dict to the model-useful whitelist only.
+
+    Drops the ~25 mostly-irrelevant columns a raw card row carries, keeps the
+    fields a model actually cites, and never injects a per-card truncation
+    marker. Absent, null or empty keys are omitted.
+    """
+    slim: dict[str, Any] = {}
+    for key in _SLIM_CARD_FIELDS:
+        value = card.get(key)
+        if value is None or value == "":
+            continue
+        slim[key] = _compact_scalar(value) if isinstance(value, str) else value
+    for key in _SLIM_CARD_ANNOTATIONS:
+        if key not in card:
+            continue
+        value = card.get(key)
+        if value is None or value in ("", [], {}):
+            continue
+        if isinstance(value, (list, dict)):
+            slim[key] = _compact_value(value, depth + 1)
+        else:
+            slim[key] = _compact_scalar(value)
+    skills = card.get("skills")
+    if isinstance(skills, list):
+        slim["skills"] = [_slim_skill(skill) for skill in skills[:8]]
+    return slim
+
+
+def _row_note(shown: int, total: int) -> dict[str, Any]:
+    return {"note": f"只顯示前 {shown} 筆，共 {total} 筆"}
+
+
 def _compact_value(value: Any, depth: int = 0) -> Any:
     """Recursively shrink one value without ever producing invalid JSON.
 
-    Lists are capped by row count, dicts by field count, strings by length, and
-    the structure keeps its shape with a ``_truncated`` marker so the model can
-    see that something was elided instead of receiving broken JSON.
+    Card records are projected through ``_slim_card`` first, so they stay whole
+    and readable. When rows are dropped the elision is reported with one
+    trailing ``{"note": ...}`` object instead of a per-record ``_truncated``
+    flag that makes a model believe the data is broken.
     """
     if isinstance(value, str):
         return _compact_scalar(value)
     if isinstance(value, (int, float, bool)) or value is None:
         return value
-    if depth >= _COMPACT_DEPTH:
-        if isinstance(value, (list, dict)):
-            return {"_truncated": True, "reason": "depth", "type": type(value).__name__}
-        return _compact_scalar(value)
-    if isinstance(value, list):
-        rows = [_compact_value(item, depth + 1) for item in value[:_COMPACT_MAX_ROWS]]
-        if len(value) > _COMPACT_MAX_ROWS:
-            rows.append({"_truncated": True, "reason": "rows", "omitted": len(value) - _COMPACT_MAX_ROWS})
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        if not items:
+            return []
+        card_votes = sum(1 for item in items if _looks_like_card(item))
+        if card_votes * 2 >= len(items):
+            kept = [
+                _slim_card(item, depth + 1) if _looks_like_card(item) else _compact_value(item, depth + 1)
+                for item in items[:_COMPACT_MAX_ROWS]
+            ]
+            if len(items) > _COMPACT_MAX_ROWS:
+                kept.append(_row_note(_COMPACT_MAX_ROWS, len(items)))
+            return kept
+        if depth >= _COMPACT_DEPTH:
+            return _row_note(0, len(items))
+        rows = [_compact_value(item, depth + 1) for item in items[:_COMPACT_MAX_ROWS]]
+        if len(items) > _COMPACT_MAX_ROWS:
+            rows.append(_row_note(_COMPACT_MAX_ROWS, len(items)))
         return rows
     if isinstance(value, dict):
+        if _looks_like_card(value):
+            return _slim_card(value, depth + 1)
         compact: dict[str, Any] = {}
         for index, (key, item) in enumerate(value.items()):
             if index >= _COMPACT_MAX_FIELDS:
-                compact["_truncated"] = True
-                compact["omitted_fields"] = len(value) - _COMPACT_MAX_FIELDS
+                compact["note"] = f"另有 {len(value) - _COMPACT_MAX_FIELDS} 個欄位已省略"
                 break
             compact[str(key)] = _compact_value(item, depth + 1)
         return compact
     return _compact_scalar(value)
 
 
-def _compact_tool_result(value: Any, max_chars: int = 14000) -> str:
-    """JSON-serialise a tool result with row/field-aware shrinking.
+def _record_list_key(value: dict[str, Any]) -> str | None:
+    """Find the record list to trim inside a dict payload (known keys first)."""
+    for key in _RECORD_LIST_KEYS:
+        items = value.get(key)
+        if isinstance(items, list) and items:
+            return key
+    best_key: str | None = None
+    best_len = 1
+    for key, items in value.items():
+        if isinstance(items, list) and len(items) > best_len:
+            best_key, best_len = key, len(items)
+    return best_key
 
-    Replaces the old raw ``text[:max_chars]`` cut, which could split a JSON
-    string mid-object and hand the model corrupt payloads.
+
+def _row_total(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    key = _record_list_key(value) if isinstance(value, dict) else None
+    return len(value[key]) if key else 0
+
+
+def _with_row_limit(value: Any, count: int) -> Any:
+    """Copy of ``value`` holding only the first ``count`` records."""
+    if isinstance(value, list):
+        return value[:count]
+    key = _record_list_key(value) if isinstance(value, dict) else None
+    if not key:
+        return value
+    clone = dict(value)
+    clone[key] = value[key][:count]
+    return clone
+
+
+def _render_payload(value: Any, shown: int, total: int) -> str:
+    """Compact ``value`` down to ``shown`` records, adding one readable note.
+
+    ``shown`` never exceeds ``_COMPACT_MAX_ROWS``, so the compactor itself does
+    not add a second, conflicting note.
+    """
+    payload = _compact_value(_with_row_limit(value, shown))
+    if shown < total:
+        if isinstance(payload, list):
+            payload = payload + [_row_note(shown, total)]
+        elif isinstance(payload, dict):
+            payload = {**payload, "note": f"只顯示前 {shown} 筆，共 {total} 筆"}
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _budget_envelope(text: str, max_chars: int) -> str:
+    """Final fallback: a valid JSON note plus a bounded, clearly-labelled preview."""
+    note = "內容過大，只保留部分資料"
+    room = max(0, max_chars - 200)
+    while room > 0:
+        candidate = json.dumps({"note": note, "preview": text[:room]}, ensure_ascii=False)
+        if len(candidate) <= max_chars:
+            return candidate
+        room -= max(1, len(candidate) - max_chars)
+    return json.dumps({"note": note}, ensure_ascii=False)
+
+
+def _compact_tool_result(value: Any, max_chars: int = 14000) -> str:
+    """JSON-serialise a tool result with card-aware, always-valid shrinking.
+
+    Cards are projected to a model-useful whitelist instead of being marked
+    ``_truncated``, and anything dropped is reported with a single readable
+    ``note`` so the model can still use every record it receives.
     """
     try:
         text = json.dumps(_compact_value(value), ensure_ascii=False, default=str)
     except Exception:
-        text = json.dumps({"error": "unserialisable tool result", "repr": str(value)[:500]}, ensure_ascii=False)
-    if len(text) > max_chars:
-        # Last resort: shrink rows further, then fall back to a valid JSON envelope.
-        rows = value if isinstance(value, list) else (value.get("cards") if isinstance(value, dict) else None)
-        if isinstance(rows, list) and rows:
-            reduced = [_compact_value(item, 2) for item in rows[:10]]
-            text = json.dumps({"items": reduced, "_truncated": True, "reason": "budget"}, ensure_ascii=False, default=str)
-    if len(text) > max_chars:
-        text = json.dumps({"_truncated": True, "reason": "budget", "preview": text[: max(0, max_chars - 120)]}, ensure_ascii=False)
-    return text
+        return json.dumps({"error": "unserialisable tool result", "repr": str(value)[:500]}, ensure_ascii=False)
+    if len(text) <= max_chars:
+        return text
+
+    total = _row_total(value)
+    if total > 1:
+        # Drop whole trailing records (lowest value first) instead of mangling
+        # one record; binary search so the budget is used as fully as possible.
+        low, high = 1, min(total, _COMPACT_MAX_ROWS)
+        best: str | None = None
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = _render_payload(value, mid, total)
+            if len(candidate) <= max_chars:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best is not None:
+            return best
+
+    return _budget_envelope(text, max_chars)
 
 
 def _context_budget(parts: list[Any], max_chars: int = 24000) -> str:

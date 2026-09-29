@@ -9,9 +9,11 @@ Behaviour:
   process (schema init + inserts) only ever talks to the isolated DB.
 * Refuses to run against ptcg_db.
 * Idempotent: deletes rows whose card_id starts with ``BENCH-`` and re-inserts
-  the same 60 cards (Pokemon / Trainer / Energy) with Chinese names, HP,
-  element, sub_type, evolution_stage, evolves_from, set_code/set_number,
-  regulation_mark and Chinese skills_json.
+  the same 60 base cards (Pokemon / Trainer / Energy) plus ~18 additive H/I/J
+  deck-search Pokemon, with Chinese names, HP, element, sub_type,
+  evolution_stage, evolves_from, set_code/set_number, regulation_mark and
+  Chinese skills_json. The deck-search Pokemon carry 牌庫 search/filter effects
+  so question ``q09-pokemon-deck-filter`` is answerable from the seed.
 """
 
 from __future__ import annotations
@@ -103,6 +105,150 @@ SET_CODES = ["SV8", "SV8a", "SV9", "SV7", "SV6a", "SV5a"]
 REG_MARKS = ["H", "I", "J"]
 # Cards explicitly pushed out of rotation for the benchmark question set.
 OFF_ROTATION = {"老翁龍", "學習裝置"}
+
+# Deck-filtering / deck-search Pokémon (H/I/J regulation marks).
+#
+# The original 60 cards contain no Pokémon whose skills mention 牌庫, so a
+# search for 「牌庫 / 濾牌 / 搜尋牌庫」 found nothing. These realistic H/I/J
+# Pokémon have effects that genuinely mention 牌庫 so keyword / trigram search
+# can return them. They are appended AFTER the original cards, so every
+# existing ``BENCH-`` row keeps its exact card_id and regulation_mark and the
+# seed stays idempotent.
+#
+# (name, element, hp, stage, evolves_from, regulation_mark, set_code,
+#  set_number, japanese_name, skills)
+# skill = {"type": "ability"|"attack", "name": str, "cost": [..],
+#          "damage": str, "effect": str}
+DECK_FILTER_POKEMON = [
+    (
+        "多龍梅西亞", "超", 60, "基礎", None, "I", "SV8a", "087/106", "ドラメシヤ",
+        [
+            {"type": "attack", "name": "呼朋引伴", "cost": ["超"], "damage": "10", "effect": "從牌庫搜尋1張「多龍奇」加入手牌，然後放回牌庫洗牌。"},
+            {"type": "attack", "name": "咬住", "cost": ["無色"], "damage": "10", "effect": ""},
+        ],
+    ),
+    (
+        "多龍奇", "超", 90, "1階進化", "多龍梅西亞", "I", "SV8a", "088/106", "ドロンチ",
+        [
+            {"type": "ability", "name": "偵查", "cost": [], "damage": "", "effect": "查看牌庫上方2張卡，將其中1張加入手牌，其餘放回牌庫。"},
+            {"type": "attack", "name": "龍之波動", "cost": ["超", "無色"], "damage": "70", "effect": ""},
+        ],
+    ),
+    (
+        "多龍巴魯托ex", "超", 320, "2階進化", "多龍奇", "I", "SV8", "130/106", "ドラパルトex",
+        [
+            {"type": "attack", "name": "幻影潛襲", "cost": ["超", "無色"], "damage": "200", "effect": "從牌庫搜尋最多2張「多龍梅西亞」放於備戰區，然後放回牌庫洗牌。"},
+        ],
+    ),
+    (
+        "咕咕", "無色", 70, "基礎", None, "H", "SV7", "080/102", "ホーホー",
+        [
+            {"type": "attack", "name": "啄", "cost": ["無色"], "damage": "10", "effect": ""},
+            {"type": "attack", "name": "夜巡", "cost": ["無色", "無色"], "damage": "20", "effect": "查看牌庫上方3張卡，以任意順序放回牌庫上方。"},
+        ],
+    ),
+    (
+        "貓頭夜鷹", "無色", 110, "1階進化", "咕咕", "H", "SV7", "081/102", "ヨルノズク",
+        [
+            {"type": "ability", "name": "寶石探尋", "cost": [], "damage": "", "effect": "從牌庫搜尋最多2張訓練家卡加入手牌，然後放回牌庫洗牌。"},
+            {"type": "attack", "name": "空氣斬", "cost": ["無色", "無色"], "damage": "70", "effect": ""},
+        ],
+    ),
+    (
+        "拉魯拉絲", "超", 60, "基礎", None, "J", "SV6a", "032/064", "ラルトス",
+        [
+            {"type": "attack", "name": "念力", "cost": ["超"], "damage": "10", "effect": ""},
+            {"type": "attack", "name": "呼喚", "cost": ["無色"], "damage": "", "effect": "從牌庫搜尋1張「奇魯莉安」加入手牌，然後放回牌庫洗牌。"},
+        ],
+    ),
+    (
+        "奇魯莉安", "超", 80, "1階進化", "拉魯拉絲", "J", "SV6a", "033/064", "キルリア",
+        [
+            {"type": "ability", "name": "提煉", "cost": [], "damage": "", "effect": "查看牌庫上方2張卡，將其中1張能量卡加入手牌，其餘放回牌庫。"},
+            {"type": "attack", "name": "魔法射擊", "cost": ["超", "無色"], "damage": "50", "effect": ""},
+        ],
+    ),
+    (
+        "呆呆獸", "水", 70, "基礎", None, "H", "SV5a", "026/066", "ヤドン",
+        [
+            {"type": "attack", "name": "發呆", "cost": ["無色"], "damage": "", "effect": "從牌庫抽出1張卡。"},
+            {"type": "attack", "name": "水槍", "cost": ["水", "無色"], "damage": "20", "effect": ""},
+        ],
+    ),
+    (
+        "呆殼獸", "水", 100, "1階進化", "呆呆獸", "H", "SV5a", "027/066", "ヤドラン",
+        [
+            {"type": "ability", "name": "悠然抽牌", "cost": [], "damage": "", "effect": "從牌庫抽出2張卡。"},
+            {"type": "attack", "name": "熱水", "cost": ["水", "無色"], "damage": "60", "effect": ""},
+        ],
+    ),
+    (
+        "呆呆王", "水", 120, "1階進化", "呆呆獸", "I", "SV9", "045/098", "ヤドキング",
+        [
+            {"type": "attack", "name": "王者的智慧", "cost": ["水", "水", "無色"], "damage": "120", "effect": "從牌庫搜尋1張支援者卡加入手牌，然後放回牌庫洗牌。"},
+        ],
+    ),
+    (
+        "波波", "無色", 60, "基礎", None, "I", "SV9", "079/098", "ポッポ",
+        [
+            {"type": "attack", "name": "風起", "cost": ["無色"], "damage": "", "effect": "從牌庫搜尋1張基本能量卡加入手牌，然後放回牌庫洗牌。"},
+        ],
+    ),
+    (
+        "比比鳥", "無色", 90, "1階進化", "波波", "I", "SV9", "080/098", "ピジョン",
+        [
+            {"type": "attack", "name": "翅膀攻擊", "cost": ["無色", "無色"], "damage": "50", "effect": ""},
+            {"type": "attack", "name": "空中偵察", "cost": ["無色"], "damage": "", "effect": "查看牌庫上方3張卡，將其中1張加入手牌，其餘以任意順序放回牌庫。"},
+        ],
+    ),
+    (
+        "大比鳥", "無色", 130, "2階進化", "比比鳥", "I", "SV8a", "089/106", "ピジョット",
+        [
+            {"type": "ability", "name": "快速搜尋", "cost": [], "damage": "", "effect": "從牌庫搜尋1張卡加入手牌，然後放回牌庫洗牌。"},
+            {"type": "attack", "name": "暴風", "cost": ["無色", "無色", "無色"], "damage": "130", "effect": ""},
+        ],
+    ),
+    (
+        "迷布莉姆", "超", 60, "基礎", None, "J", "SV8", "068/106", "ミブリム",
+        [
+            {"type": "attack", "name": "安撫", "cost": ["超"], "damage": "10", "effect": ""},
+            {"type": "attack", "name": "尋覓", "cost": ["無色"], "damage": "", "effect": "從牌庫搜尋1張「提布莉姆」加入手牌，然後放回牌庫洗牌。"},
+        ],
+    ),
+    (
+        "提布莉姆", "超", 90, "1階進化", "迷布莉姆", "J", "SV8", "069/106", "テブリム",
+        [
+            {"type": "ability", "name": "靜謐篩選", "cost": [], "damage": "", "effect": "查看牌庫上方2張卡，將其中1張加入手牌，其餘放入棄牌區。"},
+            {"type": "attack", "name": "念力", "cost": ["超", "無色"], "damage": "60", "effect": ""},
+        ],
+    ),
+    (
+        "布莉姆溫", "超", 150, "2階進化", "提布莉姆", "J", "SV8", "070/106", "ブリムオン",
+        [
+            {"type": "attack", "name": "魔法閃耀", "cost": ["超", "超", "無色"], "damage": "160", "effect": "從牌庫搜尋最多2張「迷布莉姆」放於備戰區，然後放回牌庫洗牌。"},
+        ],
+    ),
+    (
+        "小貓怪", "雷", 60, "基礎", None, "H", "SV7", "034/102", "コリンク",
+        [
+            {"type": "attack", "name": "充電", "cost": ["雷"], "damage": "", "effect": "從牌庫搜尋1張「基本雷能量」附於這隻寶可夢，然後放回牌庫洗牌。"},
+            {"type": "attack", "name": "咬住", "cost": ["無色", "無色"], "damage": "30", "effect": ""},
+        ],
+    ),
+    (
+        "倫琴貓", "雷", 150, "2階進化", "勒克貓", "H", "SV7", "036/102", "レントラー",
+        [
+            {"type": "ability", "name": "透視", "cost": [], "damage": "", "effect": "查看牌庫上方5張卡，將其中的寶可夢卡加入手牌，其餘放回牌庫。"},
+            {"type": "attack", "name": "放電", "cost": ["雷", "雷", "無色"], "damage": "150", "effect": "這隻寶可夢也受到30點傷害。"},
+        ],
+    ),
+    (
+        "索偵蟲", "草", 60, "基礎", None, "J", "SV6a", "008/064", "サッチムシ",
+        [
+            {"type": "attack", "name": "情報收集", "cost": ["無色"], "damage": "", "effect": "將牌庫上方2張卡放入棄牌區。"},
+        ],
+    ),
+]
 
 
 def _build_rows():
@@ -204,6 +350,47 @@ def _build_rows():
                 "set_name": f"測試擴充包 {SET_CODES[seq % len(SET_CODES)]}",
                 "regulation_mark": REG_MARKS[seq % len(REG_MARKS)],
                 "description": effect,
+            }
+        )
+
+    # Additive deck-search Pokémon, appended last so the original 60 cards keep
+    # their exact card_id / regulation_mark and re-seeding stays idempotent.
+    for (
+        name,
+        element,
+        hp,
+        stage,
+        evolves_from,
+        mark,
+        set_code,
+        set_number,
+        japanese_name,
+        skills,
+    ) in DECK_FILTER_POKEMON:
+        seq += 1
+        rows.append(
+            {
+                "card_id": f"{ID_PREFIX}{set_code}-{set_number.split('/')[0]}",
+                "card_type": "Pokémon",
+                "name": name,
+                "sub_type": stage,
+                "hp": hp,
+                "element_type": element,
+                "weakness_type": "鬥" if element in ("雷", "鋼") else "超",
+                "weakness_value": "×2",
+                "resistance_type": None,
+                "resistance_value": None,
+                "retreat_cost": 1 if stage == "基礎" else 2,
+                "skills_json": skills,
+                "rarity": "RR" if name.endswith("ex") else "C",
+                "japanese_name": japanese_name,
+                "evolution_stage": stage,
+                "evolves_from": evolves_from,
+                "set_code": set_code,
+                "set_number": set_number,
+                "set_name": f"測試擴充包 {set_code}",
+                "regulation_mark": mark,
+                "description": "",
             }
         )
     return rows
