@@ -412,14 +412,62 @@ def _upsert_docs(cursor, docs: list[dict[str, Any]], vectors: list[list[float]],
         )
 
 
+def _filter_changed_docs(cursor, docs: list[dict[str, Any]], model: str) -> tuple[list[dict[str, Any]], int, int]:
+    """Return (changed_docs, unchanged_count, stale_removed).
+
+    Idempotency: a doc whose stored content_hash and model already match is not
+    re-sent to the embedding provider. Rows that share the same
+    (source_type, source_id) but a different primary id (for example archetype
+    ids that embed a content hash) are deleted so a re-run replaces them instead
+    of leaving stale duplicates behind.
+    """
+    changed: list[dict[str, Any]] = []
+    unchanged = 0
+    stale_removed = 0
+    for doc in docs:
+        wanted_hash = content_hash(doc["content"])
+        cursor.execute(
+            "DELETE FROM ai_embeddings WHERE source_type = %s AND source_id = %s AND id <> %s",
+            (doc["source_type"], doc["source_id"], doc["id"]),
+        )
+        stale_removed += max(cursor.rowcount or 0, 0)
+        cursor.execute("SELECT content_hash, model FROM ai_embeddings WHERE id = %s", (doc["id"],))
+        row = cursor.fetchone()
+        if row and row.get("content_hash") == wanted_hash and row.get("model") == model:
+            unchanged += 1
+            continue
+        changed.append(doc)
+    return changed, unchanged, stale_removed
+
+
 def rebuild_embeddings(source_type: str = "all", batch_size: int = 64, max_items: int | None = None) -> dict[str, Any]:
     from .embeddings import get_embedding_config
 
     source_type = source_type if source_type in ("all", "cards", "meta_decks", "meta_archetypes") else "all"
     batch_size = max(1, min(int(batch_size or 64), 128))
     max_items = int(max_items) if max_items else None
-    cfg = get_embedding_config()
-    model = cfg["embedding_model"]
+    try:
+        cfg = get_embedding_config()
+        model = cfg["embedding_model"]
+    except Exception as exc:
+        with _rebuild_lock:
+            _rebuild_state.update({
+                "running": False,
+                "status": "skipped",
+                "message": "Embeddings are not configured",
+                "error": str(exc),
+            })
+        print(f"[indexer] rebuild_embeddings skipped: embeddings_not_configured ({exc})")
+        return {
+            "success": False,
+            "status": "skipped",
+            "reason": "embeddings_not_configured",
+            "processed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "stale_removed": 0,
+            "error": str(exc),
+        }
 
     with _rebuild_lock:
         if _rebuild_state["running"]:
@@ -451,43 +499,75 @@ def rebuild_embeddings(source_type: str = "all", batch_size: int = 64, max_items
         if source_type in ("all", "meta_archetypes"):
             sources.append(("meta_archetypes", lambda offset: _fetch_meta_archetype_docs(cursor, batch_size, offset)))
 
-        processed = failed = 0
+        processed = failed = skipped = stale_removed = 0
+        seen = 0
         for label, fetcher in sources:
             offset = 0
             while True:
-                if max_items and processed >= max_items:
+                if max_items and seen >= max_items:
                     break
                 docs = fetcher(offset)
                 if not docs:
                     break
                 if max_items:
-                    docs = docs[:max_items - processed]
-                _rebuild_state["message"] = f"Embedding {label} offset {offset}"
+                    docs = docs[:max_items - seen]
+                seen += len(docs)
+                _rebuild_state["message"] = f"Indexing {label} offset {offset}"
                 try:
-                    vectors = embed_texts([doc["content"] for doc in docs])
-                    _upsert_docs(cursor, docs, vectors, model)
+                    changed_docs, unchanged, stale = _filter_changed_docs(cursor, docs, model)
+                    stale_removed += stale
+                    skipped += unchanged
+                    if changed_docs:
+                        vectors = embed_texts([doc["content"] for doc in changed_docs])
+                        _upsert_docs(cursor, changed_docs, vectors, model)
+                        processed += len(changed_docs)
                     conn.commit()
-                    processed += len(docs)
                 except Exception as exc:
                     conn.rollback()
                     failed += len(docs)
                     _rebuild_state["error"] = str(exc)
-                _rebuild_state.update({"processed": processed, "failed": failed})
+                _rebuild_state.update({"processed": processed, "failed": failed, "skipped": skipped})
                 offset += batch_size
-                if len(docs) < batch_size or (max_items and processed >= max_items):
+                if len(docs) < batch_size or (max_items and seen >= max_items):
                     break
 
+        if failed:
+            reason = "failed"
+        elif seen == 0:
+            reason = "no_documents"
+        elif processed == 0:
+            reason = "already_up_to_date"
+        elif skipped:
+            reason = "partial"
+        else:
+            reason = "indexed"
+
+        final_status = "finished" if failed == 0 else "finished_with_errors"
+        message = (
+            f"Indexed {processed}, skipped {skipped} unchanged, removed {stale_removed} stale, "
+            f"failed {failed} ({reason})"
+        )
         cursor.execute(
             """
             UPDATE ai_embedding_jobs
             SET status = %s, processed = %s, failed = %s, message = %s, error = %s, finished_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            ("finished" if failed == 0 else "finished_with_errors", processed, failed, "Finished", _rebuild_state.get("error", ""), job_id),
+            (final_status, processed, failed, message[:500], _rebuild_state.get("error", ""), job_id),
         )
         conn.commit()
-        _rebuild_state.update({"running": False, "status": "finished", "message": "Finished", "processed": processed, "failed": failed})
-        return {"success": True, "processed": processed, "failed": failed}
+        _rebuild_state.update({"running": False, "status": final_status, "message": message, "processed": processed, "failed": failed, "skipped": skipped})
+        print(f"[indexer] rebuild_embeddings source={source_type} model={model} -> {message}")
+        return {
+            "success": failed == 0,
+            "status": final_status,
+            "reason": reason,
+            "processed": processed,
+            "failed": failed,
+            "skipped": skipped,
+            "stale_removed": stale_removed,
+            "model": model,
+        }
     except Exception as exc:
         conn.rollback()
         if job_id:
@@ -501,7 +581,17 @@ def rebuild_embeddings(source_type: str = "all", batch_size: int = 64, max_items
             except Exception:
                 conn.rollback()
         _rebuild_state.update({"running": False, "status": "failed", "error": str(exc)})
-        return {"success": False, "error": str(exc), "status": dict(_rebuild_state)}
+        print(f"[indexer] rebuild_embeddings failed: {exc}")
+        return {
+            "success": False,
+            "status": "failed",
+            "reason": "error",
+            "processed": locals().get("processed", 0),
+            "failed": locals().get("failed", 0),
+            "skipped": locals().get("skipped", 0),
+            "stale_removed": locals().get("stale_removed", 0),
+            "error": str(exc),
+        }
     finally:
         conn.close()
 
@@ -513,6 +603,65 @@ def start_rebuild_embeddings(source_type: str = "all", batch_size: int = 64, max
     thread = threading.Thread(target=rebuild_embeddings, args=(source_type, batch_size, max_items), daemon=True)
     thread.start()
     return True, dict(_rebuild_state)
+
+
+def index_health() -> dict[str, Any]:
+    """Report the state of the embeddings index without requiring embeddings to
+    be configured. Never raises."""
+    from .embeddings import get_embedding_config
+
+    by_source_type: dict[str, int] = {}
+    embeddings = 0
+    last_updated: str | None = None
+    db_error = ""
+
+    conn = database.get_db_connection()
+    if conn:
+        try:
+            ensure_ai_schema(conn)
+            cursor = conn.cursor()
+            cursor.execute("SELECT source_type, COUNT(*) AS count FROM ai_embeddings GROUP BY source_type")
+            for row in cursor.fetchall():
+                key = str(row.get("source_type") or "unknown")
+                count = int(row.get("count") or 0)
+                by_source_type[key] = count
+                embeddings += count
+            cursor.execute("SELECT MAX(updated_at) AS last_updated FROM ai_embeddings")
+            row = cursor.fetchone()
+            if row and row.get("last_updated"):
+                value = row.get("last_updated")
+                last_updated = value.isoformat() if hasattr(value, "isoformat") else str(value)
+            conn.commit()
+        except Exception as exc:
+            db_error = str(exc)
+            print(f"[indexer] index_health DB error: {exc}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            conn.close()
+    else:
+        db_error = "database unavailable"
+
+    model = ""
+    configured = False
+    try:
+        cfg = get_embedding_config()
+        model = cfg.get("embedding_model") or ""
+        configured = True
+    except Exception:
+        model = str(getattr(config, "AI_EMBEDDING_MODEL", "") or "")
+        configured = False
+
+    return {
+        "embeddings": embeddings,
+        "by_source_type": by_source_type,
+        "configured": configured,
+        "model": model,
+        "last_updated": last_updated,
+        "error": db_error,
+    }
 
 
 def embedding_status() -> dict[str, Any]:

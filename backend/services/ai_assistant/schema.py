@@ -40,4 +40,39 @@ def ai_schema_sql() -> str:
         started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         finished_at TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS ai_assistant_jobs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        kind TEXT NOT NULL DEFAULT 'chat',
+        status TEXT NOT NULL DEFAULT 'pending',
+        message TEXT DEFAULT '',
+        result JSONB,
+        error TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_assistant_jobs_user ON ai_assistant_jobs(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_assistant_jobs_status ON ai_assistant_jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_ai_assistant_jobs_updated ON ai_assistant_jobs(updated_at);
+
+    CREATE TABLE IF NOT EXISTS ai_assistant_threads (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        title TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_assistant_threads_user ON ai_assistant_threads(user_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS ai_assistant_messages (
+        id BIGSERIAL PRIMARY KEY,
+        thread_id TEXT,
+        role TEXT,
+        content TEXT,
+        tool_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_assistant_messages_thread ON ai_assistant_messages(thread_id, id);
+    CREATE INDEX IF NOT EXISTS idx_ai_assistant_messages_created ON ai_assistant_messages(created_at);
     """
