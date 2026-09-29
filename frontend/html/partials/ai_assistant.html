@@ -186,15 +186,22 @@
             <div class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-indigo-200 inline-block">
                 <span class="ms mr-2 animate-spin" aria-hidden="true">progress_activity</span>[[ aiLoadingMessage || 'Agent is working...' ]]
             </div>
-            <div v-if="aiToolSteps.length" class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400">
+            <div v-if="aiToolSteps.length"
+                 class="ml-2 border-l border-gray-700 pl-3 space-y-1 text-xs text-gray-400"
+                 role="log"
+                 aria-live="polite"
+                 aria-relevant="additions text">
                 <div v-for="(step, sidx) in aiToolSteps.slice(-10)" :key="sidx" class="space-y-1">
                     <div class="flex items-center gap-2">
-                        <span class="ms"
-                           :class="step.status === 'running' ? 'animate-spin text-indigo-300' : (step.status === 'done' ? 'text-emerald-400' : 'text-gray-600')"
-                           aria-hidden="true">[[ step.status === 'done' ? 'check' : (step.status === 'running' ? 'progress_activity' : 'circle') ]]</span>
-                        <span class="truncate">[[ step.message ]]</span>
+                        <span class="ms shrink-0"
+                           :class="step.status === 'running' ? 'animate-spin text-indigo-300' : (step.status === 'done' ? 'text-emerald-400' : (step.status === 'error' ? 'text-red-400' : 'text-gray-600'))"
+                           aria-hidden="true">[[ step.status === 'done' ? 'check' : (step.status === 'running' ? 'progress_activity' : (step.status === 'error' ? 'error' : 'circle')) ]]</span>
+                        <span class="truncate" :class="step.status === 'error' ? 'text-red-300' : ''">[[ stepLabel(step) ]]</span>
                     </div>
-                    <div v-if="step.detail" class="ml-5 rounded border border-gray-800 bg-gray-950/70 px-2 py-1.5 text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap">
+                    <div v-if="step.error" class="ml-5 rounded border border-red-800 bg-red-950/50 px-2 py-1.5 text-[11px] leading-relaxed text-red-200 whitespace-pre-wrap">
+                        [[ step.error ]]
+                    </div>
+                    <div v-else-if="step.detail" class="ml-5 rounded border border-gray-800 bg-gray-950/70 px-2 py-1.5 text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap">
                         [[ step.detail ]]
                     </div>
                 </div>

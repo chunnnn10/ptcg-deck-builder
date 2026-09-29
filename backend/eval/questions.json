@@ -1,0 +1,88 @@
+{
+  "meta": {
+    "language": "zh-Hant",
+    "notes": "Fixed benchmark question set for the PTCG AI assistant. Keep stable across model/prompt comparisons; add new items only at the end so old result files stay comparable by index."
+  },
+  "questions": [
+    {
+      "id": "q01-card-name-hp",
+      "category": "card-lookup",
+      "question": "皮卡丘ex 有幾多 HP？"
+    },
+    {
+      "id": "q02-card-attack",
+      "category": "card-lookup",
+      "question": "噴火龍ex 嘅招式係咩？打幾多？"
+    },
+    {
+      "id": "q03-card-detail",
+      "category": "card-lookup",
+      "question": "水箭龜ex 係咩屬性，撤退要幾多能量？"
+    },
+    {
+      "id": "q04-search-draw",
+      "category": "card-search-effect",
+      "question": "有邊張支援者可以抽好多牌？"
+    },
+    {
+      "id": "q05-search-hp-threshold",
+      "category": "card-search-effect",
+      "question": "搵返啲 HP 90 或以下嘅基礎寶可夢。"
+    },
+    {
+      "id": "q06-search-tool",
+      "category": "card-search-effect",
+      "question": "有冇道具卡可以令寶可夢受到嘅招式傷害減少？"
+    },
+    {
+      "id": "q07-search-energy",
+      "category": "card-search-effect",
+      "question": "邊張特殊能量可以提供兩個無色能量？"
+    },
+    {
+      "id": "q08-deck-advice",
+      "category": "deck-building",
+      "question": "我想砌一副噴火龍ex 做主力嘅牌組，有咩建議？"
+    },
+    {
+      "id": "q09-deck-ratio",
+      "category": "deck-building",
+      "question": "牌組入面支援者同物品大概要幾多張先夠？"
+    },
+    {
+      "id": "q10-deck-patch",
+      "category": "deck-building",
+      "question": "我副牌太多雜牌，想加多啲抽牌，可以點改？"
+    },
+    {
+      "id": "q11-meta-archetype",
+      "category": "meta",
+      "question": "而家標準賽制有咩主流牌型？"
+    },
+    {
+      "id": "q12-meta-matchup",
+      "category": "meta",
+      "question": "沙奈朵ex 對密勒頓ex 邊個有優勢？"
+    },
+    {
+      "id": "q13-jp-en-mixed",
+      "category": "mixed-language",
+      "question": "Pikachu ex 喺日本叫做咩？同埋佢嘅招式英文係咩？"
+    },
+    {
+      "id": "q14-out-of-rotation",
+      "category": "out-of-rotation",
+      "question": "老翁龍 而家標準賽制仲用得嗎？"
+    },
+    {
+      "id": "q15-ambiguous",
+      "category": "ambiguous",
+      "question": "幫我改副牌。"
+    },
+    {
+      "id": "q16-unanswerable",
+      "category": "unanswerable",
+      "question": "下年世界賽冠軍會係邊個？"
+    }
+  ]
+}

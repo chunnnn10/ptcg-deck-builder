@@ -20,7 +20,6 @@ function useAIAssistant(openCardModal, options = {}) {
     const aiTabPickerOpen = ref(false);
     const aiDropActive = ref(false);
     const pendingAIDeckImport = ref(null);
-    let aiLoadingTimer = null;
     let aiPollTimer = null;
 
     const getDeck = () => {
@@ -245,44 +244,35 @@ function useAIAssistant(openCardModal, options = {}) {
         if (aiPanelOpen.value) scrollAIMessages();
     };
 
-    const loadingSequence = () => aiDeepThink.value
-        ? [
-            '正在讀取 @tab 牌表與理解玩法',
-            '正在搜尋 H/I/J 標準卡池',
-            '正在搜尋 Limitless Meta',
-            '正在讀取具體上位牌表',
-            '正在比較構築差異',
-            '正在整理可視覺化牌組建議'
-        ]
-        : [
-            '正在解析問題',
-            '正在搜尋標準卡池',
-            '正在檢查 Meta 索引',
-            '正在整理 JSON 回覆'
-        ];
+    const FINISHED_STATUSES = ['finished', 'done', 'complete', 'completed'];
+    const FAILED_STATUSES = ['failed', 'error'];   
 
-    const startLoadingProgress = () => {
-        stopLoadingProgress();
-        const sequence = loadingSequence();
-        let index = 0;
-        const buildSteps = () => sequence.map((message, idx) => ({
-            status: idx < index ? 'done' : (idx === index ? 'running' : 'pending'),
-            message
-        }));
-        aiLoadingMessage.value = sequence[index];
-        aiToolSteps.value = buildSteps();
-        aiLoadingTimer = window.setInterval(() => {
-            index = Math.min(index + 1, sequence.length - 1);
-            aiLoadingMessage.value = sequence[index];
-            aiToolSteps.value = buildSteps();
-        }, aiDeepThink.value ? 3200 : 2400);
+    const normalizeStepStatus = (status) => {
+        const value = String(status || '').toLowerCase();
+        if (FAILED_STATUSES.includes(value)) return 'error';
+        if (FINISHED_STATUSES.includes(value)) return 'done';
+        if (value === 'running' || value === 'active') return 'running';
+        return 'pending';
     };
 
-    const stopLoadingProgress = () => {
-        if (aiLoadingTimer) {
-            window.clearInterval(aiLoadingTimer);
-            aiLoadingTimer = null;
-        }
+    const normalizeSteps = (steps) => (Array.isArray(steps) ? steps : [])
+        .filter(step => step && typeof step === 'object')
+        .map(step => ({
+            status: normalizeStepStatus(step.status),
+            message: step.message || step.detail || step.tool || 'Agent step',
+            tool: step.tool || null,
+            result_count: (step.result_count === 0 || step.result_count) ? step.result_count : null,
+            error: step.error || null,
+            detail: step.detail || null
+        }));
+
+    const stepLabel = (step) => {
+        if (!step) return '';
+        const prefix = step.tool ? `[${step.tool}] ` : '';
+        const count = (step.result_count === 0 || step.result_count)
+            ? ` (${step.result_count} result${step.result_count === 1 ? '' : 's'})`
+            : '';
+        return `${prefix}${step.message || ''}${count}`;
     };
 
     const stopPolling = () => {
@@ -314,7 +304,8 @@ function useAIAssistant(openCardModal, options = {}) {
         aiInput.value = '';
         aiLoading.value = true;
         aiError.value = '';
-        startLoadingProgress();
+        aiToolSteps.value = [];
+        aiLoadingMessage.value = '已送出，Agent 正在啟動…';
         scrollAIMessages();
 
         try {
@@ -348,33 +339,58 @@ function useAIAssistant(openCardModal, options = {}) {
             aiMessages.value.push({ role: 'assistant', content: aiError.value, error: true });
         } finally {
             stopPolling();
-            stopLoadingProgress();
             aiLoading.value = false;
             scrollAIMessages();
         }
     };
 
+    const POLL_INTERVAL_MS = 1000;
+    const MAX_POLL_RETRIES = 5;
+
+    const jobStatusKind = (status) => {
+        const value = String(status || '').toLowerCase();
+        if (FINISHED_STATUSES.includes(value)) return 'finished';
+        if (FAILED_STATUSES.includes(value)) return 'failed';
+        return 'running';
+    };
+
+    const applyJobSnapshot = (data) => {
+        const steps = normalizeSteps(data.steps);
+        if (steps.length) {
+            aiToolSteps.value = steps;
+            const last = steps[steps.length - 1];
+            aiLoadingMessage.value = data.message || stepLabel(last) || 'Agent 正在工作';
+        } else if (data.message) {
+            aiLoadingMessage.value = data.message;
+        }
+        scrollAIMessages();
+    };
+
     const pollAIJob = (jobId, deepThink = false) => new Promise((resolve, reject) => {
         const startedAt = Date.now();
         const timeoutMs = deepThink ? 900000 : 240000;
+        let consecutiveErrors = 0;
+
+        const schedule = () => {
+            aiPollTimer = window.setTimeout(poll, POLL_INTERVAL_MS);
+        };
+
         const poll = async () => {
             try {
-                const res = await fetch(`/api/ai/chat/jobs/${encodeURIComponent(jobId)}`);
+                const res = await fetch(`/api/ai/chat/jobs/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
                 const data = await res.json();
+                consecutiveErrors = 0;
+
                 if (!data.success) throw new Error(data.error || 'AI job status failed');
 
-                if (data.steps && data.steps.length) {
-                    stopLoadingProgress();
-                    aiToolSteps.value = data.steps;
-                    aiLoadingMessage.value = data.message || data.steps[data.steps.length - 1].message || 'Agent 正在工作';
-                    scrollAIMessages();
-                }
+                applyJobSnapshot(data);
 
-                if (data.status === 'finished') {
+                const kind = jobStatusKind(data.status);
+                if (kind === 'finished') {
                     resolve(data.result || {});
                     return;
                 }
-                if (data.status === 'failed') {
+                if (kind === 'failed') {
                     reject(new Error(data.error || data.message || 'AI job failed'));
                     return;
                 }
@@ -382,9 +398,18 @@ function useAIAssistant(openCardModal, options = {}) {
                     reject(new Error('AI job timeout'));
                     return;
                 }
-                aiPollTimer = window.setTimeout(poll, 1000);
+                schedule();
             } catch (e) {
-                reject(e);
+                consecutiveErrors += 1;
+                if (consecutiveErrors > MAX_POLL_RETRIES) {
+                    reject(new Error('AI 狀態連線中斷，請稍後再試'));
+                    return;
+                }
+                if (Date.now() - startedAt > timeoutMs) {
+                    reject(new Error('AI job timeout'));
+                    return;
+                }
+                schedule();
             }
         };
         poll();
@@ -400,8 +425,8 @@ function useAIAssistant(openCardModal, options = {}) {
         aiLastCards.value = [];
         aiToolSteps.value = [];
         aiError.value = '';
+        aiLoadingMessage.value = '';
         stopPolling();
-        stopLoadingProgress();
         scrollAIMessages();
     };
 
@@ -685,6 +710,9 @@ function useAIAssistant(openCardModal, options = {}) {
         handleAIDragLeave,
         handleAIDrop,
         renderMarkdown,
+        stepLabel,
+        normalizeSteps,
+        normalizeStepStatus,
         actionLabel,
         metaTitle,
         decklistTitle,
