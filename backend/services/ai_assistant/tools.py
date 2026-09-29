@@ -439,6 +439,21 @@ def _structured_card_search(language: str = "tw", limit: int = CARD_LIMIT, filte
         conn.close()
 
 
+def _row_match_hint(row: dict[str, Any]) -> str:
+    """由 SQL 嘅 name_hit / skill_hit / desc_hit 欄位判斷命中原因。
+
+    回傳 'name'（名稱／卡號／系列）／'skill'（skills_json 招式卡文）／
+    'desc'（description 卡文）／''。名稱命中永遠優先，因為名稱命中嘅卡一定最相關。
+    """
+    if row.get("name_hit"):
+        return "name"
+    if row.get("skill_hit"):
+        return "skill"
+    if row.get("desc_hit"):
+        return "desc"
+    return ""
+
+
 def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIMIT, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     query = str(query or "").strip()
     if not query:
@@ -462,9 +477,15 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
         logic_ready = _logic_columns_ready(cursor)
         select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
         logic_join = _logic_join_sql(language, "c") if logic_ready else ""
+        # name_hit / skill_hit / desc_hit 明確講出「呢一行係因為邊個欄位中 query」，
+        # 令合併排序可以按命中原因（名稱 vs 招式／卡文）打分，而唔係一律當名稱命中。
         cursor.execute(
             f"""
-            SELECT {select_sql}
+            SELECT {select_sql},
+                   (c.name ILIKE %s OR c.card_id ILIKE %s OR c.set_code ILIKE %s OR c.set_number ILIKE %s
+                    OR COALESCE(c.{extra_name}, '') ILIKE %s) AS name_hit,
+                   (COALESCE(c.skills_json::text, '') ILIKE %s) AS skill_hit,
+                   (COALESCE(c.description, '') ILIKE %s) AS desc_hit
             FROM {table} c
             {logic_join}
             WHERE c.regulation_mark = ANY(%s)
@@ -483,9 +504,14 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
             LIMIT %s
             """,
             ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ())
+            + (search, search, search, search, search, search, search)
             + (marks, search, search, search, search, search, search, search, query, search, query, fetch_limit),
         )
-        cards = [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
+        cards: list[dict[str, Any]] = []
+        for idx, row in enumerate(cursor.fetchall()):
+            payload = _card_payload(row, folder_lang, idx < 8)
+            payload["_match_hint"] = _row_match_hint(row)
+            cards.append(payload)
         if predicate_filter:
             cards = [card for card in cards if card_matches_filter(card, predicate_filter)]
         return _diversify_by_name(cards, limit)
@@ -606,14 +632,17 @@ def _expanded_keyword_card_search(query: str, language: str = "tw", limit: int =
     if structured:
         pools.append(structured)
 
-    # trigram 相似度（CJK 專用，pg_trgm 可用時）＋逐 term ILIKE。
-    trigram = _trigram_card_search(query, language, scan_limit, filters)
-    if trigram:
-        pools.append(trigram)
+    # 逐 term ILIKE 一定要排喺 n-gram／trigram 之前：_card_query_terms 會由長到短排
+    # （最長 term 通常就係完整 query），所以決定性命中（例如 '擁有規則的寶可夢' → 謝米）
+    # 會先佔候選池；n-gram 命中留喺後面做補充，唔可以再淹沒完整查詢命中。
     for term in _card_query_terms(query):
         pool = _keyword_card_search(term, language, scan_limit, filters)
         if pool:
             pools.append(pool)
+    # trigram 相似度（CJK 專用，pg_trgm 可用時）：補充搵漏嘅相似卡名／卡文。
+    trigram = _trigram_card_search(query, language, scan_limit, filters)
+    if trigram:
+        pools.append(trigram)
 
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -743,6 +772,53 @@ def _name_relevance(query: str, name: str) -> float:
     return min(0.4, _trigram_similarity(query_norm, name_norm))
 
 
+def _card_match_text(card: dict[str, Any]) -> str:
+    """收集一張卡可以用嚟做效果比對嘅文字：招式名 + 招式效果 + 卡文 description。"""
+    parts: list[str] = []
+    for skill in card.get("skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        for key in ("name", "effect", "text", "description"):
+            value = skill.get(key)
+            if isinstance(value, str) and value:
+                parts.append(value)
+    description = card.get("description")
+    if isinstance(description, str) and description:
+        parts.append(description)
+    return " ".join(parts)
+
+
+def _effect_coverage(query: str, card: dict[str, Any]) -> float:
+    """query 最長命中子字串佔 query 幾長（0~1）。
+
+    只計 query 同卡文都出現嘅「連續子字串」：最長命中越長，代表 query 越完整
+    落喺招式名／招式效果／卡文，越似真正的效果命中。2 個字或以下嘅 query 唔計，
+    亦唔會用 2-gram 短命中當效果命中（避免 n-gram 擴展噪音）。
+    """
+    query_norm = _normalize_name(query)
+    if len(query_norm) < 3:
+        return 0.0
+    text = _normalize_name(_card_match_text(card))
+    if not text:
+        return 0.0
+    for size in range(len(query_norm), 2, -1):
+        for start in range(0, len(query_norm) - size + 1):
+            if query_norm[start:start + size] in text:
+                return size / len(query_norm)
+    return 0.0
+
+
+def _effect_match_score(coverage: float) -> float:
+    """效果命中分數：coverage > 0.5 先算數，1.0（完整 query）→ 0.95。
+
+    令招式／卡文命中（0.78~0.95）同卡名命中（>=0.96）同一個量級，但仍然低於
+    exact full-name（1.0），唔會反過來蓋過名稱命中。
+    """
+    if coverage <= 0.5:
+        return 0.0
+    return 0.60 + 0.35 * coverage
+
+
 def _rank_and_merge(
     query: str,
     keyword_cards: list[dict[str, Any]] | None,
@@ -751,10 +827,15 @@ def _rank_and_merge(
     limit: int,
     predicate_filter: Any = None,
 ) -> list[dict[str, Any]]:
-    """合併關鍵字/trigram 候選同向量候選，按 combined score 排序。
+    """合併關鍵字/trigram 候選同向量候選，按「命中原因 + 向量分數」排序。
 
-    combined = name_relevance + 0.2 * vector_similarity。
-    exact full-name 候選永遠排最前，唔會被 limit 擠走。
+    分數 = max(名稱相關度, 效果命中分數) + 0.2 * vector_similarity。
+
+    - 名稱命中（exact/prefix/contains）沿用 _name_relevance；exact full-name 永遠最前。
+    - 招式／卡文命中：用 query 同卡文（招式名／招式效果／description）嘅「最長連續共同
+      子字串」佔 query 幾長做 coverage，完整命中 → 0.95，唔會再係 ~0 被向量噪音蓋過。
+    - 排序分三層：exact 名稱 → 效果命中（一定有位，唔會被向量結果擠走）→ 其餘。
+    - 每張卡加 `match` ∈ {'name','effect','vector'} 講明命中原因。
     """
     query_norm = _normalize_name(query)
     query_len = len(query_norm)
@@ -766,16 +847,24 @@ def _rank_and_merge(
             return
         key = f"{card.get('language')}:{card.get('card_id')}"
         entry = merged.get(key)
+        hint = str(card.get("_match_hint") or "")
+        coverage = _effect_coverage(query, card)
         if entry is None:
             entry = dict(card)
             entry["_name_score"] = _name_relevance(query, card.get("name") or "")
             entry["_vsim"] = float(vsim or 0.0)
             entry["_trgm"] = _trigram_similarity(query_norm, _normalize_name(card.get("name") or ""))
+            entry["_coverage"] = coverage
+            entry["_kw_hint"] = hint
             merged[key] = entry
         else:
             if vsim is not None and float(vsim) > float(entry.get("_vsim") or 0.0):
                 entry["_vsim"] = float(vsim)
                 entry["semantic_score"] = round(float(vsim), 4)
+            if coverage > float(entry.get("_coverage") or 0.0):
+                entry["_coverage"] = coverage
+            if hint and not entry.get("_kw_hint"):
+                entry["_kw_hint"] = hint
             if card.get("structured_match"):
                 entry["structured_match"] = True
 
@@ -791,29 +880,68 @@ def _rank_and_merge(
             item for item in items
             if item.get("structured_match") or card_matches_filter(item, predicate_filter)
         ]
-    # 結構化 SQL 命中（predicate_filter 描述原始欄位）即使名稱無關都要保留。
+
     for item in items:
+        # 結構化 SQL 命中（predicate_filter 描述原始欄位）即使名稱無關都要保留。
         if item.get("structured_match"):
             item["_name_score"] = max(float(item.get("_name_score") or 0.0), 0.5)
-
-    def _combined(item: dict[str, Any]) -> float:
-        return float(item.get("_name_score") or 0.0) + 0.2 * float(item.get("_vsim") or 0.0)
+        name_score = float(item.get("_name_score") or 0.0)
+        effect_score = _effect_match_score(float(item.get("_coverage") or 0.0))
+        # SQL 已確定係 skills_json／description 命中（而唔係名稱）：就算只係 query 嘅
+        # 一部分命中，都俾一個穩定嘅效果分，唔可以再當成 ~0 被向量噪音蓋過。
+        if len(query_norm) >= 4 and str(item.get("_kw_hint") or "") in ("skill", "desc"):
+            effect_score = max(effect_score, 0.6)
+        item["_name_base"] = name_score
+        item["_effect_score"] = effect_score
+        item["_score"] = max(name_score, effect_score) + 0.2 * float(item.get("_vsim") or 0.0)
+        if item.get("structured_match"):
+            item["_match"] = "effect"
+        elif name_score >= 0.45:
+            item["_match"] = "name"
+        elif effect_score > 0.0:
+            item["_match"] = "effect"
+        else:
+            item["_match"] = "vector"
 
     def _sort_key(item: dict[str, Any]):
         name_norm = _normalize_name(item.get("name") or "")
         return (
-            -_combined(item),
+            -float(item.get("_score") or 0.0),
             abs(len(name_norm) - query_len),
             -float(item.get("_trgm") or 0.0),
             str(item.get("card_id") or ""),
         )
 
-    exact = sorted([i for i in items if float(i.get("_name_score") or 0.0) >= 0.999], key=_sort_key)
-    rest = sorted([i for i in items if float(i.get("_name_score") or 0.0) < 0.999], key=_sort_key)
-    # exact 命中全部優先保留；非 exact 結果做名稱多樣化：先每個名稱取最佳一張，
-    # 再用其餘副本補齊，令 '多龍' 之類廣義查詢同時浮現 多龍梅西亞／多龍奇／多龍巴魯托ex。
-    ordered: list[dict[str, Any]] = list(exact)
-    seen_names: set[str] = set()
+    def _effect_sort_key(item: dict[str, Any]):
+        name_norm = _normalize_name(item.get("name") or "")
+        return (
+            -float(item.get("_effect_score") or 0.0),
+            -float(item.get("_score") or 0.0),
+            abs(len(name_norm) - query_len),
+            -float(item.get("_trgm") or 0.0),
+            str(item.get("card_id") or ""),
+        )
+
+    exact = sorted([i for i in items if float(i.get("_name_base") or 0.0) >= 0.999], key=_sort_key)
+    exact_ids = {id(i) for i in exact}
+    effect_hits = sorted(
+        [
+            i for i in items
+            if id(i) not in exact_ids and float(i.get("_effect_score") or 0.0) > 0.0
+        ],
+        key=_effect_sort_key,
+    )
+    effect_ids = {id(i) for i in effect_hits}
+    rest = sorted(
+        [i for i in items if id(i) not in exact_ids and id(i) not in effect_ids],
+        key=_sort_key,
+    )
+
+    # exact 名稱命中全部優先保留；效果命中緊隨其後（保障唔會被向量結果擠走）；其餘做
+    # 名稱多樣化：先每個名稱取最佳一張，再用其餘副本補齊，令 '多龍' 之類廣義查詢同時
+    # 浮現 多龍梅西亞／多龍奇／多龍巴魯托ex。
+    ordered: list[dict[str, Any]] = list(exact) + list(effect_hits)
+    seen_names: set[str] = {_normalize_name(i.get("name") or "") for i in exact}
     deferred: list[dict[str, Any]] = []
     for item in rest:
         name_key = _normalize_name(item.get("name") or "")
@@ -829,6 +957,7 @@ def _rank_and_merge(
         card = {key: value for key, value in item.items() if not key.startswith("_")}
         if "semantic_score" not in card:
             card["semantic_score"] = None
+        card["match"] = item.get("_match") or "vector"
         result.append(card)
     return result
 
