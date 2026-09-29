@@ -1,7 +1,7 @@
 import sys
 import os
 import time
-from flask import Flask
+from flask import Flask, request
 from flask_login import LoginManager
 import config
 import database
@@ -53,6 +53,15 @@ def apply_security_headers(resp):
     resp.headers.setdefault('Content-Security-Policy', _CSP)
     resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
     resp.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+
+    # HSTS：只可在 HTTPS 回應上加（明文 HTTP 加會被瀏覽器忽略，亦無意義，
+    # 而且在 http 上也回 HSTS 會令測試/本機開發產生誤導）。
+    # 反向代理（Caddy/nginx）終結 TLS 時，request.is_secure 依賴 ProxyFix / X-Forwarded-Proto。
+    if request.is_secure:
+        resp.headers.setdefault(
+            'Strict-Transport-Security',
+            'max-age=31536000; includeSubDomains',
+        )
     return resp
 
 # 將 backend/ 加入 sys.path 以便所有其他模組可用

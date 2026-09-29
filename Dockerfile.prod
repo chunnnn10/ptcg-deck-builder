@@ -15,6 +15,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY frontend ./frontend
 
+# 建立資料目錄。注意：docker-compose.prod.yml 會把 host 的 ./data
+# bind-mount 進 /app/data（通常 root:root），若改用非 root 使用者會令
+# 卡圖下載 / deck_json_exports 寫入失敗。因此這裡維持以 root 執行（容器
+# 內 root 風險有限）；要啟用非 root，需先在 VPS 執行：
+#   mkdir -p data/images data/images_jp data/deck_json_exports
+#   chown -R 1000:1000 data/images data/images_jp data/deck_json_exports
+# 然後再加 USER appuser。
 RUN mkdir -p /app/data/images /app/data/images_jp /app/data/deck_json_exports
 
 EXPOSE 5000

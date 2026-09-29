@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p data/images
+RUN mkdir -p /app/data/images /app/data/images_jp /app/data/deck_json_exports
 
 EXPOSE 5000
 

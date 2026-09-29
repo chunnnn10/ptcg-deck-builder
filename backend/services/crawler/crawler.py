@@ -5,6 +5,8 @@ import requests
 import os
 import json
 import re
+import socket
+import ipaddress
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 import config
@@ -40,6 +42,79 @@ JP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Referer": "https://ptcgsp.com/cards", 
 }
+
+# ==========================================
+# URL 安全防護（SSRF）
+# ==========================================
+
+DEFAULT_CRAWLER_ALLOWED_HOSTS = ('asia.pokemon-card.com',)
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 單次回應上限 5MB
+
+
+def _crawler_allowed_hosts():
+    raw = os.environ.get('PTCG_CRAWLER_ALLOWED_HOSTS', '')
+    hosts = [h.strip().lower() for h in raw.split(',') if h.strip()]
+    return tuple(hosts) if hosts else DEFAULT_CRAWLER_ALLOWED_HOSTS
+
+
+def _is_private_address(ip_str):
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return (ip.is_loopback or ip.is_private or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def validate_fetch_url(url, allowed_hosts=None):
+    # 驗證爬蟲要擷取的 URL（SSRF 防護）：
+    # 僅允許 http/https、不得含帳密、僅允許標準埠、主機須在白名單、DNS 不得指向內網。
+    # 回傳 (ok, error_message)。
+    if not url or not str(url).strip():
+        return False, 'URL 不可為空'
+    try:
+        parsed = urlparse(str(url).strip())
+    except Exception:
+        return False, 'URL 格式錯誤'
+    if parsed.scheme not in ('http', 'https'):
+        return False, '僅允許 http/https URL'
+    if parsed.username or parsed.password:
+        return False, 'URL 不可包含帳號或密碼'
+    try:
+        port = parsed.port
+    except ValueError:
+        return False, 'URL 埠號錯誤'
+    if port is not None and port not in (80, 443):
+        return False, '僅允許標準埠 (80/443)'
+    host = (parsed.hostname or '').lower()
+    if not host:
+        return False, 'URL 缺少主機名稱'
+    hosts = tuple(h.lower() for h in (allowed_hosts or _crawler_allowed_hosts()))
+    if host not in hosts:
+        return False, '不允許的主機：%s' % host
+    # DNS 解析後再次檢查，避免 DNS rebinding / 內網位址
+    try:
+        infos = socket.getaddrinfo(host, port or (443 if parsed.scheme == 'https' else 80), proto=socket.IPPROTO_TCP)
+    except Exception as e:
+        return False, '無法解析主機：%s' % e
+    for info in infos:
+        ip_str = info[4][0]
+        if _is_private_address(ip_str):
+            return False, '不允許連接內部位址：%s' % ip_str
+    return True, None
+
+
+def _safe_get(url, headers=None, timeout=10, stream=False):
+    # 經過 SSRF 驗證的 requests.get 包裝，並限制回應大小。
+    ok, err = validate_fetch_url(url)
+    if not ok:
+        raise ValueError('不安全的 URL：%s' % err)
+    resp = requests.get(url, headers=headers, timeout=timeout, stream=stream)
+    cl = resp.headers.get('Content-Length')
+    if cl and cl.isdigit() and int(cl) > MAX_RESPONSE_BYTES:
+        resp.close()
+        raise ValueError('回應過大')
+    return resp
 
 # ==========================================
 # 資料庫與輔助函數
@@ -1035,7 +1110,7 @@ def construct_filtered_url(base_url, page_no, expansion_code, regulation):
 def _detect_total_pages(first_url):
     """偵測列表頁總頁數。失敗回傳 1。"""
     try:
-        res = requests.get(first_url, headers=config.HEADERS, timeout=10)
+        res = _safe_get(first_url, headers=config.HEADERS, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             page_tag = soup.find('p', class_='resultTotalPages')
@@ -1052,7 +1127,7 @@ def _detect_total_pages(first_url):
 def _extract_list_ids(list_url):
     ids = []
     try:
-        resp = requests.get(list_url, headers=config.HEADERS, timeout=10)
+        resp = _safe_get(list_url, headers=config.HEADERS, timeout=10)
         if resp.status_code != 200:
             return ids
         soup = BeautifulSoup(resp.text, 'html.parser')
@@ -1133,7 +1208,7 @@ def _scan_list_page(list_url, task_queue, found_ids, task_payload_template):
     """
     added = 0
     try:
-        resp = requests.get(list_url, headers=config.HEADERS, timeout=10)
+        resp = _safe_get(list_url, headers=config.HEADERS, timeout=10)
         if resp.status_code != 200:
             return 0
         soup = BeautifulSoup(resp.text, 'html.parser')
@@ -1180,6 +1255,14 @@ def run_update_process(target_expansion_codes=None, target_regulations=None,
 
     # 決定 base URL
     if custom_url:
+        # 防禦性檢查：即使呼叫端未驗證，這裡也必須通過 SSRF 白名單驗證
+        ok, err = validate_fetch_url(custom_url)
+        if not ok:
+            log_update(f"⛔ 拒絕不安全的自定義 URL：{err}")
+            with update_lock:
+                UPDATE_STATE['running'] = False
+                UPDATE_STATE['message'] = f'自定義 URL 不安全：{err}'
+            return
         base_list_url = custom_url
         log_update(f"🔗 自定義 URL 模式：{custom_url}")
     else:

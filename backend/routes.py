@@ -1,10 +1,14 @@
 import json
 import random
+import secrets
 import string
 import threading
 import os
 import re
 import requests
+import socket
+import ipaddress
+from urllib.parse import urlparse
 import smtplib
 import psycopg2
 from functools import wraps  # [新增] 用於裝飾器
@@ -280,7 +284,65 @@ def send_verification_email(user_email, token):
 # ==========================================
 def generate_unique_id():
     chars = string.ascii_uppercase + string.digits
-    return ''.join(random.choices(chars, k=6))
+    return ''.join(secrets.choice(chars) for _ in range(6))
+
+
+def generate_unique_deck_id(cursor, max_attempts=10):
+    """產生不會撞鍵的牌組 ID（同字元集與長度，改以 secrets 產生）。"""
+    for _ in range(max_attempts):
+        candidate = generate_unique_id()
+        cursor.execute("SELECT 1 FROM decks WHERE id = %s", (candidate,))
+        if not cursor.fetchone():
+            return candidate
+    # 理論上不可能：6 位 36 進位約 22 億組合；保留最後備援
+    return generate_unique_id()
+
+
+# ── 爬蟲 URL 白名單（避免 SSRF）──
+DEFAULT_CRAWLER_ALLOWED_HOSTS = ('asia.pokemon-card.com',)
+
+
+def crawler_allowed_hosts():
+    """允許的爬蟲主機清單，可用環境變數 PTCG_CRAWLER_ALLOWED_HOSTS 覆寫（逗號分隔）。"""
+    raw = os.environ.get('PTCG_CRAWLER_ALLOWED_HOSTS', '')
+    hosts = [h.strip().lower() for h in raw.split(',') if h.strip()]
+    return tuple(hosts) if hosts else DEFAULT_CRAWLER_ALLOWED_HOSTS
+
+
+def validate_crawler_url(url, allowed_hosts=None):
+    """驗證使用者提供的爬蟲 URL。回傳 (ok, error_message)。
+
+    規則：
+      - 必須為 http/https
+      - 不得包含帳密
+      - 只允許標準埠（http 80 / https 443，或未指定）
+      - 主機必須在白名單內
+    """
+    if not url or not str(url).strip():
+        return False, 'URL 不可為空'
+    try:
+        parsed = urlparse(str(url).strip())
+    except Exception:
+        return False, 'URL 格式錯誤'
+
+    if parsed.scheme not in ('http', 'https'):
+        return False, '僅允許 http/https URL'
+    if parsed.username or parsed.password:
+        return False, 'URL 不可包含帳號或密碼'
+    try:
+        port = parsed.port
+    except ValueError:
+        return False, 'URL 埠號錯誤'
+    if port is not None and port not in (80, 443):
+        return False, '僅允許標準埠 (80/443)'
+
+    host = (parsed.hostname or '').lower()
+    if not host:
+        return False, 'URL 缺少主機名稱'
+    hosts = tuple(h.lower() for h in (allowed_hosts or crawler_allowed_hosts()))
+    if host not in hosts:
+        return False, f'不允許的主機：{host}'
+    return True, None
 
 def parse_skills(skills_data):
     if not skills_data:
@@ -1581,12 +1643,21 @@ def save_deck():
     
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    new_id = generate_unique_id()
     try:
-        cursor.execute("INSERT INTO decks (id, name, content, is_public, user_id) VALUES (%s, %s, %s, %s, %s)", (new_id, name, content, is_public, user_id))
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True, 'id': new_id})
+        # 以 secrets 產生 ID，並在撞鍵時重試（避開可預測性與唯一鍵衝突）
+        last_err = None
+        for _ in range(5):
+            new_id = generate_unique_deck_id(cursor)
+            try:
+                cursor.execute("INSERT INTO decks (id, name, content, is_public, user_id) VALUES (%s, %s, %s, %s, %s)", (new_id, name, content, is_public, user_id))
+                conn.commit()
+                conn.close()
+                return jsonify({'success': True, 'id': new_id})
+            except psycopg2.errors.UniqueViolation as ue:
+                last_err = ue
+                conn.rollback()
+                continue
+        raise last_err if last_err else RuntimeError('無法產生唯一牌組 ID')
     except Exception as e:
         print(f"Error: {e}")
         conn.close()
@@ -1599,16 +1670,24 @@ def get_deck(deck_id):
     cursor.execute("SELECT * FROM decks WHERE id = %s", (deck_id,))
     row = cursor.fetchone()
     conn.close()
-    if row: 
-        return jsonify({
-            'success': True, 
-            'id': row['id'], 
-            'name': row['name'], 
-            'deck': json.loads(row['content']), 
-            'is_public': bool(row['is_public']),
-            'owner_id': row['user_id'] if 'user_id' in row.keys() else None
-        })
-    return jsonify({'success': False, 'error': 'Deck not found'}), 404
+    if not row:
+        return jsonify({'success': False, 'error': 'Deck not found'}), 404
+
+    # 存取控制：只允許公開牌組，或已登入且為擁有者的私有牌組。
+    # 其餘一律回 404，避免洩漏牌組是否存在（IDOR 防護）。
+    owner_id = row['user_id'] if 'user_id' in row.keys() else None
+    is_owner = current_user.is_authenticated and owner_id is not None and str(owner_id) == str(current_user.id)
+    if not row['is_public'] and not is_owner:
+        return jsonify({'success': False, 'error': 'Deck not found'}), 404
+
+    return jsonify({
+        'success': True,
+        'id': row['id'],
+        'name': row['name'],
+        'deck': json.loads(row['content']),
+        'is_public': bool(row['is_public']),
+        'owner_id': owner_id
+    })
 
 @main_bp.route('/api/decks/public')
 def get_public_decks():
@@ -1743,6 +1822,12 @@ def start_update():
     custom_url = (data.get('custom_url') or '').strip()
     custom_set_code = (data.get('custom_set_code') or '').strip()
     custom_set_name = (data.get('custom_set_name') or '').strip()
+
+    # SSRF 防護：使用者提供的自定義 URL 必須通過白名單驗證才可交給爬蟲
+    if custom_url:
+        ok, err = validate_crawler_url(custom_url)
+        if not ok:
+            return jsonify({'success': False, 'error': f'不允許的自定義 URL：{err}'}), 400
 
     # 啟動執行緒
     t = threading.Thread(
@@ -4113,14 +4198,26 @@ def publish_workspace_deck(item_id):
         conn = database.get_db_connection()
         cursor = conn.cursor()
         
-        new_id = generate_unique_id()
         content_json = json.dumps(item.get('content', []))
+        # 以 secrets 產生 ID，並在撞鍵時重試
+        last_err = None
+        for _ in range(5):
+            new_id = generate_unique_deck_id(cursor)
+            try:
+                cursor.execute(
+                    "INSERT INTO decks (id, name, content, is_public, user_id) VALUES (%s, %s, %s, 1, %s)",
+                    (new_id, item['name'], content_json, current_user.id)
+                )
+                conn.commit()
+                break
+            except psycopg2.errors.UniqueViolation as ue:
+                last_err = ue
+                conn.rollback()
+                continue
+        else:
+            conn.close()
+            raise last_err if last_err else RuntimeError('無法產生唯一分享 ID')
         
-        cursor.execute(
-            "INSERT INTO decks (id, name, content, is_public, user_id) VALUES (%s, %s, %s, 1, %s)",
-            (new_id, item['name'], content_json, current_user.id)
-        )
-        conn.commit()
         conn.close()
         
         share_url = f"{request.host_url}card/{new_id}"

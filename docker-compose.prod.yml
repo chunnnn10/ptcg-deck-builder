@@ -33,6 +33,9 @@ services:
       SECURITY_PASSWORD_SALT: ${SECURITY_PASSWORD_SALT:?set SECURITY_PASSWORD_SALT in .env.production}
       ENABLE_JP_DECK_AUTO_UPDATE: ${ENABLE_JP_DECK_AUTO_UPDATE:-true}
       ENABLE_LIMITLESS_AUTO_UPDATE: ${ENABLE_LIMITLESS_AUTO_UPDATE:-true}
+      # 反向代理終止 TLS；強制 secure cookie 與 https 對外 URL（fail-safe，不允許被覆寫成 false）
+      SESSION_COOKIE_SECURE: "True"
+      PREFERRED_URL_SCHEME: "https"
       PYTHONUNBUFFERED: "1"
     depends_on:
       db:
