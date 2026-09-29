@@ -13,7 +13,12 @@ import database
 
 from .embeddings import embed_texts, vector_literal
 from .indexer import STANDARD_MARKS, ensure_ai_schema, parse_skills
-from .predicates import parse_predicates, predicates_match_filter
+from .predicates import (
+    card_matches_filter,
+    hp_bounds_from_spec,
+    normalize_card_type,
+    parse_predicates,
+)
 from services.logic_extractor.adapter import EXTRACTOR_VERSION as LOGIC_EXTRACTOR_VERSION
 from services.card_roles.tagger import FILTERABLE_PARAM_KEYS
 
@@ -292,6 +297,148 @@ def _normalize_marks(filters: dict[str, Any] | None = None) -> list[str]:
     return marks or standard
 
 
+# ── 結構化 filter 嘅原始欄位查詢 ──────────────────────────────────────────
+# predicate_filter 可以描述「卡文 predicate」，亦可以描述「卡本身原始欄位」
+# （hp / card_type / sub_type…）。原始欄位唔可以只靠 keyword／語意檢索嘅候選，
+# 否則符合條件嘅卡根本冇被檢索到，就永遠回 []。所以呢度直接由 SQL 依原始欄位揀卡，
+# 再交 card_matches_filter 做最終驗證。
+
+_CARD_TYPE_SQL_VALUES: dict[str, tuple[str, ...]] = {
+    "pokemon": ("Pokémon", "Pokemon", "POKEMON", "ポケモン", "寶可夢", "宝可梦", "神奇寶貝", "神奇宝贝"),
+    "trainer": ("Trainer", "TRAINER", "トレーナー", "訓練家", "训练家"),
+    "energy": ("Energy", "ENERGY", "エネルギー", "能量"),
+}
+
+_BASIC_SUB_TYPE_SQL_TOKENS = ("基礎", "基本", "basic", "Basic", "BASIC", "たね")
+
+def _filter_specs(filters: dict[str, Any] | None) -> list[dict[str, Any]]:
+    raw = (filters or {}).get("predicate_filter")
+    if not raw:
+        return []
+    specs = raw if isinstance(raw, list) else [raw]
+    return [spec for spec in specs if isinstance(spec, dict)]
+
+
+def _like_token(value: Any) -> str:
+    return str(value or "").strip().replace("%", "").replace("_", "")
+
+
+def _card_type_sql(alias: str, kind: str, params: list[Any]) -> str:
+    params.append(list(_CARD_TYPE_SQL_VALUES.get(kind) or ()))
+    params.append(f"%{kind}%")
+    return f"({alias}.card_type = ANY(%s) OR lower({alias}.card_type) LIKE %s)"
+
+
+def _basic_sub_type_sql(alias: str) -> str:
+    likes = " OR ".join(f"{alias}.sub_type LIKE '%%{token}%%'" for token in _BASIC_SUB_TYPE_SQL_TOKENS)
+    return f"({likes})"
+
+
+def _spec_sql_condition(spec: dict[str, Any], params: list[Any], alias: str = "c") -> str | None:
+    """把 spec 內所有辨認得到嘅原始欄位轉成一個 AND 條件；無從下推就回 None。
+
+    同 `_raw_fields_match_spec` 一樣係「同一 spec 內所有面向都必須成立」：
+    {"type": "hp_threshold", "value": 90, "sub_type": "基礎"} 會同時下推 hp 同
+    sub_type。只描述卡文 predicate 嘅 spec（例如 {"type": "search_deck"}）冇
+    原始欄位可下推，所以回 None，維持原本「靠已檢索候選再過濾」嘅行為。
+    """
+    clauses: list[str] = []
+
+    bounds = hp_bounds_from_spec(spec)
+    if bounds and bounds.get("applies_to") != "attached_pokemon_remaining_hp":
+        low, high = bounds.get("min"), bounds.get("max")
+        if low is not None or high is not None:
+            applies_to = bounds.get("applies_to")
+            clauses.append(f"{alias}.hp IS NOT NULL")
+            if applies_to in ("pokemon", "basic_pokemon"):
+                clauses.append(_card_type_sql(alias, "pokemon", params))
+            if applies_to == "basic_pokemon":
+                clauses.append(_basic_sub_type_sql(alias))
+            if low is not None:
+                clauses.append(f"{alias}.hp >= %s")
+                params.append(int(low))
+            if high is not None:
+                clauses.append(f"{alias}.hp <= %s")
+                params.append(int(high))
+
+    kind = normalize_card_type(spec.get("card_type"))
+    if kind:
+        clauses.append(_card_type_sql(alias, kind, params))
+    sub_type = _like_token(spec.get("sub_type"))
+    if sub_type:
+        clauses.append(f"{alias}.sub_type ILIKE %s")
+        params.append(f"%{sub_type}%")
+    for key in ("element_type", "name", "set_code", "set_number", "rarity"):
+        token = _like_token(spec.get(key))
+        if token:
+            clauses.append(f"COALESCE({alias}.{key}, '') ILIKE %s")
+            params.append(f"%{token}%")
+    mark = str(spec.get("regulation_mark") or "").strip().upper()
+    if mark:
+        clauses.append(f"upper(COALESCE({alias}.regulation_mark, '')) = %s")
+        params.append(mark)
+
+    if not clauses:
+        return None
+    return "(" + " AND ".join(clauses) + ")"
+
+
+def _structured_card_search(language: str = "tw", limit: int = CARD_LIMIT, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """依 predicate_filter 嘅原始欄位（hp / card_type / sub_type…）直接由 DB 揀卡。
+
+    spec 只描述卡文 predicate 時唔會行呢條路（SQL 冇條件可下推），維持原本行為；
+    spec 描述原始欄位時，就算 keyword／語意檢索搵唔到，都一定回傳符合嘅卡。
+    """
+    specs = _filter_specs(filters)
+    if not specs:
+        return []
+    limit = max(1, min(int(limit or CARD_LIMIT), CARD_LIMIT))
+    marks = _normalize_marks(filters)
+    table = "jp_cards" if language == "jp" else "cards"
+    folder_lang = "jp" if language == "jp" else "tw"
+
+    params: list[Any] = []
+    conditions = [cond for cond in (_spec_sql_condition(spec, params) for spec in specs) if cond]
+    if not conditions:
+        return []
+
+    fetch_limit = min(max(limit * 10, 50), 400)
+    conn = database.get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        logic_ready = _logic_columns_ready(cursor)
+        select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
+        logic_join = _logic_join_sql(language, "c") if logic_ready else ""
+        cursor.execute(
+            f"""
+            SELECT {select_sql}
+            FROM {table} c
+            {logic_join}
+            WHERE c.regulation_mark = ANY(%s)
+              AND ({" OR ".join(conditions)})
+            ORDER BY c.card_id DESC
+            LIMIT %s
+            """,
+            ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ()) + (marks,) + tuple(params) + (fetch_limit,),
+        )
+        cards: list[dict[str, Any]] = []
+        for row in cursor.fetchall():
+            payload = _card_payload(row, folder_lang, len(cards) < 8)
+            if card_matches_filter(payload, specs):
+                payload["structured_match"] = True
+                cards.append(payload)
+            if len(cards) >= limit:
+                break
+        return cards
+    except Exception as exc:
+        print(f"[ai_tools] WARNING: _structured_card_search 失敗：{exc}", flush=True)
+        return []
+    finally:
+        conn.close()
+
+
 def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIMIT, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     query = str(query or "").strip()
     if not query:
@@ -336,7 +483,7 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
         )
         cards = [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
         if predicate_filter:
-            cards = [card for card in cards if predicates_match_filter(card.get("predicates") or [], predicate_filter)]
+            cards = [card for card in cards if card_matches_filter(card, predicate_filter)]
         return cards[:limit]
     finally:
         conn.close()
@@ -399,7 +546,7 @@ def _trigram_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
         )
         cards = [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
         if predicate_filter:
-            cards = [card for card in cards if predicates_match_filter(card.get("predicates") or [], predicate_filter)]
+            cards = [card for card in cards if card_matches_filter(card, predicate_filter)]
         return cards[:limit]
     except Exception:
         try:
@@ -424,6 +571,10 @@ def _expanded_keyword_card_search(query: str, language: str = "tw", limit: int =
             results.append(card)
             if len(results) >= limit:
                 break
+
+    # predicate_filter 描述卡本身原始欄位時，keyword／trigram 檢索未必命中；
+    # 先由結構化 SQL 直接取符合嘅卡，再補關鍵字候選。
+    append_cards(_structured_card_search(language, limit, filters))
 
     # 先試 trigram 相似度（CJK 專用，pg_trgm 可用時），再逐 term ILIKE 補齊。
     append_cards(_trigram_card_search(query, language, limit, filters))
@@ -526,10 +677,17 @@ def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str
             row = by_id.get(cid)
             if row:
                 payload = _card_payload(row, language, len(cards) < 8)
-                if predicate_filter and not predicates_match_filter(payload.get("predicates") or [], predicate_filter):
+                if predicate_filter and not card_matches_filter(payload, predicate_filter):
                     continue
                 payload["semantic_score"] = round(score_by_id.get(cid, 0), 4)
                 cards.append(payload)
+        if predicate_filter and len(cards) < limit:
+            seen_before = {card.get("card_id") for card in cards}
+            for card in _structured_card_search(language, limit, filters):
+                if card.get("card_id") in seen_before or len(cards) >= limit:
+                    continue
+                card["semantic_score"] = None
+                cards.append(card)
         keyword_cards = _expanded_keyword_card_search(query, language, min(limit, 6), filters)
         seen = {card.get("card_id") for card in cards}
         for card in keyword_cards:
