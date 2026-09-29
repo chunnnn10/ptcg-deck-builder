@@ -8,7 +8,14 @@ import uuid
 from collections import Counter
 from typing import Any
 
-from .client import AIClientError, AIConfigError, chat_completion, chat_message
+from . import job_store
+from .client import (
+    AIClientError,
+    AIConfigError,
+    chat_completion,
+    chat_message,
+    check_provider_health,
+)
 from .matchup_sheet import get_matchup_sheet
 from .skills import get_skill, list_skills, skill_catalog_text
 from .tools import (
@@ -336,12 +343,101 @@ def _json_loads(value: Any, default: Any = None) -> Any:
     return default
 
 
+# Row-aware compaction limits. Chosen so a compacted trace stays well under
+# the model context while keeping the fields the model actually cites.
+_COMPACT_MAX_ROWS = 40
+_COMPACT_MAX_FIELDS = 24
+_COMPACT_FIELD_CHARS = 600
+_COMPACT_DEPTH = 4
+
+
+def _compact_scalar(value: Any) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= _COMPACT_FIELD_CHARS else value[:_COMPACT_FIELD_CHARS] + "..."
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return None
+
+
+def _compact_value(value: Any, depth: int = 0) -> Any:
+    """Recursively shrink one value without ever producing invalid JSON.
+
+    Lists are capped by row count, dicts by field count, strings by length, and
+    the structure keeps its shape with a ``_truncated`` marker so the model can
+    see that something was elided instead of receiving broken JSON.
+    """
+    if isinstance(value, str):
+        return _compact_scalar(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if depth >= _COMPACT_DEPTH:
+        if isinstance(value, (list, dict)):
+            return {"_truncated": True, "reason": "depth", "type": type(value).__name__}
+        return _compact_scalar(value)
+    if isinstance(value, list):
+        rows = [_compact_value(item, depth + 1) for item in value[:_COMPACT_MAX_ROWS]]
+        if len(value) > _COMPACT_MAX_ROWS:
+            rows.append({"_truncated": True, "reason": "rows", "omitted": len(value) - _COMPACT_MAX_ROWS})
+        return rows
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _COMPACT_MAX_FIELDS:
+                compact["_truncated"] = True
+                compact["omitted_fields"] = len(value) - _COMPACT_MAX_FIELDS
+                break
+            compact[str(key)] = _compact_value(item, depth + 1)
+        return compact
+    return _compact_scalar(value)
+
+
 def _compact_tool_result(value: Any, max_chars: int = 14000) -> str:
-    text = json.dumps(value, ensure_ascii=False, default=str)
+    """JSON-serialise a tool result with row/field-aware shrinking.
+
+    Replaces the old raw ``text[:max_chars]`` cut, which could split a JSON
+    string mid-object and hand the model corrupt payloads.
+    """
+    try:
+        text = json.dumps(_compact_value(value), ensure_ascii=False, default=str)
+    except Exception:
+        text = json.dumps({"error": "unserialisable tool result", "repr": str(value)[:500]}, ensure_ascii=False)
     if len(text) > max_chars:
-        return text[:max_chars] + "...[truncated]"
+        # Last resort: shrink rows further, then fall back to a valid JSON envelope.
+        rows = value if isinstance(value, list) else (value.get("cards") if isinstance(value, dict) else None)
+        if isinstance(rows, list) and rows:
+            reduced = [_compact_value(item, 2) for item in rows[:10]]
+            text = json.dumps({"items": reduced, "_truncated": True, "reason": "budget"}, ensure_ascii=False, default=str)
+    if len(text) > max_chars:
+        text = json.dumps({"_truncated": True, "reason": "budget", "preview": text[: max(0, max_chars - 120)]}, ensure_ascii=False)
     return text
 
+
+def _context_budget(parts: list[Any], max_chars: int = 24000) -> str:
+    """Join already-compacted context parts under a hard total character budget.
+
+    Each part is compacted individually, then the highest-value parts are kept
+    whole and the rest are dropped with an explicit marker, so the final
+    synthesis prompt can never blow past the budget.
+    """
+    rendered: list[tuple[str, str]] = []
+    for part in parts:
+        label = str(part.get("label") if isinstance(part, dict) else "")
+        payload = part.get("value") if isinstance(part, dict) else part
+        rendered.append((label, _compact_tool_result(payload, max_chars)))
+
+    kept: list[str] = []
+    used = 0
+    dropped: list[str] = []
+    for label, payload in rendered:
+        piece = (label + ":\n" if label else "") + payload
+        if used + len(piece) > max_chars and kept:
+            dropped.append(label or "part")
+            continue
+        kept.append(piece)
+        used += len(piece)
+    if dropped:
+        kept.append("[省略過長內容] " + ", ".join(dropped))
+    return "\n".join(kept)
 
 def _compact_card_context(card: Any) -> dict[str, Any] | None:
     if not isinstance(card, dict):
@@ -788,6 +884,10 @@ def _tool_step_status(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _cleanup_jobs() -> None:
+    """Drop stale in-memory fallback jobs only.
+
+    DB-backed jobs are aged out by ``job_store.cleanup_old_jobs``.
+    """
     now = time.time()
     with _JOBS_LOCK:
         stale = [job_id for job_id, job in _JOBS.items() if now - float(job.get("updated_at") or 0) > _JOB_TTL_SECONDS]
@@ -795,86 +895,249 @@ def _cleanup_jobs() -> None:
             _JOBS.pop(job_id, None)
 
 
+_UNSET: Any = object()
+
+# The DB store uses its own status vocabulary; the routes/frontend contract uses
+# 'queued' / 'finished'. Translate on the way in and out.
+_DB_STATUS_IN = {"finished": "done", "queued": "pending"}
+_DB_STATUS_OUT = {"done": "finished", "pending": "queued"}
+
+
+def _db_update_job(
+    job_id: str,
+    *,
+    result: Any = _UNSET,
+    message: Any = _UNSET,
+    status: Any = _UNSET,
+    error: Any = _UNSET,
+) -> bool:
+    """Persist a partial job update in the DB-backed store.
+
+    ``job_store`` exposes a frozen public interface without a progress/step
+    update entry point, so this reuses its SAVEPOINT-safe internal ``_update``
+    helper. Any failure returns False; callers treat the in-memory copy as the
+    fallback and never raise.
+    """
+    sets = ["updated_at = CURRENT_TIMESTAMP"]
+    params: list[Any] = []
+    if result is not _UNSET:
+        sets.append("result = %s::jsonb")
+        params.append(json.dumps(result if result is not None else {}, ensure_ascii=False, default=str))
+    if message is not _UNSET:
+        sets.append("message = %s")
+        params.append(str(message or ""))
+    if status is not _UNSET:
+        sets.append("status = %s")
+        params.append(str(status or ""))
+    if error is not _UNSET:
+        sets.append("error = %s")
+        params.append(str(error or ""))
+    params.append(str(job_id or ""))
+    sql = "UPDATE ai_assistant_jobs SET " + ", ".join(sets) + " WHERE id = %s"
+    try:
+        return bool(job_store._update(str(job_id or ""), sql, tuple(params)))
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[assistant] job update failed: {exc}")
+        return False
+
+
 def _set_job(job_id: str, **updates: Any) -> None:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if not job:
-            return
-        job.update(updates)
-        job["updated_at"] = time.time()
-
-
-def _append_job_step(job_id: str | None, step: dict[str, Any]) -> None:
     if not job_id:
         return
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
-        if not job:
+        if job is not None:
+            job.update(updates)
+            job["updated_at"] = time.time()
             return
-        steps = job.setdefault("steps", [])
-        if steps and steps[-1].get("status") == "running" and step.get("status") == "running":
-            steps[-1]["status"] = "done"
-        steps.append(step)
-        job["message"] = step.get("message") or job.get("message") or ""
-        job["updated_at"] = time.time()
+
+    status = updates.get("status")
+    mapped_status = _DB_STATUS_IN.get(status, status) if status is not None else _UNSET
+    result_value = updates.get("result", _UNSET) if "result" in updates else _UNSET
+    if result_value is None:
+        result_value = _UNSET
+    _db_update_job(
+        job_id,
+        result=result_value,
+        message=updates.get("message", _UNSET),
+        status=mapped_status,
+        error=updates.get("error", _UNSET),
+    )
 
 
-def _start_job(messages: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, Any]:
-    _cleanup_jobs()
-    job_id = uuid.uuid4().hex
-    now = time.time()
+def _append_job_step(job_id: str | None, step: dict[str, Any]) -> None:
+    """Append a progress step.
+
+    Steps live inside the persisted ``result`` (``result['steps']``) so a poll
+    served by any worker can render progress. In-memory jobs keep the old shape.
+    """
+    if not job_id:
+        return
     with _JOBS_LOCK:
-        _JOBS[job_id] = {
-            "job_id": job_id,
-            "status": "queued",
-            "message": "Agent 已排入工作佇列",
-            "steps": [{"status": "running", "message": "Agent 已排入工作佇列"}],
-            "result": None,
-            "error": "",
-            "created_at": now,
-            "updated_at": now,
-        }
+        job = _JOBS.get(job_id)
+        if job is not None:
+            steps = job.setdefault("steps", [])
+            if steps and steps[-1].get("status") == "running" and step.get("status") == "running":
+                steps[-1]["status"] = "done"
+            steps.append(step)
+            job["message"] = step.get("message") or job.get("message") or ""
+            job["updated_at"] = time.time()
+            return
+
+    try:
+        row = job_store.get_job(str(job_id))
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[assistant] job step fetch failed: {exc}")
+        row = None
+    if not row:
+        return
+    result = row.get("result") if isinstance(row.get("result"), dict) else {}
+    steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+    if steps and steps[-1].get("status") == "running" and step.get("status") == "running":
+        steps[-1]["status"] = "done"
+    steps.append(step)
+    result["steps"] = steps
+    _db_update_job(
+        job_id,
+        result=result,
+        message=step.get("message") or row.get("message") or "",
+    )
+
+
+def _start_job(messages: list[dict[str, Any]], context: dict[str, Any], user_id: str = "") -> dict[str, Any]:
+    _cleanup_jobs()
+    context = dict(context or {})
+    owner = str(user_id or context.get("user_id") or "")
+    context["user_id"] = owner
+    message_text = _last_user_message(messages)
+
+    job_id = ""
+    try:
+        job_id = str(job_store.create_job(owner, message_text, context=context, kind="chat") or "")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[assistant] job_store unavailable, falling back to in-memory jobs: {exc}")
+        job_id = ""
+
+    if job_id:
+        _db_update_job(
+            job_id,
+            result={"steps": [{"status": "running", "message": "Agent 已排入工作佇列"}]},
+            message="Agent 已排入工作佇列",
+            status="pending",
+        )
+        context["job_id"] = job_id
+    else:
+        # DB unavailable: keep the legacy single-worker in-memory registry so the
+        # feature still works when only one process serves the poll.
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        with _JOBS_LOCK:
+            _JOBS[job_id] = {
+                "job_id": job_id,
+                "user_id": owner,
+                "status": "queued",
+                "message": "Agent 已排入工作佇列",
+                "steps": [{"status": "running", "message": "Agent 已排入工作佇列"}],
+                "result": None,
+                "error": "",
+                "created_at": now,
+                "updated_at": now,
+            }
+        context["job_id"] = job_id
 
     thread = threading.Thread(target=_run_job, args=(job_id, messages, context), daemon=True)
     thread.start()
     return {"success": True, "job_id": job_id, "status": "queued"}
 
 
+def _stored_steps(job_id: str) -> list[dict[str, Any]]:
+    """Read the persisted step list for a job.
+
+    DB-backed jobs keep steps inside ``result['steps']``; fallback jobs keep them
+    in the process-local dict. Returns [] when neither exists.
+    """
+    with _JOBS_LOCK:
+        if job_id in _JOBS:
+            return list((_JOBS.get(job_id) or {}).get("steps") or [])
+    try:
+        row = job_store.get_job(str(job_id))
+    except Exception:
+        return []
+    result = (row or {}).get("result")
+    steps = result.get("steps") if isinstance(result, dict) else None
+    return list(steps) if isinstance(steps, list) else []
+
+
 def _run_job(job_id: str, messages: list[dict[str, Any]], context: dict[str, Any]) -> None:
     _set_job(job_id, status="running", message="Agent 正在啟動")
     try:
-        result = run_assistant(messages, context | {"job_id": job_id})
+        result = dict(run_assistant(messages, context | {"job_id": job_id}) or {})
+        # The step list produced during the run is authoritative for progress: keep
+        # the DB-persisted steps instead of letting the final payload wipe them.
+        stored_steps = _stored_steps(job_id)
+        if stored_steps:
+            result["steps"] = stored_steps
+        if not isinstance(result.get("steps"), list):
+            result["steps"] = []
+        ok = bool(result.get("success"))
         _set_job(
             job_id,
-            status="finished" if result.get("success") else "failed",
-            message="Agent 已完成" if result.get("success") else result.get("error") or "Agent 失敗",
+            status="finished" if ok else "failed",
+            message="Agent 已完成" if ok else result.get("error") or "Agent 失敗",
             result=result,
             error=result.get("error") or "",
         )
     except Exception as exc:
-        _set_job(job_id, status="failed", message=str(exc), error=str(exc), result=None)
+        _set_job(job_id, status="failed", message=str(exc), error=str(exc))
 
 
-def start_assistant_job(messages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> dict[str, Any]:
-    return _start_job(messages, context or {})
+def start_assistant_job(
+    messages: list[dict[str, Any]],
+    context: dict[str, Any] | None = None,
+    user_id: str = "",
+) -> dict[str, Any]:
+    return _start_job(messages, context or {}, user_id=user_id)
 
 
-def get_assistant_job(job_id: str) -> dict[str, Any]:
+def get_assistant_job(job_id: str, user_id: str | None = None) -> dict[str, Any]:
+    job_id = str(job_id or "")
     _cleanup_jobs()
     with _JOBS_LOCK:
-        job = _JOBS.get(str(job_id or ""))
-        if not job:
+        job = _JOBS.get(job_id)
+    if job is not None:
+        owner = str(job.get("user_id") or "")
+        if user_id is not None and str(user_id) != owner:
             return {"success": False, "error": "AI job not found"}
-        result = {
+        return {
             "success": True,
-            "job_id": job.get("job_id"),
+            "job_id": job.get("job_id") or job_id,
             "status": job.get("status"),
             "message": job.get("message") or "",
             "steps": list(job.get("steps") or []),
             "result": job.get("result"),
             "error": job.get("error") or "",
         }
-    return result
+
+    try:
+        row = job_store.get_job(job_id, user_id if user_id is not None else None)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[assistant] job lookup failed: {exc}")
+        row = None
+    if not row:
+        return {"success": False, "error": "AI job not found"}
+
+    result = row.get("result") if isinstance(row.get("result"), dict) else None
+    steps = result.get("steps") if isinstance(result, dict) and isinstance(result.get("steps"), list) else []
+    db_status = row.get("status")
+    return {
+        "success": True,
+        "job_id": row.get("id") or job_id,
+        "status": _DB_STATUS_OUT.get(db_status, db_status),
+        "message": row.get("message") or "",
+        "steps": steps,
+        "result": result,
+        "error": row.get("error") or "",
+    }
 
 
 def _is_deck_request(text: str) -> bool:
@@ -1238,6 +1501,61 @@ def _strip_visual_decklist_text(answer: str) -> str:
     return text
 
 
+_NUMERIC_CLAIM_RE = re.compile(r"(\d{1,4})\s*(HP|hp|Hp|傷害|伤害|打點|打点|張|张|血)")
+
+
+def _numeric_grounding_terms(
+    tool_results: list[dict[str, Any]],
+    context: dict[str, Any] | None = None,
+) -> set[str]:
+    '''Collect every numeric token the agent actually has (tool trace + context).'''
+    grounded: list[str] = []
+    try:
+        grounded.append(json.dumps(tool_results, ensure_ascii=False, default=str)[:400000])
+    except Exception:
+        pass
+    if context:
+        for key in ("deck", "referenced_cards", "referenced_tabs", "meta_deck_analysis"):
+            value = context.get(key)
+            if not value:
+                continue
+            try:
+                grounded.append(json.dumps(value, ensure_ascii=False, default=str))
+            except Exception:
+                continue
+    return set(re.findall(r"\d{1,4}", '\n'.join(grounded)))
+
+
+def _enforce_numeric_grounding(
+    answer: str,
+    tool_results: list[dict[str, Any]],
+    context: dict[str, Any] | None = None,
+) -> str:
+    '''Blank numbers in game-meaningful claims (HP / damage points / card counts)
+    that never appeared in the tool trace or context.
+
+    Conservative by design: only numbers attached to a unit token are checked, so
+    ordinary prose numbers and tool-derived totals survive untouched.
+    '''
+    text = str(answer or "")
+    if not text:
+        return text
+    trace_numbers = _numeric_grounding_terms(tool_results, context)
+    flagged: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        number, unit = match.group(1), match.group(2)
+        if number in trace_numbers:
+            return match.group(0)
+        flagged.append(number)
+        return f"[未驗證數字]{unit}"
+
+    text = _NUMERIC_CLAIM_RE.sub(replace, text)
+    if flagged:
+        unique = list(dict.fromkeys(flagged))
+        text = text + "\n（已標記未在工具結果中出現的數字：" + ", ".join(unique) + "）"
+    return text
+
 def _evidence_terms(cards: list[dict[str, Any]], meta_refs: list[dict[str, Any]], decklists: list[dict[str, Any]]) -> set[str]:
     terms: set[str] = set()
 
@@ -1397,6 +1715,7 @@ def _normalize_final(
         str(final_data.get("answer") or fallback_answer or "我已根據標準 H/I/J 卡池與可用資料整理建議。"),
         _evidence_terms(merged_cards, merged_meta, merged_decklists),
     )
+    answer = _enforce_numeric_grounding(answer, tool_results, context)
     answer = _ensure_deck_recommendation_answer(
         answer,
         merged_decklists,
@@ -1462,6 +1781,55 @@ def _deterministic_fallback(messages: list[dict[str, Any]], context: dict[str, A
     result = _normalize_final(final, context, tool_results)
     result["warning"] = error
     return result
+
+
+_INCOMPLETE_ANSWER_MARKERS = (
+    "呼叫工具",
+    "呼叫工具",
+    "tool_call",
+    "tool_calls",
+    "需要搜尋",
+    "讓我查",
+    "我來查",
+    "稍等我",
+    "請稍等",
+)
+
+
+def _tool_name_tokens() -> tuple[str, ...]:
+    names = []
+    for schema in TOOL_SCHEMAS:
+        fn = schema.get("function") if isinstance(schema, dict) else None
+        name = str((fn or {}).get("name") or "").strip()
+        if name:
+            names.append(name)
+    return tuple(names)
+
+
+def _answer_looks_incomplete(
+    final_data: dict[str, Any],
+    content: str,
+    tool_results: list[dict[str, Any]],
+) -> bool:
+    """One-shot heuristic: should a no-tool-call answer be repaired once?
+
+    Only fires when the model clearly did not finish (empty answer, tool-name
+    references with no executed tool, or text that stops mid-sentence). A normal
+    well-formed answer returns False, preserving the existing fast path.
+    """
+    answer = str(final_data.get("answer") or "").strip() if isinstance(final_data, dict) else ""
+    if not answer:
+        answer = str(content or "").strip()
+    if not answer:
+        return True
+    lowered = answer.lower()
+    if any(marker.lower() in lowered for marker in _INCOMPLETE_ANSWER_MARKERS):
+        return True
+    if not tool_results:
+        for token in _tool_name_tokens():
+            if token and token in answer:
+                return True
+    return False
 
 
 def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1549,6 +1917,7 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
     except (TypeError, ValueError):
         max_steps = default_steps
     max_steps = min(max(1, max_steps), 30)
+    repair_used = False
     try:
         for _ in range(max_steps):
             _append_job_step(context.get("job_id"), {"status": "running", "message": "呼叫 AI 模型決定下一步工具"})
@@ -1559,6 +1928,20 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
                 final_data = _json_loads(content, {})
                 if not isinstance(final_data, dict) or not final_data:
                     final_data = {"answer": content}
+                # One repair pass: a no-tool-call turn that looks unfinished or
+                # references tools without running them gets a chance to continue.
+                if not repair_used and _answer_looks_incomplete(final_data, content, tool_results):
+                    repair_used = True
+                    _append_job_step(context.get("job_id"), {"status": "running", "message": "回覆未完成，要求模型補完工具或答案"})
+                    agent_messages.append({"role": "assistant", "content": content})
+                    agent_messages.append({
+                        "role": "user",
+                        "content": (
+                            "上一則回覆未完成或提到工具但沒有實際呼叫。請立即呼叫缺少的工具取得資料，"
+                            "或直接輸出完整的最終 JSON（含 answer）。不要只說要做什麼。"
+                        ),
+                    })
+                    continue
                 return _normalize_final(final_data, context, tool_results)
 
             agent_messages.append({
@@ -1598,19 +1981,24 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
                     "Conversation and tool trace are complete. "
                     + FINAL_JSON_INSTRUCTIONS
                     + "\nReference context:\n"
-                    + _compact_tool_result(
-                        {
-                            "current_deck_count": len(context.get("deck") or []),
-                            "current_deck": context.get("deck") or [],
-                            "referenced_tabs": context.get("referenced_tabs") or [],
-                            "referenced_cards": context.get("referenced_cards") or [],
-                            "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
-                            "meta_deck_analysis": context.get("meta_deck_analysis") or [],
-                        },
-                        18000,
+                    + _context_budget(
+                        [
+                            {
+                                "label": "reference_context",
+                                "value": {
+                                    "current_deck_count": len(context.get("deck") or []),
+                                    "current_deck": context.get("deck") or [],
+                                    "referenced_tabs": context.get("referenced_tabs") or [],
+                                    "referenced_cards": context.get("referenced_cards") or [],
+                                    "referenced_tab_analysis": context.get("referenced_tab_analysis") or [],
+                                    "meta_deck_analysis": context.get("meta_deck_analysis") or [],
+                                },
+                            }
+                        ],
+                        8000,
                     )
                     + "\nTool results:\n"
-                    + _compact_tool_result(tool_results, 30000)
+                    + _context_budget([{"label": "tool_results", "value": tool_results}], 16000)
                 ),
             },
         ]
@@ -1624,3 +2012,52 @@ def run_assistant(messages: list[dict[str, Any]], context: dict[str, Any] | None
         return _deterministic_fallback(messages, context, str(exc))
     except Exception as exc:
         return _deterministic_fallback(messages, context, str(exc))
+
+
+def assistant_health() -> dict[str, Any]:
+    '''Aggregate AI subsystem health for diagnostics routes.
+
+    No network call is made unless the chat provider is configured;
+    embeddings checks only read already-indexed rows.
+    '''
+    degraded: list[str] = []
+
+    try:
+        provider_health = check_provider_health('chat') or {}
+    except Exception as exc:  # pragma: no cover - defensive
+        provider_health = {'configured': False, 'error': str(exc)}
+    configured = bool(provider_health.get('configured'))
+    provider = str(provider_health.get('provider') or '')
+    model = str(provider_health.get('model') or '')
+    if not configured:
+        degraded.append('chat provider not configured')
+    elif provider_health.get('reachable') is False:
+        degraded.append('chat provider unreachable: ' + str(provider_health.get('error') or ''))
+
+    embeddings = 0
+    embeddings_configured = False
+    index_info: dict[str, Any] = {}
+    try:
+        from .indexer import index_health
+
+        index_info = index_health() or {}
+    except Exception as exc:  # pragma: no cover - defensive
+        index_info = {'error': 'indexer unavailable: ' + str(exc)}
+    try:
+        embeddings = int(index_info.get('embeddings') or 0)
+    except (TypeError, ValueError):
+        embeddings = 0
+    embeddings_configured = bool(index_info.get('configured'))
+    if not embeddings_configured:
+        degraded.append('embeddings not configured')
+    if index_info.get('error'):
+        degraded.append('index: ' + str(index_info.get('error')))
+
+    return {
+        'configured': configured,
+        'provider': provider,
+        'model': model,
+        'embeddings': embeddings,
+        'embeddings_configured': embeddings_configured,
+        'degraded_reasons': degraded,
+    }

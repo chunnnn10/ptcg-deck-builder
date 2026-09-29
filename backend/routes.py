@@ -1071,6 +1071,69 @@ def ai_chat():
         return jsonify({'success': False, 'error': '伺服器內部錯誤，請稍後再試', 'answer': '', 'tool_results': [], 'cards': []}), 500
 
 
+# ---------------------------------------------------------------------------
+# AI job ownership helpers
+#
+# assistant.start_assistant_job / get_assistant_job gained an optional `user_id`
+# so a job is only visible to the user that created it. Until that lands we must
+# stay callable: inspect the signature and only pass `user_id` when it is
+# actually accepted, instead of guessing or swallowing TypeErrors raised deep
+# inside the job runner.
+# ---------------------------------------------------------------------------
+def _ai_call_accepts_kwarg(func, name: str) -> bool:
+    try:
+        import inspect
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _start_ai_job(messages, context, user_id):
+    """Start an AI job, binding it to `user_id` when the backend supports it."""
+    if _ai_call_accepts_kwarg(start_assistant_job, 'user_id'):
+        return start_assistant_job(messages, context, user_id=str(user_id or ''))
+    return start_assistant_job(messages, context)
+
+
+def _get_ai_job(job_id, user_id):
+    """Fetch an AI job scoped to `user_id` when the backend supports ownership."""
+    if _ai_call_accepts_kwarg(get_assistant_job, 'user_id'):
+        return get_assistant_job(job_id, user_id=str(user_id or ''))
+    return get_assistant_job(job_id)
+
+
+def _fallback_ai_health():
+    """Equivalent aggregation used when assistant.assistant_health is absent.
+
+    Performs NO provider call: it only reads local configuration.
+    """
+    degraded = []
+    cfg = {}
+    try:
+        from services.ai_assistant import client as ai_client
+        cfg = ai_client.get_ai_config('chat') or {}
+    except Exception as exc:
+        degraded.append('AI 設定讀取失敗: %s' % exc)
+    configured = bool(cfg.get('api_key') and cfg.get('model'))
+    if not configured:
+        degraded.append('Chat AI 未設定：請在 AI 設定頁填 API Key 同模型')
+    embeddings_configured = False
+    try:
+        from services.ai_assistant import embeddings as ai_embeddings
+        ai_embeddings.get_embedding_config()
+        embeddings_configured = True
+    except Exception as exc:
+        degraded.append(str(exc) or 'Embedding 未設定')
+    return {
+        'configured': configured,
+        'provider': cfg.get('provider') or '',
+        'model': cfg.get('model') or '',
+        'embeddings': cfg.get('embedding_model') or '',
+        'embeddings_configured': embeddings_configured,
+        'degraded_reasons': degraded,
+    }
+
+
 @main_bp.route('/api/ai/chat/jobs', methods=['POST'])
 @ai_access_required
 def ai_chat_job_start():
@@ -1085,7 +1148,7 @@ def ai_chat_job_start():
                 'job_id': None,
                 'status': 'failed',
             }), 400
-        result = start_assistant_job(messages, context if isinstance(context, dict) else {})
+        result = _start_ai_job(messages, context if isinstance(context, dict) else {}, current_user.id)
         return jsonify(result), 202
     except Exception as e:
         import traceback
@@ -1096,9 +1159,94 @@ def ai_chat_job_start():
 @main_bp.route('/api/ai/chat/jobs/<job_id>', methods=['GET'])
 @ai_access_required
 def ai_chat_job_status(job_id):
-    result = get_assistant_job(job_id)
+    result = _get_ai_job(job_id, current_user.id)
     status = 200 if result.get('success') else 404
     return jsonify(result), status
+
+
+@main_bp.route('/api/ai/health', methods=['GET'])
+@ai_access_required
+def ai_health():
+    """Aggregated AI configuration health. Never raises, never calls a provider."""
+    try:
+        from services.ai_assistant import assistant as ai_assistant
+        health_fn = getattr(ai_assistant, 'assistant_health', None)
+        payload = dict(health_fn() or {}) if callable(health_fn) else _fallback_ai_health()
+        payload['success'] = True
+        return jsonify(payload), 200
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'configured': False,
+            'provider': '',
+            'model': '',
+            'embeddings': '',
+            'embeddings_configured': False,
+            'degraded_reasons': ['AI health check failed'],
+        }), 200
+
+
+@main_bp.route('/api/ai/chat/stream', methods=['POST'])
+@ai_access_required
+def ai_chat_stream():
+    """Optional Server-Sent Events chat endpoint.
+
+    Thin wrapper over client.stream_chat_message. Providers without a compatible
+    stream (e.g. anthropic) surface a clear `event: error` instead of breaking the
+    existing job endpoints.
+    """
+    from flask import Response, stream_with_context
+
+    def _sse(event: str, payload: dict) -> str:
+        return 'event: %s\ndata: %s\n\n' % (event, json.dumps(payload, ensure_ascii=False))
+
+    def _sse_response(event: str, payload: dict, status: int = 200):
+        return Response(
+            _sse(event, payload),
+            status=status,
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
+
+    data = request.get_json(silent=True) or {}
+    messages = data.get('messages') or []
+    if not isinstance(messages, list) or not messages:
+        return _sse_response('error', {'success': False, 'error': 'Missing messages'}, 400)
+
+    try:
+        from services.ai_assistant import client as ai_client
+    except Exception:
+        return _sse_response('error', {'success': False, 'error': 'AI client unavailable'}, 501)
+
+    stream_fn = getattr(ai_client, 'stream_chat_message', None)
+    if not callable(stream_fn):
+        return _sse_response('error', {'success': False, 'error': 'Streaming is not supported by this provider'}, 501)
+
+    def _generate():
+        try:
+            for delta in stream_fn(messages):
+                if delta:
+                    yield _sse('delta', {'content': str(delta)})
+            yield _sse('done', {'success': True})
+        except NotImplementedError as exc:
+            yield _sse('error', {'success': False, 'error': str(exc) or 'Streaming is not supported by this provider'})
+        except Exception as exc:
+            # Controlled config/client errors are surfaced; anything else stays generic
+            # so internal exception strings never leak.
+            if type(exc).__name__ in ('AIConfigError', 'AIClientError'):
+                yield _sse('error', {'success': False, 'error': str(exc)})
+            else:
+                import traceback
+                traceback.print_exc()
+                yield _sse('error', {'success': False, 'error': 'AI streaming failed'})
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
 
 @main_bp.route('/api/ai/embeddings/status', methods=['GET'])
 @admin_required
@@ -3696,6 +3844,26 @@ def update_ai_settings():
     data = request.json or {}
     if not isinstance(data, dict):
         return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+
+    # 驗證：提供 chat API key 時，對應模型不可為空（否則新 key 會配上空模型，
+    # 令 AI 靜默失效）。模型未在本次 payload 提供時，沿用目前生效值。
+    import os as _os
+
+    def _effective(key):
+        # 有提供此欄位就以 payload 為準（空值 = 清除，回退環境變量）；
+        # 未提供才沿用目前生效值。
+        if key in data:
+            return str(data.get(key) or '').strip()
+        return ai_settings.get_ai_setting(key) or _os.environ.get(key) or ''
+
+    for key_field, model_field in (('AI_API_KEY', 'AI_MODEL'), ('AI_CHAT_API_KEY', 'AI_CHAT_MODEL')):
+        provided_key = str(data.get(key_field) or '').strip() if key_field in data else ''
+        if provided_key and not _effective(model_field):
+            return jsonify({
+                'success': False,
+                'error': f'提供了 {key_field} 但 {model_field} 為空：請同時填寫模型名稱。',
+            }), 400
+
     updated = []
     for key, raw_value in data.items():
         if key not in _AI_SETTING_KEYS:
@@ -3705,6 +3873,7 @@ def update_ai_settings():
             continue  # key 空值 = 不修改
         if ai_settings.set_ai_setting(key, value):
             updated.append(key)
+    # 儲存成功即清快取，令新設定即時生效（無需重啟）。
     ai_settings.clear_cache()
     return jsonify({'success': True, 'updated': updated})
 
