@@ -449,7 +449,9 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
     folder_lang = "jp" if language == "jp" else "tw"
     extra_name = "chinese_name" if language == "jp" else "japanese_name"
     predicate_filter = (filters or {}).get("predicate_filter")
-    fetch_limit = min(limit * 4, 80) if predicate_filter else limit
+    # 掃描池要夠闊先做名稱多樣化；否則同一卡名嘅多個印刷版本會佔滿 LIMIT，
+    # 令同 sub-string 命中嘅其他卡名永遠入唔到 pool（例如 多龍奇 vs 多龍巴魯托ex）。
+    fetch_limit = min(max(limit * 8, 60), 400) if predicate_filter else min(max(limit * 8, 60), 400)
     search = f"%{query}%"
 
     conn = database.get_db_connection()
@@ -475,16 +477,18 @@ def _keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
             ORDER BY
                 CASE WHEN c.name = %s THEN 0 ELSE 1 END,
                 CASE WHEN c.name ILIKE %s THEN 0 ELSE 1 END,
-                c.card_id DESC
+                abs(length(c.name) - length(%s)),
+                length(c.name),
+                c.card_id
             LIMIT %s
             """,
             ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ())
-            + (marks, search, search, search, search, search, search, search, query, search, fetch_limit),
+            + (marks, search, search, search, search, search, search, search, query, search, query, fetch_limit),
         )
         cards = [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
         if predicate_filter:
             cards = [card for card in cards if card_matches_filter(card, predicate_filter)]
-        return cards[:limit]
+        return _diversify_by_name(cards, limit)
     finally:
         conn.close()
 
@@ -503,7 +507,9 @@ def _trigram_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
     folder_lang = "jp" if language == "jp" else "tw"
     extra_name = "chinese_name" if language == "jp" else "japanese_name"
     predicate_filter = (filters or {}).get("predicate_filter")
-    fetch_limit = min(limit * 4, 80) if predicate_filter else limit
+    # 同 keyword 路徑一樣：掃描池要夠闊先可以按卡名多樣化，唔係同一卡名嘅
+    # 多個印刷版本（多龍奇）會佔滿 LIMIT，令 多龍梅西亞／多龍巴魯托ex 入唔到 pool。
+    fetch_limit = min(max(limit * 8, 60), 400)
     terms = _card_query_terms(query) or [query]
 
     conn = database.get_db_connection()
@@ -538,16 +544,22 @@ def _trigram_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
                 OR COALESCE(c.skills_json::text, '') ILIKE ANY(%s)
                 OR similarity(c.name, %s) > 0.25
               )
-            ORDER BY trgm_score DESC, CASE WHEN c.name ILIKE ANY(%s) THEN 0 ELSE 1 END, c.card_id DESC
+            ORDER BY
+                CASE WHEN c.name = %s THEN 0 ELSE 1 END,
+                CASE WHEN c.name ILIKE ANY(%s) THEN 0 ELSE 1 END,
+                trgm_score DESC,
+                abs(length(c.name) - length(%s)),
+                length(c.name),
+                c.card_id
             LIMIT %s
             """,
             ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ())
-            + (query, query, terms, marks, likes, likes, likes, likes, query, likes, fetch_limit),
+            + (query, query, terms, marks, likes, likes, likes, likes, query, query, likes, query, fetch_limit),
         )
         cards = [_card_payload(row, folder_lang, idx < 8) for idx, row in enumerate(cursor.fetchall())]
         if predicate_filter:
             cards = [card for card in cards if card_matches_filter(card, predicate_filter)]
-        return cards[:limit]
+        return _diversify_by_name(cards, limit)
     except Exception:
         try:
             conn.rollback()
@@ -558,34 +570,64 @@ def _trigram_card_search(query: str, language: str = "tw", limit: int = CARD_LIM
         conn.close()
 
 
-def _expanded_keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIMIT, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    seen = set()
+def _diversify_by_name(cards: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """名稱多樣化：先每個唔同卡名取最佳一張，再用其餘副本補齊，最後截 limit。
 
-    def append_cards(cards: list[dict[str, Any]]) -> None:
-        for card in cards:
+    避免一個有多個印刷版本嘅卡名（例如 多龍奇）獨佔候選池，令同一 sub-string
+    命中嘅其他卡名（多龍梅西亞／多龍巴魯托ex）永遠入唔到 pool。
+    """
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    deferred: list[dict[str, Any]] = []
+    for card in cards or []:
+        key = _normalize_name(card.get("name") or "")
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(card)
+        else:
+            deferred.append(card)
+    ordered.extend(deferred)
+    return ordered[:limit]
+
+
+def _expanded_keyword_card_search(query: str, language: str = "tw", limit: int = CARD_LIMIT, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """匯合結構化／trigram／逐 term ILIKE 候選，再按卡名多樣化至 limit。
+
+    唔再喺第一個子路徑填滿 limit 就停：兩條路徑嘅完整池會先 union（按檢索品質
+    排序），再做名稱多樣化，確保同一 sub-string 命中嘅唔同卡名都會現身。
+    """
+    # 每條路徑都用足夠闊嘅池，等名稱多樣化有嘢揀。
+    scan_limit = min(max(limit * 4, 40), 120)
+    pools: list[list[dict[str, Any]]] = []
+
+    # predicate_filter 描述卡本身原始欄位時，keyword／trigram 檢索未必命中；
+    # 先由結構化 SQL 直接取符合嘅卡，再補關鍵字候選。
+    structured = _structured_card_search(language, scan_limit, filters)
+    if structured:
+        pools.append(structured)
+
+    # trigram 相似度（CJK 專用，pg_trgm 可用時）＋逐 term ILIKE。
+    trigram = _trigram_card_search(query, language, scan_limit, filters)
+    if trigram:
+        pools.append(trigram)
+    for term in _card_query_terms(query):
+        pool = _keyword_card_search(term, language, scan_limit, filters)
+        if pool:
+            pools.append(pool)
+
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pool in pools:
+        for card in pool:
             key = f"{card.get('language') or language}:{card.get('card_id') or card.get('id')}"
             if key in seen:
                 continue
             seen.add(key)
             results.append(card)
-            if len(results) >= limit:
-                break
-
-    # predicate_filter 描述卡本身原始欄位時，keyword／trigram 檢索未必命中；
-    # 先由結構化 SQL 直接取符合嘅卡，再補關鍵字候選。
-    append_cards(_structured_card_search(language, limit, filters))
-
-    # 先試 trigram 相似度（CJK 專用，pg_trgm 可用時），再逐 term ILIKE 補齊。
-    append_cards(_trigram_card_search(query, language, limit, filters))
-    terms = _card_query_terms(query)
-    for term in terms:
-        if len(results) >= limit:
-            break
-        append_cards(_keyword_card_search(term, language, limit, filters))
-        if len(results) >= limit:
-            break
-    return results[:limit]
+    if not results:
+        return []
+    # 池內次序已反映檢索品質，多樣化時按此優先次序揀每卡名最佳者。
+    return _diversify_by_name(results, limit)
 
 
 def _card_query_terms(query: str) -> list[str]:
@@ -624,6 +666,173 @@ def _card_query_terms(query: str) -> list[str]:
     return sorted(terms, key=len, reverse=True)[:10]
 
 
+# ── 名稱相關度排序 ────────────────────────────────────────────────────────
+# 檢索唔可以再「向量優先、關鍵字墊底」。任何候選都會經 _name_relevance 打分，
+# 再同向量分數合併排序；exact full-name 一定排最前，永遠唔會被 limit 擠走。
+
+_NAME_STRIP_RE = re.compile(r"[\s<>＜＞《》「」『』【】（）()\[\]：:，,。.、]+")
+
+
+def _normalize_name(value: str) -> str:
+    """名稱正規化：去空白、去 < > 等標記、轉細楷，用嚟做 exact/prefix 比對。"""
+    return _NAME_STRIP_RE.sub("", str(value or "").strip().lower())
+
+
+def _trigram_similarity(a: str, b: str) -> float:
+    """Python 版 pg_trgm 近似（補兩個空格、3-gram Jaccard），用嚟做最終 tie-break。"""
+    a = str(a or "")
+    b = str(b or "")
+    if not a or not b:
+        return 0.0
+
+    def _grams(text: str) -> set[str]:
+        padded = f"  {text} "
+        if len(padded) < 3:
+            return set()
+        return {padded[idx:idx + 3] for idx in range(len(padded) - 2)}
+
+    ga, gb = _grams(a), _grams(b)
+    if not ga or not gb:
+        return 0.0
+    union = ga | gb
+    return len(ga & gb) / len(union) if union else 0.0
+
+
+def _query_cjk_terms(query: str) -> list[str]:
+    """抽 query 內連續 CJK 片段（≥2 字）。混合/外語 query 用呢個做主要命中訊號。"""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for frag in re.findall(r"[\u3400-\u9fff\uf900-\ufaff]{2,}", str(query or "")):
+        if frag not in seen:
+            seen.add(frag)
+            terms.append(frag)
+    return terms
+
+
+def _name_relevance(query: str, name: str) -> float:
+    """名稱相關度分數（0~1），權重次序：exact > prefix/contains > trigram。
+
+    混合 query（例如 '多龍 EX Dragapult ex'）會同時比對整條 query 同佢抽到嘅
+    CJK 子字串，令 '長毛巨魔 Grimmsnarl' 依然以 長毛巨魔 為主要命中。
+    """
+    query_norm = _normalize_name(query)
+    name_norm = _normalize_name(name)
+    if not query_norm or not name_norm:
+        return 0.0
+    if query_norm == name_norm:
+        return 1.0
+    variants = [query_norm]
+    for term in _query_cjk_terms(query):
+        variant = _normalize_name(term)
+        if variant and variant not in variants:
+            variants.append(variant)
+    best = 0.0
+    for variant in variants:
+        if not variant:
+            continue
+        if variant == name_norm:
+            best = max(best, 0.96)
+        elif name_norm.startswith(variant) or variant.startswith(name_norm):
+            ratio = min(len(variant), len(name_norm)) / max(len(variant), len(name_norm))
+            best = max(best, 0.6 + 0.3 * ratio)
+        elif variant in name_norm or name_norm in variant:
+            ratio = min(len(variant), len(name_norm)) / max(len(variant), len(name_norm))
+            best = max(best, 0.45 + 0.25 * ratio)
+    if best > 0.0:
+        return best
+    return min(0.4, _trigram_similarity(query_norm, name_norm))
+
+
+def _rank_and_merge(
+    query: str,
+    keyword_cards: list[dict[str, Any]] | None,
+    vector_cards: list[dict[str, Any]] | None,
+    vector_scores: dict[str, float] | None,
+    limit: int,
+    predicate_filter: Any = None,
+) -> list[dict[str, Any]]:
+    """合併關鍵字/trigram 候選同向量候選，按 combined score 排序。
+
+    combined = name_relevance + 0.2 * vector_similarity。
+    exact full-name 候選永遠排最前，唔會被 limit 擠走。
+    """
+    query_norm = _normalize_name(query)
+    query_len = len(query_norm)
+    vector_scores = vector_scores or {}
+    merged: dict[str, dict[str, Any]] = {}
+
+    def absorb(card: dict[str, Any], vsim: float | None) -> None:
+        if not isinstance(card, dict) or card.get("_diagnostic"):
+            return
+        key = f"{card.get('language')}:{card.get('card_id')}"
+        entry = merged.get(key)
+        if entry is None:
+            entry = dict(card)
+            entry["_name_score"] = _name_relevance(query, card.get("name") or "")
+            entry["_vsim"] = float(vsim or 0.0)
+            entry["_trgm"] = _trigram_similarity(query_norm, _normalize_name(card.get("name") or ""))
+            merged[key] = entry
+        else:
+            if vsim is not None and float(vsim) > float(entry.get("_vsim") or 0.0):
+                entry["_vsim"] = float(vsim)
+                entry["semantic_score"] = round(float(vsim), 4)
+            if card.get("structured_match"):
+                entry["structured_match"] = True
+
+    for card in keyword_cards or []:
+        absorb(card, None)
+    for card in vector_cards or []:
+        cid = str(card.get("card_id"))
+        absorb(card, vector_scores.get(cid, card.get("semantic_score")))
+
+    items = list(merged.values())
+    if predicate_filter:
+        items = [
+            item for item in items
+            if item.get("structured_match") or card_matches_filter(item, predicate_filter)
+        ]
+    # 結構化 SQL 命中（predicate_filter 描述原始欄位）即使名稱無關都要保留。
+    for item in items:
+        if item.get("structured_match"):
+            item["_name_score"] = max(float(item.get("_name_score") or 0.0), 0.5)
+
+    def _combined(item: dict[str, Any]) -> float:
+        return float(item.get("_name_score") or 0.0) + 0.2 * float(item.get("_vsim") or 0.0)
+
+    def _sort_key(item: dict[str, Any]):
+        name_norm = _normalize_name(item.get("name") or "")
+        return (
+            -_combined(item),
+            abs(len(name_norm) - query_len),
+            -float(item.get("_trgm") or 0.0),
+            str(item.get("card_id") or ""),
+        )
+
+    exact = sorted([i for i in items if float(i.get("_name_score") or 0.0) >= 0.999], key=_sort_key)
+    rest = sorted([i for i in items if float(i.get("_name_score") or 0.0) < 0.999], key=_sort_key)
+    # exact 命中全部優先保留；非 exact 結果做名稱多樣化：先每個名稱取最佳一張，
+    # 再用其餘副本補齊，令 '多龍' 之類廣義查詢同時浮現 多龍梅西亞／多龍奇／多龍巴魯托ex。
+    ordered: list[dict[str, Any]] = list(exact)
+    seen_names: set[str] = set()
+    deferred: list[dict[str, Any]] = []
+    for item in rest:
+        name_key = _normalize_name(item.get("name") or "")
+        if name_key not in seen_names:
+            seen_names.add(name_key)
+            ordered.append(item)
+        else:
+            deferred.append(item)
+    ordered.extend(deferred)
+
+    result: list[dict[str, Any]] = []
+    for item in ordered[:limit]:
+        card = {key: value for key, value in item.items() if not key.startswith("_")}
+        if "semantic_score" not in card:
+            card["semantic_score"] = None
+        result.append(card)
+    return result
+
+
 def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     query = str(query or "").strip()
     language = str((filters or {}).get("language") or "tw")
@@ -632,73 +841,86 @@ def semantic_search_cards(query: str, limit: int = CARD_LIMIT, filters: dict[str
     limit = max(1, min(int(limit or CARD_LIMIT), CARD_LIMIT))
     marks = _normalize_marks(filters)
     predicate_filter = (filters or {}).get("predicate_filter")
-    fetch_limit = min(limit * 4, 80) if predicate_filter else limit
+    # 關鍵字/trigram 候選要夠闊，先唔會被 SQL LIMIT 截斷；兩條路都一定會行。
+    cand_limit = min(max(limit, 12), CARD_LIMIT)
+    vector_fetch = min(limit * 4, 80) if predicate_filter else min(max(limit * 2, limit), 60)
+
+    keyword_cards = _expanded_keyword_card_search(query, language, cand_limit, filters)
 
     conn = database.get_db_connection()
     if not conn:
-        return _with_degraded(_expanded_keyword_card_search(query, language, limit, filters), "db_unavailable")
+        return _with_degraded(_rank_and_merge(query, keyword_cards, [], {}, limit, predicate_filter), "db_unavailable")
     try:
         ensure_ai_schema(conn)
-        vector = embed_texts([query])[0]
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT source_id, language, title, metadata, 1 - (embedding <=> %s::vector) AS score
-            FROM ai_embeddings
-            WHERE source_type = 'card'
-              AND language = %s
-              AND metadata->>'regulation_mark' = ANY(%s)
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-            """,
-            (vector_literal(vector), language, marks, vector_literal(vector), fetch_limit),
-        )
-        rows = cursor.fetchall()
-        ids = [row["source_id"] for row in rows]
-        score_by_id = {row["source_id"]: float(row["score"] or 0) for row in rows}
-        if not ids:
-            return _with_degraded(_expanded_keyword_card_search(query, language, limit, filters), "semantic_empty_fallback_keyword")
-        table = "jp_cards" if language == "jp" else "cards"
-        logic_ready = _logic_columns_ready(cursor)
-        select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
-        logic_join = _logic_join_sql(language, "c") if logic_ready else ""
-        cursor.execute(
-            f"""
-            SELECT {select_sql}
-            FROM {table} c
-            {logic_join}
-            WHERE c.card_id = ANY(%s)
-            """,
-            ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ()) + (ids,),
-        )
-        by_id = {row["card_id"]: row for row in cursor.fetchall()}
-        cards = []
-        for cid in ids:
-            row = by_id.get(cid)
-            if row:
-                payload = _card_payload(row, language, len(cards) < 8)
-                if predicate_filter and not card_matches_filter(payload, predicate_filter):
-                    continue
-                payload["semantic_score"] = round(score_by_id.get(cid, 0), 4)
-                cards.append(payload)
-        if predicate_filter and len(cards) < limit:
-            seen_before = {card.get("card_id") for card in cards}
+        vector_cards: list[dict[str, Any]] = []
+        vector_scores: dict[str, float] = {}
+        degraded_reason = ""
+        try:
+            if query:
+                vector = embed_texts([query])[0]
+                cursor.execute(
+                    """
+                    SELECT source_id, language, title, metadata, 1 - (embedding <=> %s::vector) AS score
+                    FROM ai_embeddings
+                    WHERE source_type = 'card'
+                      AND language = %s
+                      AND metadata->>'regulation_mark' = ANY(%s)
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (vector_literal(vector), language, marks, vector_literal(vector), vector_fetch),
+                )
+                rows = cursor.fetchall()
+                ids = [row["source_id"] for row in rows]
+                score_by_id = {row["source_id"]: float(row["score"] or 0) for row in rows}
+                if ids:
+                    table = "jp_cards" if language == "jp" else "cards"
+                    logic_ready = _logic_columns_ready(cursor)
+                    select_sql = _select_columns_with_logic(table, "c") if logic_ready else _select_columns_without_logic(table, "c")
+                    logic_join = _logic_join_sql(language, "c") if logic_ready else ""
+                    cursor.execute(
+                        f"""
+                        SELECT {select_sql}
+                        FROM {table} c
+                        {logic_join}
+                        WHERE c.card_id = ANY(%s)
+                        """,
+                        ((LOGIC_EXTRACTOR_VERSION,) if logic_ready else ()) + (ids,),
+                    )
+                    by_id = {row["card_id"]: row for row in cursor.fetchall()}
+                    for cid in ids:
+                        row = by_id.get(cid)
+                        if row:
+                            payload = _card_payload(row, language, len(vector_cards) < 8)
+                            payload["semantic_score"] = round(score_by_id.get(cid, 0), 4)
+                            vector_scores[str(cid)] = float(score_by_id.get(cid, 0))
+                            vector_cards.append(payload)
+                else:
+                    degraded_reason = "semantic_empty_fallback_keyword"
+            else:
+                degraded_reason = "semantic_empty_fallback_keyword"
+        except Exception as exc:
+            # 向量路徑壞咗唔可以再靜默：合併後仍回報 degraded，令呼叫方知道係「壞」唔係「冇結果」。
+            print(f"[ai_tools] WARNING: semantic_search_cards 向量路徑降級：{exc}", flush=True)
+            degraded_reason = f"semantic_failed:{type(exc).__name__}"
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        if predicate_filter:
             for card in _structured_card_search(language, limit, filters):
-                if card.get("card_id") in seen_before or len(cards) >= limit:
-                    continue
                 card["semantic_score"] = None
-                cards.append(card)
-        keyword_cards = _expanded_keyword_card_search(query, language, min(limit, 6), filters)
-        seen = {card.get("card_id") for card in cards}
-        for card in keyword_cards:
-            if card.get("card_id") not in seen and len(cards) < limit:
-                card["semantic_score"] = None
-                cards.append(card)
-        return cards
+                keyword_cards.append(card)
+
+        merged = _rank_and_merge(query, keyword_cards, vector_cards, vector_scores, limit, predicate_filter)
+        if degraded_reason:
+            return _with_degraded(merged, degraded_reason)
+        return merged
     except Exception as exc:
-        # 唔再靜默：向量路徑壞咗要回報 degraded，令呼叫方/模型知道係「壞」唔係「冇結果」。
         print(f"[ai_tools] WARNING: semantic_search_cards 降級為關鍵字檢索：{exc}", flush=True)
-        return _with_degraded(_expanded_keyword_card_search(query, language, limit, filters), f"semantic_failed:{type(exc).__name__}")
+        return _with_degraded(_rank_and_merge(query, keyword_cards, [], {}, limit, predicate_filter), f"semantic_failed:{type(exc).__name__}")
     finally:
         conn.close()
 
